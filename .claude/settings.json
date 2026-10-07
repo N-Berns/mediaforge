@@ -1,0 +1,27 @@
+{
+  "permissions": {
+    "defaultMode": "default",
+    "deny": [
+      "Read(//c/**)",
+      "Read(//d/**)",
+      "Edit(//c/**)",
+      "Edit(//d/**)",
+      "Read(~/**)",
+      "Edit(~/**)"
+    ],
+    "ask": ["Bash(cd ..*)", "Bash(npm install -g*)", "Bash(pnpm add -g*)"]
+  },
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Write|Edit|NotebookEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"$CLAUDE_PROJECT_DIR/.claude/hooks/biome-fix.mjs\""
+          }
+        ]
+      }
+    ]
+  }
+}

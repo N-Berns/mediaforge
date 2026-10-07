@@ -1,0 +1,13 @@
+{
+  "name": "@mediaforge/shared-protocol",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "@mediaforge/shared-types": "workspace:*",
+    "zod": "^4.6.5"
+  }
+}

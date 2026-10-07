@@ -1,0 +1,12 @@
+# <gitmoji> <scope>: <imperative summary, max 72 chars>
+#
+# ## Description
+#
+# <motivation, not a restatement of the diff. Wrap at 72 chars.>
+#
+# ## Test
+#
+# <command or manual step, e.g. pnpm test>
+#
+# Refs: #<issue>
+# BREAKING CHANGE: <only if applicable>
