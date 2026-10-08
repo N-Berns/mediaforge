@@ -4,6 +4,8 @@
     { "path": "packages/shared-types" },
     { "path": "packages/shared-protocol" },
     { "path": "packages/media-profiles" },
-    { "path": "packages/extension-core" }
+    { "path": "packages/binary-resolver" },
+    { "path": "packages/extension-core" },
+    { "path": "apps/desktop" }
   ]
 }
