@@ -9,6 +9,7 @@
     "exactOptionalPropertyTypes": false,
     "verbatimModuleSyntax": true,
     "isolatedModules": true,
+    "erasableSyntaxOnly": true,
     "allowImportingTsExtensions": true,
     "skipLibCheck": true,
     "composite": true,

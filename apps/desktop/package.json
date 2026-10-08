@@ -1,0 +1,22 @@
+{
+  "name": "@mediaforge/desktop",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@mediaforge/binary-resolver": "workspace:*",
+    "@mediaforge/media-profiles": "workspace:*",
+    "@mediaforge/shared-types": "workspace:*",
+    "ink": "^8.0.0",
+    "react": "^19.3.0"
+  },
+  "scripts": {
+    "build": "node build.mjs",
+    "start": "node build.mjs && node dist/main.js"
+  },
+  "devDependencies": {
+    "@types/react": "^19.3.0",
+    "esbuild": "^0.28.2",
+    "ink-testing-library": "^4.0.0"
+  }
+}
