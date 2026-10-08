@@ -41,6 +41,14 @@ describe("release.yml", () => {
     }
   });
 
+  it("skips both install jobs on a private repository", () => {
+    const unix = workflow.indexOf("\n  verify-install:");
+    const windows = workflow.indexOf("\n  verify-install-windows:");
+    for (const body of [workflow.slice(unix, windows), workflow.slice(windows)]) {
+      expect(body).toContain("if: ${{ !github.event.repository.private }}");
+    }
+  });
+
   it("checks the tag format and that the pinned URLs resolve before building", () => {
     expect(workflow).toContain("A-Za-z.");
     expect(workflow).toContain("node tools/release/check-lock-urls.mjs");

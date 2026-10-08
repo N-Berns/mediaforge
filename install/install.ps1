@@ -38,10 +38,10 @@ $BaseUrl = if ($env:MEDIAFORGE_RELEASE_BASE_URL) { $env:MEDIAFORGE_RELEASE_BASE_
 $InstallDir = if ($env:MEDIAFORGE_INSTALL_DIR) { $env:MEDIAFORGE_INSTALL_DIR } else { Join-Path $env:LOCALAPPDATA 'MediaForge' }
 $Asset = 'mediaforge-win-x64.exe'
 
-# Windows on ARM runs the x64 build under emulation.
-$cpu = [System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture.ToString()
-if ($cpu -ne 'X64' -and $cpu -ne 'Arm64') {
-    throw "Unsupported CPU: $cpu (supported: x64, and ARM64 through emulation)"
+# 64-bit Windows only. Windows on ARM runs the x64 build under emulation. (Not
+# RuntimeInformation.OSArchitecture: in some Windows PowerShell sessions it returns nothing.)
+if (-not [Environment]::Is64BitOperatingSystem) {
+    throw 'Unsupported system: 32-bit Windows (supported: 64-bit x64, and ARM64 through emulation)'
 }
 
 $Temp = Join-Path ([IO.Path]::GetTempPath()) ('mediaforge-' + [Guid]::NewGuid().ToString('N'))

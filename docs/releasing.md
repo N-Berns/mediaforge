@@ -8,7 +8,7 @@ A release is a git tag. Pushing a tag `vX.Y.Z` runs `.github/workflows/release.y
 2. `build`: bundles `apps/desktop` with `MEDIAFORGE_VERSION` set from the tag, then `tools/release/build-binaries.mjs` stages `dist/main.js` next to a `package.json` and runs `@yao-pkg/pkg` in enhanced SEA mode for win-x64, linux-x64, linux-arm64, macos-x64 and macos-arm64. The packaged binary carries its own Node runtime, so users need no Node installed. It cannot serve as yt-dlp's JavaScript runtime.
 3. `verify-binaries`: each binary runs on a native runner (macOS binaries are ad-hoc signed first) through `tools/release/smoke.sh`: `--version`, `--help`, `doctor --json`, and `setup --yes --tools yt-dlp` against a local fake yt-dlp server.
 4. `publish`: stamps the tag into `install/install.sh` and `install/install.ps1`, writes `SHA256SUMS`, and creates the release with generated notes. A tag with a dash is marked as a pre-release.
-5. `verify-install` and `verify-install-windows`: run the published installers on Linux, macOS and Windows and check the installed version.
+5. `verify-install` and `verify-install-windows`: run the published installers on Linux, macOS and Windows and check the installed version. They run only when the repository is public: they download the installer anonymously, and GitHub answers 404 for the release files of a private repository. On a private repo they show as "Skipped"; check the published files by hand (see "Checking a release of a private repository" below).
 
 yt-dlp and ffmpeg are never part of a release. They are downloaded by the user's machine from upstream.
 
@@ -45,6 +45,31 @@ Push `vX.Y.Z`. Check the Releases page: five binaries, `SHA256SUMS`, `install.sh
 ## Testing the installers
 
 `tools/release/test-install.sh` (Linux and macOS) and `tools/release/test-install.ps1` (Windows, run with `pwsh -File`) run the installers against a local fake release. They use `MEDIAFORGE_RELEASE_TAG`, `MEDIAFORGE_RELEASE_BASE_URL` and `MEDIAFORGE_INSTALL_DIR`, which exist for these tests and are not meant for users. CI runs both.
+
+## Checking a release of a private repository
+
+The `verify-install` jobs are skipped while the repo is private. To check the published files anyway, download them while logged in and serve them from your own machine:
+
+1. On the release page, download every file (the five binaries, `SHA256SUMS`, `install.sh`, `install.ps1`) into one empty folder, for example `C:\temp\rc`.
+2. In that folder, start a small local file server and leave it running:
+   ```sh
+   node -e "require('http').createServer((q,s)=>require('fs').createReadStream('.'+q.url).on('error',()=>{s.statusCode=404;s.end()}).pipe(s)).listen(8000)"
+   ```
+3. In a second window, run the installer against it. The tag must be the release's tag. Windows PowerShell:
+   ```powershell
+   $env:MEDIAFORGE_RELEASE_TAG = 'v0.1.0-rc.2'
+   $env:MEDIAFORGE_RELEASE_BASE_URL = 'http://127.0.0.1:8000'
+   $env:MEDIAFORGE_INSTALL_DIR = "$env:TEMP\mf-check"
+   Get-Content -Raw C:\temp\rc\install.ps1 | iex
+   ```
+   Linux and macOS:
+   ```sh
+   MEDIAFORGE_RELEASE_TAG=v0.1.0-rc.2 MEDIAFORGE_RELEASE_BASE_URL=http://127.0.0.1:8000 \
+     MEDIAFORGE_INSTALL_DIR="$HOME/mf-check" sh /path/to/rc/install.sh
+   ```
+4. Run `mediaforge --version` from the install folder. It must print the tag without the leading `v`.
+
+The installer adds its folder to your PATH, so remove that entry afterwards (Windows: "Edit environment variables for your account"). This tests the real stamped installer, the real `SHA256SUMS` and the real binary, without needing the repo to be public.
 
 ## Known limits
 
