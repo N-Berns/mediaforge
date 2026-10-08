@@ -241,7 +241,9 @@ describe("link step", () => {
     await waitFor(app, "What would you like to do?");
     await press(app, KEY.enter);
     await waitFor(app, "Use the link from the clipboard");
-    await press(app, KEY.down, KEY.enter);
+    // moveTo checks what is highlighted, so a key lost on a slow machine cannot pick the wrong row.
+    await moveTo(app, "Type or paste links");
+    await press(app, KEY.enter);
     await waitFor(app, "Type or paste one or more links");
     await press(app, KEY.ctrlV);
     // URL splits onto its own line; the non-URL words stay on the line above.

@@ -1,4 +1,4 @@
-import { basename, dirname, join, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import {
   BinaryNotFoundError,
   cacheDir,
@@ -27,10 +27,9 @@ export interface BinDirInput {
 export function bundledBinDir({ env, execPath, moduleDir }: BinDirInput): string {
   const override = env[BIN_DIR_ENV];
   if (override) return override;
-  const runningThroughNode =
-    basename(execPath)
-      .toLowerCase()
-      .replace(/\.exe$/, "") === "node";
+  // Split on both separators so a Windows path is read the same way on every host.
+  const fileName = (execPath.split(/[\\/]/).pop() ?? "").toLowerCase().replace(/\.exe$/, "");
+  const runningThroughNode = fileName === "node";
   return runningThroughNode
     ? join(moduleDir, "..", "..", "..", "bin")
     : join(dirname(execPath), "bin");

@@ -102,7 +102,8 @@ main() {
       if [ -f "$profile" ] && grep -qF "$INSTALL_DIR" "$profile"; then
         :
       else
-        printf '\n# Added by the MediaForge installer\nexport PATH="%s:$PATH"\n' "$INSTALL_DIR" >>"$profile"
+        path_line="export PATH=\"$INSTALL_DIR:\$PATH\""
+        printf '\n# Added by the MediaForge installer\n%s\n' "$path_line" >>"$profile"
         say "Added $INSTALL_DIR to your PATH in $profile. Open a new terminal to use it."
       fi
       ;;
