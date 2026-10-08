@@ -87,3 +87,13 @@ Need an emoji not listed? Ask before using one, or propose adding it here.
 - The hook does not see files created or changed through Bash (redirects, `sed`, scripts, generators). After any such change, run `pnpm exec biome check --write <paths>` on those files yourself.
 - Before finishing a task, run `pnpm lint` once for the whole repo and resolve all findings.
 - Files ignored by `.gitignore` or `biome.json` are skipped by Biome by design.
+
+# Feature decisions
+
+- The user has the final say on how a feature behaves. Ask, do not guess.
+- Before implementing a feature, ask about every open decision: behavior, scope, edge cases, UX, naming, data shapes, public APIs, dependencies. Do not fill gaps with assumptions, even plausible ones.
+- Ask first, then implement. Do not build a guessed version and ask for review afterward.
+- Use `AskUserQuestion` for the questions. Give a recommended option first, with the trade-offs, so the user can decide quickly.
+- Best practices set the baseline and inform the recommendation. They do not override the user's choice. If the user picks something against best practice, state the concern once, then follow their decision.
+- If the request is unambiguous and has one obvious implementation, proceed. Do not ask about details the user already specified or that the codebase already settles.
+- Record a decision once the user makes it. Do not re-ask it later in the same task.

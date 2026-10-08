@@ -1,0 +1,21 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "rootDir": "src",
+    "outDir": ".tsbuild",
+    "types": ["node"],
+    "jsx": "react-jsx"
+  },
+  "include": ["src"],
+  "references": [
+    {
+      "path": "../../packages/binary-resolver"
+    },
+    {
+      "path": "../../packages/media-profiles"
+    },
+    {
+      "path": "../../packages/shared-types"
+    }
+  ]
+}
