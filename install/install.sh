@@ -7,7 +7,8 @@
 # It downloads the mediaforge binary for this computer from the GitHub release this script
 # belongs to, checks its SHA-256 against the release's SHA256SUMS, puts it in ~/.local/bin (adding
 # that folder to your PATH if needed) and, unless you pass --skip-tools, runs
-# `mediaforge setup --yes` to download yt-dlp and ffmpeg.
+# `mediaforge setup --yes` to download yt-dlp and ffmpeg. When it finishes it starts MediaForge,
+# unless you pass --no-launch or there is no terminal to run it in.
 # It never uses sudo and writes nothing outside your home folder. It is short; read it first if
 # you like.
 set -eu
@@ -17,6 +18,7 @@ REPO="N-Berns/mediaforge"
 TAG="${MEDIAFORGE_RELEASE_TAG:-__RELEASE_TAG__}"
 INSTALL_DIR="${MEDIAFORGE_INSTALL_DIR:-$HOME/.local/bin}"
 SKIP_TOOLS=0
+NO_LAUNCH=0
 
 say() { printf '%s\n' "$*"; }
 fail() {
@@ -29,8 +31,9 @@ main() {
   for arg in "$@"; do
     case "$arg" in
       --skip-tools) SKIP_TOOLS=1 ;;
+      --no-launch) NO_LAUNCH=1 ;;
       -h | --help)
-        say "Usage: install.sh [--skip-tools]"
+        say "Usage: install.sh [--skip-tools] [--no-launch]"
         exit 0
         ;;
       *) fail "unknown option: $arg" ;;
@@ -112,6 +115,13 @@ main() {
   if [ "$SKIP_TOOLS" -eq 0 ]; then
     say "Setting up yt-dlp and ffmpeg..."
     "$INSTALL_DIR/mediaforge" setup --yes || say "Tool setup did not finish. Run 'mediaforge setup' when you are online."
+  fi
+
+  # When piped (`curl ... | sh`) stdin is the script, so the app reads its keys from the terminal.
+  if [ "$NO_LAUNCH" -eq 0 ] && [ -t 1 ] && (: </dev/tty) 2>/dev/null; then
+    say "MediaForge $TAG is ready. Starting it..."
+    rm -rf "$tmp" # exec skips the EXIT trap
+    exec "$INSTALL_DIR/mediaforge" </dev/tty
   fi
 
   say "MediaForge $TAG is ready. Run: mediaforge"
