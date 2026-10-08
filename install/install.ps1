@@ -6,11 +6,15 @@ Installs MediaForge for the current user (Windows).
 Downloads mediaforge.exe from the GitHub release this script belongs to, checks its SHA-256
 against the release's SHA256SUMS, puts it in %LOCALAPPDATA%\MediaForge (adding that folder to your
 user PATH) and, unless -SkipTools is given, runs `mediaforge setup --yes` to download yt-dlp and
-ffmpeg. No administrator rights are needed and nothing outside your user profile is changed.
-It is short; read it first if you like.
+ffmpeg. When it finishes it starts MediaForge, unless -NoLaunch is given or there is no
+interactive terminal. No administrator rights are needed and nothing outside your user profile is
+changed. It is short; read it first if you like.
 
 .PARAMETER SkipTools
 Do not download yt-dlp and ffmpeg now. Run `mediaforge setup` later.
+
+.PARAMETER NoLaunch
+Do not start MediaForge when the install finishes.
 
 .EXAMPLE
 irm https://github.com/N-Berns/mediaforge/releases/latest/download/install.ps1 | iex
@@ -20,7 +24,8 @@ irm https://github.com/N-Berns/mediaforge/releases/latest/download/install.ps1 |
 #>
 [CmdletBinding()]
 param(
-    [switch]$SkipTools
+    [switch]$SkipTools,
+    [switch]$NoLaunch
 )
 
 $ErrorActionPreference = 'Stop'
@@ -97,4 +102,10 @@ if (-not $SkipTools) {
     }
 }
 
-Write-Host "MediaForge $Tag is ready. Run: mediaforge"
+$interactive = [Environment]::UserInteractive -and -not [Console]::IsInputRedirected -and -not [Console]::IsOutputRedirected
+if ($NoLaunch -or -not $interactive) {
+    Write-Host "MediaForge $Tag is ready. Run: mediaforge"
+} else {
+    Write-Host "MediaForge $Tag is ready. Starting it..."
+    & (Join-Path $InstallDir 'mediaforge.exe')
+}

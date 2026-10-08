@@ -51,7 +51,7 @@ Linux and macOS:
 curl -fsSL https://github.com/N-Berns/mediaforge/releases/latest/download/install.sh | sh
 ```
 
-The installer downloads one `mediaforge` program, checks it against the release's `SHA256SUMS`, puts it in `%LOCALAPPDATA%\MediaForge` (Windows) or `~/.local/bin` (Linux, macOS), adds that folder to your PATH, and then runs `mediaforge setup --yes` to download yt-dlp and ffmpeg. It needs no administrator rights and uses no `sudo`. The program is a single file and needs no Node.js.
+The installer downloads one `mediaforge` program, checks it against the release's `SHA256SUMS`, puts it in `%LOCALAPPDATA%\MediaForge` (Windows) or `~/.local/bin` (Linux, macOS), adds that folder to your PATH, runs `mediaforge setup --yes` to download yt-dlp and ffmpeg, and then starts MediaForge. It needs no administrator rights and uses no `sudo`. The program is a single file and needs no Node.js.
 
 **These one-line commands run a script from this repository on your computer with your own permissions.** If you prefer to read it first, save it and run it yourself:
 
@@ -70,6 +70,7 @@ Get-Content install.ps1
 If PowerShell refuses with "running scripts is disabled", run `powershell -ExecutionPolicy Bypass -File .\install.ps1` instead (or `Unblock-File .\install.ps1` first).
 
 - Skip the tool download with `--skip-tools` (`sh -s -- --skip-tools` when piping) or `-SkipTools` (`& ([scriptblock]::Create((irm <url>))) -SkipTools`).
+- Install without starting MediaForge with `--no-launch` (`sh -s -- --no-launch` when piping) or `-NoLaunch`. It also does not start when there is no interactive terminal.
 - Pin a version by replacing `latest/download` with `download/vX.Y.Z` in the URL.
 - Supported: Windows x64 (Windows on ARM runs it through emulation), Linux x64 and arm64, macOS x64 and arm64.
 - **Windows:** the program is not code-signed yet, so Windows SmartScreen or Defender may warn about it. This is expected for early releases.
@@ -84,13 +85,27 @@ If PowerShell refuses with "running scripts is disabled", run `powershell -Execu
 
 ## Desktop CLI
 
-After [installing](#install), run `mediaforge`. To run it from a clone of the repo instead (builds with esbuild, then runs `dist/main.js`):
+After [installing](#install), run `mediaforge` to open the interactive menu, or give it a command:
 
 ```sh
-pnpm --filter @mediaforge/desktop start                      # interactive menu (in a terminal)
+mediaforge                                    # interactive menu (in a terminal)
+mediaforge download <url>                     # best quality, saved to ~/Downloads/MediaForge
+mediaforge download <url> -p mp4-720p         # pick an output profile
+mediaforge download <url> -p audio-mp3-320 -o ~/Music --filename "My song"
+mediaforge formats <url>                      # list the formats available for a link
+mediaforge setup                              # download yt-dlp and ffmpeg if missing
+mediaforge update                             # update yt-dlp to the latest nightly
+mediaforge doctor                             # check that the tools are found
+mediaforge <command> --help                   # options for one command
+mediaforge --version
+```
+
+`download` prints the path of the saved file on stdout and progress on stderr, so it works in scripts: `file=$(mediaforge download <url> -q)`.
+
+To run it from a clone of the repo instead (builds with esbuild, then runs `dist/main.js`), replace `mediaforge` with `pnpm --filter @mediaforge/desktop start`:
+
+```sh
 pnpm --filter @mediaforge/desktop start download <url> -p mp4-1080p
-pnpm --filter @mediaforge/desktop start formats <url>
-pnpm --filter @mediaforge/desktop start doctor
 ```
 
 | Command    | Purpose                                                                                        |
