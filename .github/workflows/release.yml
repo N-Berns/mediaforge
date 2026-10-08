@@ -129,8 +129,11 @@ jobs:
           case "$GITHUB_REF_NAME" in *-*) flags="--prerelease" ;; esac
           gh release create "$GITHUB_REF_NAME" release/* --title "$GITHUB_REF_NAME" --generate-notes $flags
 
+  # Public repos only: these jobs download the installer anonymously, which GitHub refuses for the
+  # release files of a private repository (it answers 404).
   verify-install:
     needs: publish
+    if: ${{ !github.event.repository.private }}
     strategy:
       fail-fast: false
       matrix:
@@ -149,6 +152,7 @@ jobs:
 
   verify-install-windows:
     needs: publish
+    if: ${{ !github.event.repository.private }}
     runs-on: windows-latest
     steps:
       - name: Install from the published release
