@@ -1,0 +1,167 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+      - run: npm install -g pnpm@11
+      - run: pnpm install --frozen-lockfile
+      - name: The tag is a plain version tag
+        run: |
+          if ! printf '%s' "$GITHUB_REF_NAME" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$'; then
+            echo "Tag $GITHUB_REF_NAME must look like v1.2.3 or v1.2.3-rc.1" >&2
+            exit 1
+          fi
+      - name: The tag matches the app version
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          base="${tag%%-*}"
+          version="$(node -p "require('./apps/desktop/package.json').version")"
+          if [ "$base" != "$version" ]; then
+            echo "Tag $GITHUB_REF_NAME does not match the apps/desktop version $version" >&2
+            exit 1
+          fi
+      - run: pnpm typecheck
+      - run: pnpm test
+      - run: pnpm lint
+      - name: Every pinned tool URL still resolves
+        run: node tools/release/check-lock-urls.mjs
+
+  build:
+    needs: check
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+      - run: npm install -g pnpm@11
+      - run: pnpm install --frozen-lockfile
+      - name: Bundle the app, stamped with the tag
+        run: MEDIAFORGE_VERSION="${GITHUB_REF_NAME#v}" pnpm --filter @mediaforge/desktop build
+      - name: Build the five binaries
+        run: node tools/release/build-binaries.mjs --out out/release
+      - uses: actions/upload-artifact@v4
+        with:
+          name: raw-binaries
+          path: out/release
+          if-no-files-found: error
+
+  verify-binaries:
+    needs: build
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - { target: win-x64, runner: windows-latest, file: mediaforge-win-x64.exe }
+          - { target: linux-x64, runner: ubuntu-24.04, file: mediaforge-linux-x64 }
+          - { target: linux-arm64, runner: ubuntu-24.04-arm, file: mediaforge-linux-arm64 }
+          - { target: macos-x64, runner: macos-15-intel, file: mediaforge-macos-x64 }
+          - { target: macos-arm64, runner: macos-15, file: mediaforge-macos-arm64 }
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+      - uses: actions/download-artifact@v4
+        with:
+          name: raw-binaries
+          path: raw
+      - name: Prepare the binary
+        shell: bash
+        run: |
+          chmod +x "raw/${{ matrix.file }}"
+          if [ "$RUNNER_OS" = "macOS" ]; then
+            codesign --force --sign - "raw/${{ matrix.file }}"
+          fi
+      - name: Smoke test
+        shell: bash
+        run: bash tools/release/smoke.sh "raw/${{ matrix.file }}" "${GITHUB_REF_NAME#v}"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: final-${{ matrix.target }}
+          path: raw/${{ matrix.file }}
+          if-no-files-found: error
+
+  publish:
+    needs: verify-binaries
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: final-*
+          merge-multiple: true
+          path: release
+      - name: Stamp the installers with this tag
+        run: |
+          sed "s/__RELEASE_TAG__/${GITHUB_REF_NAME}/g" install/install.sh > release/install.sh
+          sed "s/__RELEASE_TAG__/${GITHUB_REF_NAME}/g" install/install.ps1 > release/install.ps1
+          if grep -q __RELEASE_TAG__ release/install.sh release/install.ps1; then
+            echo "A __RELEASE_TAG__ placeholder is still present after stamping" >&2
+            exit 1
+          fi
+      - name: Write SHA256SUMS
+        run: node tools/release/checksums.mjs release --out release/SHA256SUMS
+      - name: Create the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          flags=""
+          case "$GITHUB_REF_NAME" in *-*) flags="--prerelease" ;; esac
+          gh release create "$GITHUB_REF_NAME" release/* --title "$GITHUB_REF_NAME" --generate-notes $flags
+
+  verify-install:
+    needs: publish
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [ubuntu-24.04, ubuntu-24.04-arm, macos-15-intel, macos-15]
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - name: Install from the published release
+        shell: bash
+        run: |
+          curl -fsSL "https://github.com/${GITHUB_REPOSITORY}/releases/download/${GITHUB_REF_NAME}/install.sh" -o install.sh
+          sh install.sh --skip-tools
+          export PATH="$HOME/.local/bin:$PATH"
+          test "$(mediaforge --version)" = "${GITHUB_REF_NAME#v}"
+          mediaforge setup --yes
+          mediaforge doctor --json
+
+  verify-install-windows:
+    needs: publish
+    runs-on: windows-latest
+    steps:
+      - name: Install from the published release
+        shell: pwsh
+        run: |
+          $url = "https://github.com/$env:GITHUB_REPOSITORY/releases/download/$env:GITHUB_REF_NAME/install.ps1"
+          Invoke-WebRequest -UseBasicParsing -Uri $url -OutFile install.ps1
+          ./install.ps1 -SkipTools
+          $exe = Join-Path $env:LOCALAPPDATA 'MediaForge\mediaforge.exe'
+          $expected = $env:GITHUB_REF_NAME.Substring(1)
+          $version = & $exe --version
+          if ($version -ne $expected) { throw "Expected version $expected but got $version" }
+          & $exe setup --yes
+          if ($LASTEXITCODE -ne 0) { throw "setup failed with exit code $LASTEXITCODE" }
+          & $exe doctor --json
+          if ($LASTEXITCODE -ne 0) { throw "doctor failed with exit code $LASTEXITCODE" }

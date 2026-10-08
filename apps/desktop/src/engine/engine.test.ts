@@ -216,4 +216,21 @@ describe("DownloadEngine", () => {
     ]);
     expect(peak).toBe(2);
   });
+
+  it("passes the detected JS runtime flags to yt-dlp", async () => {
+    const { fs } = fakeFs();
+    let seen: string[] = [];
+    const engine = new DownloadEngine({
+      resolve: found,
+      fs,
+      jsRuntimeArgs: async () => ["--js-runtimes", "node:/usr/bin/node"],
+      run: runner(async (h, _s, args) => {
+        seen = args;
+        h.onStdoutLine(`MFFILE ${args[args.indexOf("--paths") + 1]}/T.mp4`);
+        return 0;
+      }),
+    });
+    await engine.whenSettled(engine.submit(request()).id);
+    expect(seen[seen.indexOf("--js-runtimes") + 1]).toBe("node:/usr/bin/node");
+  });
 });

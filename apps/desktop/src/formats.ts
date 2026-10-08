@@ -1,11 +1,15 @@
+import type { Tool } from "@mediaforge/binary-resolver";
 import { type ResolveTool, requireTool, resolveTool } from "./binaries.ts";
 import type { Io } from "./commands.ts";
 import { FORMAT_SORT } from "./engine/args.ts";
 import { type ProcessRunner, runProcess } from "./engine/process.ts";
 import { classifyFailure } from "./engine/progress.ts";
 import { CliError, ExitCode } from "./exit-codes.ts";
+import { detectJsRuntimeArgs } from "./js-runtime.ts";
 import { parseCommandArgs, parseHttpUrl } from "./parse.ts";
 import { formatBytes } from "./progress-view.ts";
+import { withUpdateHint } from "./stale-extractor.ts";
+import { defaultEnsureTools } from "./tool-runtime.ts";
 
 const USAGE = "Usage: mediaforge formats <url>";
 
@@ -77,9 +81,18 @@ export function formatFormatsTable(info: MediaInfo): string {
 export interface FormatsDeps {
   resolve: ResolveTool;
   run: ProcessRunner;
+  /** Make sure the tools exist before work starts (see `DownloadDeps.ensureTools`). */
+  ensureTools?: (tools: Tool[]) => Promise<void>;
+  /** Extra yt-dlp flags that enable a JavaScript runtime. Default: none. */
+  jsRuntimeArgs?: () => Promise<string[]>;
 }
 
-const defaultFormatsDeps = (): FormatsDeps => ({ resolve: resolveTool, run: runProcess });
+const defaultFormatsDeps = (): FormatsDeps => ({
+  resolve: resolveTool,
+  run: runProcess,
+  ensureTools: defaultEnsureTools(),
+  jsRuntimeArgs: detectJsRuntimeArgs,
+});
 
 /** Ask yt-dlp (`-J`) for a URL's title and formats. Throws a `CliError` on failure. */
 export async function fetchMediaInfo(
@@ -92,13 +105,22 @@ export async function fetchMediaInfo(
   const { exitCode } = await deps.run(
     ytDlp.path,
     // Same sort as a real download, so the list comes back worst to best exactly as yt-dlp ranks it.
-    ["-J", "--no-playlist", "--no-warnings", "-S", FORMAT_SORT, "--", url],
+    [
+      "-J",
+      "--no-playlist",
+      "--no-warnings",
+      ...((await deps.jsRuntimeArgs?.()) ?? []),
+      "-S",
+      FORMAT_SORT,
+      "--",
+      url,
+    ],
     { onStdoutLine: (l) => stdout.push(l), onStderrLine: (l) => stderr.push(l) },
     new AbortController().signal,
   );
   if (exitCode !== 0) {
     const failure = classifyFailure(stderr, exitCode);
-    throw new CliError(failure.message, failure.exitCode);
+    throw new CliError(withUpdateHint(failure.message), failure.exitCode);
   }
   try {
     return JSON.parse(stdout.join("\n")) as MediaInfo;
@@ -127,6 +149,7 @@ export async function runFormats(
       ExitCode.Usage,
     );
   }
+  await deps.ensureTools?.(["yt-dlp"]);
   const info = await fetchMediaInfo(parseHttpUrl(positionals[0] as string), deps);
   io.stdout(formatFormatsTable(info));
   return ExitCode.Ok;

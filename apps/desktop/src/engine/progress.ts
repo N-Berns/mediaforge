@@ -109,14 +109,19 @@ const UNSUPPORTED = /unsupported url/i;
 const NETWORK =
   /unable to download|urlopen error|getaddrinfo|name resolution|http error \d+|timed out|connection (reset|refused|aborted)|network is unreachable|transporterror/i;
 
+const JS_RUNTIME_MISSING = /no supported javascript runtime/i;
+const JS_RUNTIME_HINT =
+  " (YouTube needs a JavaScript runtime: install Deno or Node.js 20 or newer.)";
+
 /** Map yt-dlp's stderr to one of our exit codes plus a readable message. */
 export function classifyFailure(stderr: string[], processExitCode: number | null): Failure {
   const text = stderr.join("\n");
   const errorLine = [...stderr].reverse().find((l) => l.startsWith("ERROR:"));
-  const message =
+  const base =
     errorLine?.replace(/^ERROR:\s*/, "").trim() ||
     stderr.at(-1)?.trim() ||
     `yt-dlp exited with code ${processExitCode}`;
+  const message = JS_RUNTIME_MISSING.test(text) ? `${base}${JS_RUNTIME_HINT}` : base;
 
   if (UNSUPPORTED.test(text)) return { exitCode: ExitCode.UnsupportedSite, message };
   if (FILESYSTEM.test(text)) return { exitCode: ExitCode.FileSystem, message };

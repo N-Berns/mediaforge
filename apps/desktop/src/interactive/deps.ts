@@ -1,3 +1,4 @@
+import type { InstallProgress, InstallResult, Tool } from "@mediaforge/binary-resolver";
 import { createContext, useContext } from "react";
 import type { ToolReport } from "../doctor.ts";
 import type { DownloadDeps } from "../download.ts";
@@ -9,6 +10,11 @@ export interface AppDeps {
   download: DownloadDeps;
   fetchInfo: (url: string) => Promise<MediaInfo>;
   inspectTools: () => Promise<ToolReport[]>;
+  /** Download one tool into MediaForge's tool folder, reporting progress as it goes. */
+  installTool: (
+    tool: Tool,
+    onProgress: (progress: InstallProgress) => void,
+  ) => Promise<InstallResult>;
   readClipboard: () => Promise<string | undefined>;
   openFolder: (path: string) => Promise<void>;
   /** Size of a finished file in bytes, if it can be read. */

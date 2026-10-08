@@ -66,6 +66,8 @@ export interface EngineOptions {
   maxConcurrent?: number;
   /** Called with a snapshot after every job change. */
   onUpdate?: (job: EngineJob) => void;
+  /** Extra yt-dlp flags that enable a JavaScript runtime. Default: none. */
+  jsRuntimeArgs?: () => Promise<string[]>;
 }
 
 interface Entry {
@@ -97,6 +99,7 @@ export class DownloadEngine {
   readonly #outputDir: string;
   readonly #maxConcurrent: number;
   readonly #onUpdate: ((job: EngineJob) => void) | undefined;
+  readonly #jsRuntimeArgs: () => Promise<string[]>;
 
   constructor(options: EngineOptions = {}) {
     this.#resolve = options.resolve ?? resolveTool;
@@ -105,6 +108,7 @@ export class DownloadEngine {
     this.#outputDir = options.outputDir ?? defaultOutputDir();
     this.#maxConcurrent = Math.max(1, options.maxConcurrent ?? DEFAULT_MAX_CONCURRENT);
     this.#onUpdate = options.onUpdate;
+    this.#jsRuntimeArgs = options.jsRuntimeArgs ?? (async () => []);
   }
 
   /** Queue a download. Throws a usage error for an unknown profile. */
@@ -217,6 +221,7 @@ export class DownloadEngine {
     try {
       const ytDlp = await requireTool("yt-dlp", this.#resolve);
       const ffmpeg = await requireTool("ffmpeg", this.#resolve);
+      const jsRuntimeArgs = await this.#jsRuntimeArgs();
       await this.#fs.mkdir(workDir);
 
       const stderr: string[] = [];
@@ -271,6 +276,7 @@ export class DownloadEngine {
           ffmpegPath: ffmpeg.path,
           formatSelector: entry.formatSelector,
           ffmpegProgressFile: progressFile,
+          jsRuntimeArgs,
         }),
         {
           onStdoutLine: onLine,

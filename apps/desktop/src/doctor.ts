@@ -1,10 +1,9 @@
 import { parseArgs } from "node:util";
-import { BinaryNotFoundError, type Tool } from "@mediaforge/binary-resolver";
+import { ALL_TOOLS, BinaryNotFoundError, type Tool } from "@mediaforge/binary-resolver";
 import { defaultBinDir, missingToolHint, type ResolveTool, resolveTool } from "./binaries.ts";
 import type { Io } from "./commands.ts";
 import { CliError, ExitCode } from "./exit-codes.ts";
-
-const TOOLS: Tool[] = ["yt-dlp", "ffmpeg"];
+import { detectJsRuntime, type JsRuntime } from "./js-runtime.ts";
 
 export interface ToolReport {
   tool: Tool;
@@ -13,6 +12,13 @@ export interface ToolReport {
   source?: string;
   path?: string;
   error?: string;
+}
+
+export interface JsRuntimeReport {
+  found: boolean;
+  name?: string;
+  path?: string;
+  version?: string;
 }
 
 async function inspect(tool: Tool, resolve: ResolveTool): Promise<ToolReport> {
@@ -27,9 +33,19 @@ async function inspect(tool: Tool, resolve: ResolveTool): Promise<ToolReport> {
 
 /** Look up every tool the app needs. */
 export const inspectTools = (resolve: ResolveTool = resolveTool): Promise<ToolReport[]> =>
-  Promise.all(TOOLS.map((tool) => inspect(tool, resolve)));
+  Promise.all(ALL_TOOLS.map((tool) => inspect(tool, resolve)));
 
-function formatReport(reports: ToolReport[], binDir: string): string {
+const reportRuntime = (runtime: JsRuntime | undefined): JsRuntimeReport =>
+  runtime
+    ? {
+        found: true,
+        name: runtime.name,
+        path: runtime.path,
+        ...(runtime.version !== undefined && { version: runtime.version }),
+      }
+    : { found: false };
+
+function formatReport(reports: ToolReport[], runtime: JsRuntimeReport, binDir: string): string {
   const lines = reports.flatMap((r) => {
     if (r.found) {
       return [`${r.tool.padEnd(7)}  ${r.version ?? "unknown version"}  (${r.source})  ${r.path}`];
@@ -40,6 +56,16 @@ function formatReport(reports: ToolReport[], binDir: string): string {
       `         ${missingToolHint(r.tool, binDir)}`,
     ];
   });
+  if (runtime.found) {
+    lines.push(
+      `js runtime  ${runtime.name}  ${runtime.version ?? "unknown version"}  ${runtime.path}`,
+    );
+  } else {
+    lines.push(
+      "js runtime  NOT FOUND (optional)",
+      "            YouTube downloads may offer fewer formats. Install Deno (https://deno.com) or Node.js 20 or newer.",
+    );
+  }
   return `${lines.join("\n")}\n`;
 }
 
@@ -48,6 +74,7 @@ export async function runDoctor(
   io: Io,
   resolve: ResolveTool = resolveTool,
   binDir: string = defaultBinDir(),
+  detect: () => Promise<JsRuntime | undefined> = () => detectJsRuntime(),
 ): Promise<ExitCode> {
   let json: boolean;
   try {
@@ -61,10 +88,13 @@ export async function runDoctor(
     );
   }
 
-  const reports = await inspectTools(resolve);
+  const [reports, runtime] = await Promise.all([inspectTools(resolve), detect()]);
+  const jsRuntime = reportRuntime(runtime);
   const ok = reports.every((r) => r.found);
   io.stdout(
-    json ? `${JSON.stringify({ ok, tools: reports }, null, 2)}\n` : formatReport(reports, binDir),
+    json
+      ? `${JSON.stringify({ ok, tools: reports, jsRuntime }, null, 2)}\n`
+      : formatReport(reports, jsRuntime, binDir),
   );
   return ok ? ExitCode.Ok : ExitCode.MissingTool;
 }

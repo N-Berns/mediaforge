@@ -13,6 +13,7 @@ const found = async (tool: Tool) => ({
 const missing = async (tool: Tool): Promise<never> => {
   throw new BinaryNotFoundError(tool, ["PATH"]);
 };
+const noRuntime = async () => undefined;
 
 function capture() {
   const chunks: string[] = [];
@@ -25,7 +26,7 @@ function capture() {
 describe("runDoctor", () => {
   it("lists both tools and exits 0 when found", async () => {
     const c = capture();
-    expect(await runDoctor([], c.io, found, "/bin")).toBe(ExitCode.Ok);
+    expect(await runDoctor([], c.io, found, "/bin", noRuntime)).toBe(ExitCode.Ok);
     expect(c.out()).toContain("yt-dlp");
     expect(c.out()).toContain("ffmpeg");
     expect(c.out()).toContain("1.0  (path)");
@@ -34,7 +35,7 @@ describe("runDoctor", () => {
   it("reports every tool then exits 3 when one is missing", async () => {
     const c = capture();
     const resolve = (tool: Tool) => (tool === "ffmpeg" ? missing(tool) : found(tool));
-    expect(await runDoctor([], c.io, resolve, "/bin")).toBe(ExitCode.MissingTool);
+    expect(await runDoctor([], c.io, resolve, "/bin", noRuntime)).toBe(ExitCode.MissingTool);
     expect(c.out()).toContain("yt-dlp");
     expect(c.out()).toContain("NOT FOUND");
     expect(c.out()).toContain("MEDIAFORGE_FFMPEG_PATH");
@@ -42,7 +43,7 @@ describe("runDoctor", () => {
 
   it("prints JSON with --json", async () => {
     const c = capture();
-    const code = await runDoctor(["--json"], c.io, found, "/bin");
+    const code = await runDoctor(["--json"], c.io, found, "/bin", noRuntime);
     const parsed = JSON.parse(c.out());
     expect(code).toBe(ExitCode.Ok);
     expect(parsed.ok).toBe(true);
@@ -51,9 +52,39 @@ describe("runDoctor", () => {
 
   it("rejects unknown options with a usage error", async () => {
     const c = capture();
-    await expect(runDoctor(["--nope"], c.io, found, "/bin")).rejects.toMatchObject({
+    await expect(runDoctor(["--nope"], c.io, found, "/bin", noRuntime)).rejects.toMatchObject({
       exitCode: ExitCode.Usage,
     });
+  });
+
+  it("reports the JS runtime it found, in text and in JSON", async () => {
+    const runtime = async () => ({
+      name: "node" as const,
+      path: "/usr/bin/node",
+      version: "v22.1.0",
+    });
+    const text = capture();
+    await runDoctor([], text.io, found, "/bin", runtime);
+    expect(text.out()).toContain("js runtime  node  v22.1.0  /usr/bin/node");
+
+    const json = capture();
+    await runDoctor(["--json"], json.io, found, "/bin", runtime);
+    expect(JSON.parse(json.out()).jsRuntime).toEqual({
+      found: true,
+      name: "node",
+      path: "/usr/bin/node",
+      version: "v22.1.0",
+    });
+  });
+
+  it("warns, without failing, when there is no JS runtime", async () => {
+    const c = capture();
+    expect(await runDoctor([], c.io, found, "/bin", noRuntime)).toBe(ExitCode.Ok);
+    expect(c.out()).toContain("js runtime  NOT FOUND (optional)");
+    expect(c.out()).toContain("Deno");
+    const json = capture();
+    await runDoctor(["--json"], json.io, found, "/bin", noRuntime);
+    expect(JSON.parse(json.out()).jsRuntime).toEqual({ found: false });
   });
 });
 

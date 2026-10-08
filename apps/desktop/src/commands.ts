@@ -2,6 +2,7 @@ import { runDoctor } from "./doctor.ts";
 import { runDownload } from "./download.ts";
 import type { ExitCode } from "./exit-codes.ts";
 import { runFormats } from "./formats.ts";
+import { runSetup, runUpdate } from "./tool-commands.ts";
 
 export interface Io {
   stdout: (text: string) => void;
@@ -25,6 +26,16 @@ export const COMMANDS: Command[] = [
     name: "formats",
     summary: "List the formats available for a URL",
     run: (args, io) => runFormats(args, io),
+  },
+  {
+    name: "setup",
+    summary: "Download missing yt-dlp and ffmpeg",
+    run: (args, io) => runSetup(args, io),
+  },
+  {
+    name: "update",
+    summary: "Update yt-dlp to the latest nightly",
+    run: (args, io) => runUpdate(args, io),
   },
   {
     name: "doctor",

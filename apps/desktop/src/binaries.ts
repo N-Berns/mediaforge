@@ -1,6 +1,7 @@
-import { basename, dirname, join } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
 import {
   BinaryNotFoundError,
+  cacheDir,
   ENV_OVERRIDES,
   type ResolvedBinary,
   resolveBinary,
@@ -40,14 +41,37 @@ export const defaultBinDir = () =>
 
 export type ResolveTool = (tool: Tool) => Promise<ResolvedBinary>;
 
-/** Resolve a tool using the standard order: env override, PATH, bundled. */
-export const resolveTool: ResolveTool = (tool) =>
-  resolveBinary(tool, { bundledDir: defaultBinDir() });
+/**
+ * The bundled folder to search, or undefined when it is the managed cache folder. On Windows the
+ * installed program sits in the folder whose `bin` is the cache, so the bundled step would claim
+ * every downloaded tool. Leaving it out lets the cache step report them as `cache`.
+ */
+export function distinctBundledDir(
+  bundledDir: string,
+  cacheFolder: string,
+  platform: NodeJS.Platform = process.platform,
+): string | undefined {
+  const normalize = (dir: string) => {
+    const full = resolve(dir);
+    return platform === "win32" ? full.toLowerCase() : full;
+  };
+  return normalize(bundledDir) === normalize(cacheFolder) ? undefined : bundledDir;
+}
+
+/** Resolve a tool using the standard order: env override, PATH, bundled, managed cache. */
+export const resolveTool: ResolveTool = (tool) => {
+  const cache = cacheDir(process.env);
+  return resolveBinary(tool, {
+    bundledDir: distinctBundledDir(defaultBinDir(), cache),
+    cacheDir: cache,
+  });
+};
 
 /** How to fix a missing tool, for error messages. */
 export function missingToolHint(tool: Tool, binDir: string): string {
   return [
-    `Install ${tool} and add it to PATH,`,
+    `Run: mediaforge setup (downloads ${tool}),`,
+    `install ${tool} and add it to PATH,`,
     `set ${ENV_OVERRIDES[tool]} to its full path,`,
     `or place it in ${binDir}.`,
   ].join(" ");
