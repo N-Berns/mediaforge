@@ -18,7 +18,7 @@ Items marked **(decision)** have open questions. Per `CLAUDE.md`, ask before bui
 - [x] Create `apps/desktop` package (`package.json`, `tsconfig.json`, entry point)
 - [x] Add it to root `tsconfig.json` references (and `apps/*` to vitest projects)
 - [x] Argument parser: `node:util` `parseArgs` (no dependency)
-- [x] Runtime packaging: deferred, run via Node for now (`pnpm start`); revisit at release
+- [x] Runtime packaging: single-file binary per platform built with `@yao-pkg/pkg` (see `docs/releasing.md`); `pnpm start` still runs via Node
 - [x] Command layout: subcommands `download`, `formats`, `doctor`
 - [x] Exit codes: 0 ok, 1 failure, 2 usage, 3 missing tool, 4 network, 5 unsupported site, 6 filesystem, 130 cancelled; errors to stderr
 
@@ -27,10 +27,10 @@ Items marked **(decision)** have open questions. Per `CLAUDE.md`, ask before bui
 - [x] Wire `resolveBinary` into the app: bundled dir is `MEDIAFORGE_BIN_DIR`, else `bin/` next to the executable, else repo-root `bin/` when run via Node
 - [x] `doctor` command: tool, version, source, path; `--json`; exit 3 if any tool is missing
 - [x] Friendly error when a tool is missing (`requireTool`: what was tried, how to fix, exit 3)
-- [ ] Release script that downloads pinned yt-dlp and ffmpeg into `bin/` with checksum verification
-- [ ] ffmpeg: use an LGPL build and ship its license text
-- [ ] Self-update of bundled yt-dlp into a user data dir (deferred) **(decision)**
-- [ ] Per-platform release artifacts (Windows, macOS, Linux)
+- [x] Tools are downloaded on demand from upstream with SHA-256 verification into a per-user cache (`mediaforge setup`, `mediaforge update`); not bundled in the release
+- [x] ffmpeg: LGPL build pinned for Windows and Linux; macOS uses a pinned GPL build downloaded from its upstream host (see `tools.lock.json` and the README)
+- [x] Self-update of yt-dlp into the user data dir (`mediaforge update`, nightly channel)
+- [x] Per-platform release artifacts: win-x64, linux-x64, linux-arm64, macos-x64, macos-arm64
 
 ## 3. Download engine
 
@@ -96,6 +96,9 @@ Running `mediaforge` with no arguments in a terminal opens a full-screen app. Th
 
 ## 6. Release
 
-- [ ] Installer or zip layout (executable, `bin/`, license files)
-- [ ] Versioning and changelog
-- [ ] README section for desktop CLI usage
+- [x] Single-file binary per platform, installers (install.sh, install.ps1) and SHA256SUMS
+- [x] Versioning from the git tag; release notes are GitHub's generated notes
+- [x] README section for desktop CLI usage
+- [ ] Windows code signing and macOS Developer ID plus notarization (before v1.0)
+- [ ] Manage a Deno download so YouTube works without a separate JavaScript runtime
+- [ ] winget, Scoop and Homebrew packages

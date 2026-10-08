@@ -1,4 +1,4 @@
-import type { Tool } from "@mediaforge/binary-resolver";
+import { type Tool, ToolInstallError } from "@mediaforge/binary-resolver";
 import { render } from "ink-testing-library";
 import { describe, expect, it } from "vitest";
 import type { DownloadDeps } from "../download.ts";
@@ -56,6 +56,9 @@ interface Options {
   settings?: Partial<Settings>;
   tools?: AppDeps["inspectTools"];
   folders?: FolderFs;
+  /** Tools that start out missing. The default `installTool` removes a tool from this set. */
+  missing?: Tool[];
+  installTool?: AppDeps["installTool"];
 }
 
 function setup(options: Options = {}) {
@@ -83,15 +86,35 @@ function setup(options: Options = {}) {
       });
     },
   };
+  const missing = new Set<Tool>(options.missing ?? []);
+  const installed: Tool[] = [];
   const deps: AppDeps = {
     download,
     fetchInfo: options.info ?? (async () => INFO),
     inspectTools:
       options.tools ??
       (async () => [
-        { tool: "yt-dlp", found: true, version: "2026.1.1", source: "path", path: "/bin/yt-dlp" },
-        { tool: "ffmpeg", found: true, version: "9.0", source: "bundled", path: "/bin/ffmpeg" },
+        missing.has("yt-dlp")
+          ? { tool: "yt-dlp", found: false, error: "yt-dlp not found" }
+          : {
+              tool: "yt-dlp",
+              found: true,
+              version: "2026.1.1",
+              // A downloaded yt-dlp lives in the tool cache; otherwise it is found on PATH.
+              source: installed.includes("yt-dlp") ? "cache" : "path",
+              path: "/bin/yt-dlp",
+            },
+        missing.has("ffmpeg")
+          ? { tool: "ffmpeg", found: false, error: "ffmpeg not found" }
+          : { tool: "ffmpeg", found: true, version: "9.0", source: "bundled", path: "/bin/ffmpeg" },
       ]),
+    installTool:
+      options.installTool ??
+      (async (tool) => {
+        installed.push(tool);
+        missing.delete(tool);
+        return { tool, version: "1", path: `/cache/${tool}`, sha256: "s", url: "u" };
+      }),
     readClipboard: async () => ("clipboard" in options ? options.clipboard : URL),
     openFolder: async (p) => void opened.push(p),
     fileSize: async () => 5 * 1024 * 1024,
@@ -105,7 +128,7 @@ function setup(options: Options = {}) {
     version: "9.9.9",
   };
   const app = render(<App deps={deps} />);
-  return { app, deps, store, seenArgs, opened, engineOptions };
+  return { app, deps, store, seenArgs, opened, engineOptions, installed };
 }
 
 type TestApp = ReturnType<typeof setup>["app"];
@@ -218,7 +241,9 @@ describe("link step", () => {
     await waitFor(app, "What would you like to do?");
     await press(app, KEY.enter);
     await waitFor(app, "Use the link from the clipboard");
-    await press(app, KEY.down, KEY.enter);
+    // moveTo checks what is highlighted, so a key lost on a slow machine cannot pick the wrong row.
+    await moveTo(app, "Type or paste links");
+    await press(app, KEY.enter);
     await waitFor(app, "Type or paste one or more links");
     await press(app, KEY.ctrlV);
     // URL splits onto its own line; the non-URL words stay on the line above.
@@ -803,6 +828,328 @@ describe("check setup", () => {
     await waitFor(app, "Some tools are missing");
     expect(app.lastFrame()).toContain("MEDIAFORGE_FFMPEG_PATH");
     app.unmount();
+  });
+});
+
+describe("missing tools", () => {
+  it("offers to download them before the first download, then continues", async () => {
+    const t = setup({ missing: ["yt-dlp", "ffmpeg"] });
+    await waitFor(t.app, "What would you like to do?");
+    await press(t.app, KEY.enter);
+    await waitFor(t.app, "Download missing tools");
+    expect(t.app.lastFrame()).toContain("yt-dlp and ffmpeg");
+    await press(t.app, KEY.enter);
+    await waitFor(t.app, "Continue");
+    expect(t.installed).toEqual(["yt-dlp", "ffmpeg"]);
+    await press(t.app, KEY.enter);
+    await waitFor(t.app, URL);
+    t.app.unmount();
+  });
+
+  it("shows the reason and keeps the choice when a download fails", async () => {
+    const t = setup({
+      missing: ["yt-dlp"],
+      installTool: async () => {
+        throw new ToolInstallError(
+          "offline",
+          "Could not reach github.com.",
+          "Check your internet connection, then try again.",
+        );
+      },
+    });
+    await waitFor(t.app, "What would you like to do?");
+    await press(t.app, KEY.enter);
+    await waitFor(t.app, "Download missing tools");
+    await press(t.app, KEY.enter);
+    await waitFor(t.app, "Could not reach github.com.");
+    expect(t.app.lastFrame()).toContain("Check your internet connection");
+    expect(t.app.lastFrame()).toContain("Download missing tools");
+    expect(t.app.lastFrame()).not.toContain("Continue");
+    t.app.unmount();
+  });
+
+  it("is also offered from Check setup, without a Continue choice", async () => {
+    const t = setup({ missing: ["ffmpeg"] });
+    await waitFor(t.app, "What would you like to do?");
+    await press(t.app, KEY.down, KEY.down, KEY.enter);
+    await waitFor(t.app, "Download missing tools");
+    await press(t.app, KEY.enter);
+    await waitFor(t.app, "Everything is ready.");
+    expect(t.installed).toEqual(["ffmpeg"]);
+    expect(t.app.lastFrame()).not.toContain("Continue");
+    t.app.unmount();
+  });
+
+  it("goes straight to the link screen when nothing is missing", async () => {
+    const t = setup();
+    await waitFor(t.app, "What would you like to do?");
+    await press(t.app, KEY.enter);
+    await waitFor(t.app, URL);
+    expect(t.installed).toEqual([]);
+    t.app.unmount();
+  });
+});
+
+describe("stale extractor", () => {
+  const STALE =
+    "ERROR: [generic] Unable to extract title; please report this issue on https://github.com/yt-dlp/yt-dlp/issues . Confirm you are on the latest version using yt-dlp -U";
+  const SKIP_QUESTIONS = { askQuality: false, askFolder: false, quality: "mp4-720p" } as const;
+
+  it("offers to update yt-dlp, and retries the download after the update", async () => {
+    let calls = 0;
+    const t = setup({
+      settings: SKIP_QUESTIONS,
+      runner: async (c, a, h, s) => {
+        calls++;
+        if (calls === 1) {
+          h.onStderrLine(STALE);
+          return { exitCode: 1 };
+        }
+        return succeed(c, a, h, s);
+      },
+    });
+    await waitFor(t.app, "What would you like to do?");
+    await press(t.app, KEY.enter);
+    await waitFor(t.app, URL);
+    await press(t.app, KEY.enter);
+    await waitFor(t.app, "Download failed");
+    const failed = t.app.lastFrame() ?? "";
+    expect(failed).toContain("Update yt-dlp and retry");
+    // Nothing happens until the user picks it: "Try again" is the highlighted choice.
+    expect(t.installed).toEqual([]);
+    expect(failed).toMatch(/► .*Try again/);
+
+    await moveTo(t.app, "Update yt-dlp and retry");
+    await press(t.app, KEY.enter);
+    await waitFor(t.app, "Download complete");
+    expect(t.installed).toEqual(["yt-dlp"]);
+    expect(calls).toBe(2);
+    t.app.unmount();
+  });
+
+  it("does not offer the update for failures that an update would not fix", async () => {
+    const t = setup({
+      settings: SKIP_QUESTIONS,
+      runner: async (_c, _a, h) => {
+        h.onStderrLine("ERROR: [Errno 28] No space left on device");
+        return { exitCode: 1 };
+      },
+    });
+    await waitFor(t.app, "What would you like to do?");
+    await press(t.app, KEY.enter);
+    await waitFor(t.app, URL);
+    await press(t.app, KEY.enter);
+    await waitFor(t.app, "Download failed");
+    expect(t.app.lastFrame()).not.toContain("Update yt-dlp and retry");
+    t.app.unmount();
+  });
+
+  it("shows why the update failed and lets the user go back", async () => {
+    const t = setup({
+      settings: SKIP_QUESTIONS,
+      runner: async (_c, _a, h) => {
+        h.onStderrLine(STALE);
+        return { exitCode: 1 };
+      },
+      installTool: async () => {
+        throw new ToolInstallError(
+          "offline",
+          "Could not reach github.com.",
+          "Check your internet connection, then try again.",
+        );
+      },
+    });
+    await waitFor(t.app, "What would you like to do?");
+    await press(t.app, KEY.enter);
+    await waitFor(t.app, URL);
+    await press(t.app, KEY.enter);
+    await waitFor(t.app, "Download failed");
+    await moveTo(t.app, "Update yt-dlp and retry");
+    await press(t.app, KEY.enter);
+    await waitFor(t.app, "Could not reach github.com.");
+    await press(t.app, KEY.esc);
+    await waitFor(t.app, "Download failed");
+    t.app.unmount();
+  });
+
+  /** Download, fail with the stale error, and open the update screen. */
+  async function toUpdate(options: Options) {
+    const t = setup({ settings: SKIP_QUESTIONS, ...options });
+    await waitFor(t.app, "What would you like to do?");
+    await press(t.app, KEY.enter);
+    await waitFor(t.app, URL);
+    await press(t.app, KEY.enter);
+    await waitFor(t.app, "Download failed");
+    await moveTo(t.app, "Update yt-dlp and retry");
+    await press(t.app, KEY.enter);
+    return t;
+  }
+
+  it("runs the update again from its own Try again after a failed update", async () => {
+    let installs = 0;
+    let calls = 0;
+    const t = await toUpdate({
+      runner: async (c, a, h, s) => {
+        calls++;
+        if (calls === 1) {
+          h.onStderrLine(STALE);
+          return { exitCode: 1 };
+        }
+        return succeed(c, a, h, s);
+      },
+      installTool: async (tool) => {
+        if (++installs === 1) {
+          throw new ToolInstallError("offline", "Could not reach github.com.", "Try again.");
+        }
+        return { tool, version: "1", path: `/cache/${tool}`, sha256: "s", url: "u" };
+      },
+      tools: async () => [
+        { tool: "yt-dlp", found: true, version: "1", source: "cache", path: "/cache/yt-dlp" },
+        { tool: "ffmpeg", found: true, version: "9.0", source: "bundled", path: "/bin/ffmpeg" },
+      ],
+    });
+    await waitFor(t.app, "Could not reach github.com.");
+    await moveTo(t.app, "Try again");
+    await press(t.app, KEY.enter);
+    await waitFor(t.app, "Download complete");
+    expect(installs).toBe(2);
+    expect(calls).toBe(2);
+    t.app.unmount();
+  });
+
+  it("does not retry on its own when another yt-dlp takes priority over the downloaded one", async () => {
+    let calls = 0;
+    const t = await toUpdate({
+      runner: async (c, a, h, s) => {
+        calls++;
+        if (calls === 1) {
+          h.onStderrLine(STALE);
+          return { exitCode: 1 };
+        }
+        return succeed(c, a, h, s);
+      },
+      // The yt-dlp on PATH wins over the cache, before and after the update.
+      tools: async () => [
+        { tool: "yt-dlp", found: true, version: "1", source: "path", path: "/usr/bin/yt-dlp" },
+        { tool: "ffmpeg", found: true, version: "9.0", source: "bundled", path: "/bin/ffmpeg" },
+      ],
+    });
+    await waitFor(t.app, "Retry the download anyway");
+    const notice = t.app.lastFrame() ?? "";
+    expect(notice).toContain("path (/usr/bin/yt-dlp)");
+    expect(notice).toContain("Retry the download anyway");
+    expect(calls).toBe(1);
+
+    await press(t.app, KEY.enter);
+    await waitFor(t.app, "Download complete");
+    expect(calls).toBe(2);
+    t.app.unmount();
+  });
+
+  it("goes back from the priority notice without retrying", async () => {
+    let calls = 0;
+    const t = await toUpdate({
+      runner: async (_c, _a, h) => {
+        calls++;
+        h.onStderrLine(STALE);
+        return { exitCode: 1 };
+      },
+      tools: async () => [
+        { tool: "yt-dlp", found: true, version: "1", source: "path", path: "/usr/bin/yt-dlp" },
+        { tool: "ffmpeg", found: true, version: "9.0", source: "bundled", path: "/bin/ffmpeg" },
+      ],
+    });
+    await waitFor(t.app, "Retry the download anyway");
+    await press(t.app, KEY.esc);
+    await waitFor(t.app, "Download failed");
+    expect(calls).toBe(1);
+    t.app.unmount();
+  });
+
+  it("retries straight away when the tool check cannot run after the update", async () => {
+    let calls = 0;
+    let checks = 0;
+    const t = await toUpdate({
+      runner: async (c, a, h, s) => {
+        calls++;
+        if (calls === 1) {
+          h.onStderrLine(STALE);
+          return { exitCode: 1 };
+        }
+        return succeed(c, a, h, s);
+      },
+      tools: async () => {
+        // Home's check passes; the check after the update fails.
+        if (++checks > 1) throw new Error("probe failed");
+        return [
+          { tool: "yt-dlp", found: true, version: "1", source: "path", path: "/usr/bin/yt-dlp" },
+          { tool: "ffmpeg", found: true, version: "9.0", source: "bundled", path: "/bin/ffmpeg" },
+        ];
+      },
+    });
+    await waitFor(t.app, "Download complete");
+    expect(calls).toBe(2);
+    t.app.unmount();
+  });
+});
+
+describe("home tool check", () => {
+  it("ignores further picks while the tools are being checked", async () => {
+    let release: () => void = () => {};
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const t = setup({
+      tools: async () => {
+        await gate;
+        return [
+          { tool: "yt-dlp", found: true, version: "1", source: "path", path: "/bin/yt-dlp" },
+          { tool: "ffmpeg", found: true, version: "9", source: "bundled", path: "/bin/ffmpeg" },
+        ];
+      },
+    });
+    await waitFor(t.app, "What would you like to do?");
+    await press(t.app, KEY.enter, KEY.enter);
+    release();
+    await waitFor(t.app, "What do you want to download?");
+    // One screen was pushed, so one Esc is back at Home.
+    await press(t.app, KEY.esc);
+    await waitFor(t.app, "What would you like to do?");
+    t.app.unmount();
+  });
+
+  it("still opens the link screen when the tool check fails", async () => {
+    const t = setup({
+      tools: async () => {
+        throw new Error("probe failed");
+      },
+    });
+    await waitFor(t.app, "What would you like to do?");
+    await press(t.app, KEY.enter);
+    await waitFor(t.app, "What do you want to download?");
+    t.app.unmount();
+  });
+
+  it("accepts another pick once the check is over", async () => {
+    let checks = 0;
+    const t = setup({
+      tools: async () => {
+        if (++checks === 1) throw new Error("probe failed");
+        return [
+          { tool: "yt-dlp", found: true, version: "1", source: "path", path: "/bin/yt-dlp" },
+          { tool: "ffmpeg", found: true, version: "9", source: "bundled", path: "/bin/ffmpeg" },
+        ];
+      },
+    });
+    await waitFor(t.app, "What would you like to do?");
+    await press(t.app, KEY.enter);
+    await waitFor(t.app, "What do you want to download?");
+    await press(t.app, KEY.esc);
+    await waitFor(t.app, "What would you like to do?");
+    await press(t.app, KEY.enter);
+    await waitFor(t.app, "What do you want to download?");
+    expect(checks).toBe(2);
+    t.app.unmount();
   });
 });
 

@@ -11,7 +11,10 @@
     "typecheck": "tsc -b",
     "test": "vitest run",
     "lint": "biome check .",
-    "format": "biome format --write ."
+    "format": "biome format --write .",
+    "pin:ffmpeg": "node tools/release/pin-ffmpeg.mjs",
+    "release:build": "node tools/release/build-binaries.mjs",
+    "release:checksums": "node tools/release/checksums.mjs"
   },
   "devEngines": {
     "packageManager": {
@@ -23,6 +26,7 @@
   "devDependencies": {
     "@biomejs/biome": "^2.5.15",
     "@types/node": "^26.6.4",
+    "@yao-pkg/pkg": "^6.23.0",
     "typescript": "^7.0.2",
     "vitest": "^5.0.3"
   }

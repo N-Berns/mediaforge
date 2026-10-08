@@ -1,5 +1,8 @@
 export type Tool = "yt-dlp" | "ffmpeg";
 
+/** Every tool MediaForge manages. Commands loop over this list instead of naming tools. */
+export const ALL_TOOLS: readonly Tool[] = ["yt-dlp", "ffmpeg"];
+
 /** Oldest ffmpeg a PATH copy may be before the bundled one is preferred. */
 export const MIN_FFMPEG_VERSION = { major: 5, minor: 0 } as const;
 

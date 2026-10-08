@@ -18,6 +18,8 @@ export interface BuildArgsInput {
   formatSelector?: string;
   /** File ffmpeg writes its progress to while merging or converting. */
   ffmpegProgressFile?: string;
+  /** `--js-runtimes ...` flags from `jsRuntimeArgs()`; empty when yt-dlp can find its own. */
+  jsRuntimeArgs?: string[];
 }
 
 /** yt-dlp post-processors that run ffmpeg over the whole file, so their progress is worth showing. */
@@ -77,6 +79,7 @@ export function buildYtDlpArgs({
   ffmpegPath,
   formatSelector,
   ffmpegProgressFile,
+  jsRuntimeArgs,
 }: BuildArgsInput): string[] {
   const url = request.candidate.url;
   const maxHeight = profile.maxHeight;
@@ -86,6 +89,7 @@ export function buildYtDlpArgs({
 
   return [
     "--no-playlist",
+    ...(jsRuntimeArgs ?? []),
     "--newline",
     "--progress",
     "--windows-filenames",

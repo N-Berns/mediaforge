@@ -2,6 +2,7 @@ import { basename, dirname } from "node:path";
 import { Box, Text } from "ink";
 import { useEffect, useState } from "react";
 import type { EngineJob } from "../../engine/index.ts";
+import { isStaleExtractorError } from "../../stale-extractor.ts";
 import { Card } from "../components/Card.tsx";
 import { Frame } from "../components/Frame.tsx";
 import { Menu, type MenuItem } from "../components/Menu.tsx";
@@ -9,7 +10,7 @@ import { useDeps } from "../deps.ts";
 import { failureHint, formatBytes } from "../hints.ts";
 import { COLORS, ICONS } from "../theme.ts";
 
-export type ResultAction = "open" | "again" | "retry" | "quality" | "home" | "quit";
+export type ResultAction = "open" | "again" | "retry" | "update" | "quality" | "home" | "quit";
 
 export interface ResultScreenProps {
   job: EngineJob;
@@ -93,6 +94,16 @@ export function ResultScreen({ job, onAction }: ResultScreenProps) {
         onBack={() => onAction("home")}
         items={[
           { value: "retry", icon: ICONS.retry, label: "Try again", hint: "same link and choices" },
+          ...(isStaleExtractorError(job.error)
+            ? [
+                {
+                  value: "update" as const,
+                  icon: ICONS.download,
+                  label: "Update yt-dlp and retry",
+                  hint: "downloads the latest nightly",
+                },
+              ]
+            : []),
           { value: "quality", icon: ICONS.format, label: "Choose a different quality" },
           { value: "again", icon: ICONS.link, label: "Use a different link" },
           ...FOOTER_ITEMS,

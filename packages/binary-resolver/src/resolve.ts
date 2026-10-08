@@ -1,12 +1,9 @@
-import { execFile } from "node:child_process";
 import { access, constants } from "node:fs/promises";
 import { delimiter, join } from "node:path";
-import { promisify } from "node:util";
+import { execFileText } from "./exec.ts";
 import { extractVersion, isFfmpegVersionOk, type Tool } from "./version.ts";
 
-const execFileAsync = promisify(execFile);
-
-export type BinarySource = "env" | "path" | "bundled";
+export type BinarySource = "env" | "path" | "bundled" | "cache";
 
 export interface ResolvedBinary {
   tool: Tool;
@@ -18,6 +15,8 @@ export interface ResolvedBinary {
 export interface ResolveOptions {
   /** Directory holding the bundled binaries (the release package's `bin/`). */
   bundledDir?: string;
+  /** The managed tool folder (see `cacheDir`). Searched last. */
+  cacheDir?: string;
   env?: Record<string, string | undefined>;
   platform?: NodeJS.Platform;
   /** Run `<path> <args>` and return stdout. Throws if the binary cannot run. */
@@ -48,8 +47,7 @@ export class BinaryNotFoundError extends Error {
   }
 }
 
-const defaultRun = async (path: string, args: string[]) =>
-  (await execFileAsync(path, args, { timeout: 10_000, windowsHide: true })).stdout;
+const defaultRun = (path: string, args: string[]) => execFileText(path, args);
 
 const defaultIsExecutable = async (path: string) => {
   try {
@@ -60,10 +58,10 @@ const defaultIsExecutable = async (path: string) => {
   }
 };
 
-function fileNames(tool: Tool, env: ResolveOptions["env"], platform: NodeJS.Platform): string[] {
-  if (platform !== "win32") return [tool];
+function fileNames(name: string, env: ResolveOptions["env"], platform: NodeJS.Platform): string[] {
+  if (platform !== "win32") return [name];
   const exts = (env?.PATHEXT ?? ".EXE;.CMD;.BAT").split(";").filter(Boolean);
-  return exts.map((ext) => `${tool}${ext.toLowerCase()}`);
+  return exts.map((ext) => `${name}${ext.toLowerCase()}`);
 }
 
 /**
@@ -120,15 +118,45 @@ export async function resolveBinary(
   }
   if (!tried.length) tried.push("PATH");
 
-  if (options.bundledDir) {
+  const fromDir = async (dir: string | undefined, source: BinarySource) => {
+    if (!dir) return undefined;
     for (const name of names) {
-      const path = join(options.bundledDir, name);
+      const path = join(dir, name);
       if (!(await isExecutable(path))) continue;
       const output = await works(path);
-      if (output !== undefined) return found(path, "bundled", output);
+      if (output !== undefined) return found(path, source, output);
     }
-    tried.push(`bundled in ${options.bundledDir}`);
-  }
+    tried.push(`${source} in ${dir}`);
+    return undefined;
+  };
+
+  const bundled = await fromDir(options.bundledDir, "bundled");
+  if (bundled) return bundled;
+  const cached = await fromDir(options.cacheDir, "cache");
+  if (cached) return cached;
 
   throw new BinaryNotFoundError(tool, tried);
+}
+
+export interface FindOnPathOptions {
+  env?: ResolveOptions["env"];
+  platform?: NodeJS.Platform;
+  isExecutable?: (path: string) => Promise<boolean>;
+}
+
+/** The first executable called `name` on PATH, or undefined. Does not run it. */
+export async function findOnPath(
+  name: string,
+  options: FindOnPathOptions = {},
+): Promise<string | undefined> {
+  const env = options.env ?? process.env;
+  const platform = options.platform ?? process.platform;
+  const isExecutable = options.isExecutable ?? defaultIsExecutable;
+  for (const dir of (env.PATH ?? env.Path ?? "").split(delimiter).filter(Boolean)) {
+    for (const file of fileNames(name, env, platform)) {
+      const path = join(dir, file);
+      if (await isExecutable(path)) return path;
+    }
+  }
+  return undefined;
 }

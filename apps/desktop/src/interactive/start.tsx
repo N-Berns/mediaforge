@@ -7,6 +7,7 @@ import { defaultOutputDir } from "../engine/index.ts";
 import { ExitCode } from "../exit-codes.ts";
 import { fetchMediaInfo } from "../formats.ts";
 import { settingsPath } from "../settings.ts";
+import { defaultToolRuntime } from "../tool-runtime.ts";
 import { VERSION } from "../version.ts";
 import { App } from "./App.tsx";
 import { readClipboard } from "./clipboard.ts";
@@ -22,6 +23,7 @@ export function realDeps(): AppDeps {
     download: defaultDownloadDeps(),
     fetchInfo: (url) => fetchMediaInfo(url),
     inspectTools: () => inspectTools(),
+    installTool: (tool, onProgress) => defaultToolRuntime().install(tool, onProgress),
     readClipboard: () => readClipboard(),
     openFolder,
     fileSize: async (path) => {

@@ -1,7 +1,4 @@
-import { execFile } from "node:child_process";
-import { promisify } from "node:util";
-
-const execFileAsync = promisify(execFile);
+import { execFileText } from "@mediaforge/binary-resolver";
 
 export interface ClipboardCommand {
   command: string;
@@ -37,9 +34,8 @@ export function clipboardCommands(
 
 export type RunCommand = (command: string, args: string[]) => Promise<string>;
 
-const defaultRun: RunCommand = async (command, args) =>
-  (await execFileAsync(command, args, { timeout: 4000, windowsHide: true, maxBuffer: 1 << 20 }))
-    .stdout;
+const defaultRun: RunCommand = (command, args) =>
+  execFileText(command, args, { timeoutMs: 4000, maxBuffer: 1 << 20 });
 
 /** Clipboard text, or undefined when it is empty or no clipboard tool works. */
 export async function readClipboard(

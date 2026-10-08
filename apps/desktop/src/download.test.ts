@@ -4,7 +4,7 @@ import { type DownloadDeps, runDownload } from "./download.ts";
 import type { EngineJob } from "./engine/index.ts";
 import { DownloadEngine, type EngineFs } from "./engine/index.ts";
 import type { ProcessRunner } from "./engine/process.ts";
-import { ExitCode } from "./exit-codes.ts";
+import { CliError, ExitCode } from "./exit-codes.ts";
 import { formatFormatsTable, runFormats } from "./formats.ts";
 import {
   createProgressView,
@@ -157,6 +157,33 @@ describe("runDownload", () => {
     });
   });
 
+  it("makes sure the tools exist first and stops when one is missing", async () => {
+    const t = setup(succeed);
+    const asked: string[][] = [];
+    t.deps.ensureTools = async (tools) => {
+      asked.push(tools);
+      throw new CliError("yt-dlp is missing.\nrun: mediaforge setup", ExitCode.MissingTool);
+    };
+    await expect(runDownload(["https://example.com/v"], t.io, t.deps)).rejects.toMatchObject({
+      exitCode: ExitCode.MissingTool,
+      message: "yt-dlp is missing.\nrun: mediaforge setup",
+    });
+    expect(asked).toEqual([["yt-dlp", "ffmpeg"]]);
+    expect(t.seenArgs).toEqual([]);
+  });
+
+  it("does not check tools when the arguments are already wrong", async () => {
+    const t = setup(succeed);
+    let called = false;
+    t.deps.ensureTools = async () => {
+      called = true;
+    };
+    await expect(
+      runDownload(["https://example.com/v", "-p", "nope"], t.io, t.deps),
+    ).rejects.toMatchObject({ exitCode: ExitCode.Usage });
+    expect(called).toBe(false);
+  });
+
   it("shows help on --help without downloading", async () => {
     const t = setup(succeed);
     expect(await runDownload(["--help"], t.io, t.deps)).toBe(ExitCode.Ok);
@@ -172,6 +199,25 @@ describe("runDownload", () => {
     await expect(runDownload(["https://example.com/v"], t.io, t.deps)).rejects.toMatchObject({
       exitCode: ExitCode.UnsupportedSite,
     });
+  });
+
+  it("suggests mediaforge update when the failure looks like a stale extractor", async () => {
+    const t = setup(async (_c, _a, h) => {
+      h.onStderrLine("ERROR: [generic] Unable to extract title; please report this issue");
+      return { exitCode: 1 };
+    });
+    await expect(runDownload(["https://example.com/v"], t.io, t.deps)).rejects.toMatchObject({
+      message: expect.stringContaining("\nrun: mediaforge update"),
+    });
+  });
+
+  it("does not suggest it for other failures", async () => {
+    const t = setup(async (_c, _a, h) => {
+      h.onStderrLine("ERROR: Unsupported URL: https://example.com/v");
+      return { exitCode: 1 };
+    });
+    const error = await runDownload(["https://example.com/v"], t.io, t.deps).catch((e) => e);
+    expect(error.message).not.toContain("mediaforge update");
   });
 
   it("cancels on interrupt and exits 130", async () => {
@@ -306,6 +352,22 @@ describe("formats", () => {
         },
       ),
     ).rejects.toMatchObject({ exitCode: ExitCode.UnsupportedSite });
+  });
+
+  it("makes sure yt-dlp exists before listing formats", async () => {
+    const asked: string[][] = [];
+    const deps = {
+      resolve: found,
+      run: async () => ({ exitCode: 0 }),
+      ensureTools: async (tools: Tool[]) => {
+        asked.push(tools);
+        throw new CliError("yt-dlp is missing.\nrun: mediaforge setup", ExitCode.MissingTool);
+      },
+    };
+    await expect(
+      runFormats(["https://example.com/v"], { stdout: () => {}, stderr: () => {} }, deps),
+    ).rejects.toMatchObject({ exitCode: ExitCode.MissingTool });
+    expect(asked).toEqual([["yt-dlp"]]);
   });
 });
 

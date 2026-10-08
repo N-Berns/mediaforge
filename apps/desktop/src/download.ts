@@ -1,13 +1,17 @@
+import type { Tool } from "@mediaforge/binary-resolver";
 import { BUILTIN_PROFILES, DEFAULT_PROFILE_ID, getProfile } from "@mediaforge/media-profiles";
 import type { MediaCandidate } from "@mediaforge/shared-types";
 import type { Io } from "./commands.ts";
 import { DownloadEngine, type EngineJob } from "./engine/index.ts";
 import { defaultOutputDir } from "./engine/paths.ts";
 import { CliError, ExitCode } from "./exit-codes.ts";
+import { detectJsRuntimeArgs } from "./js-runtime.ts";
 import { kindOfProfile, withKindFolder } from "./kind-folder.ts";
 import { parseCommandArgs, parseHttpUrl } from "./parse.ts";
 import { createProgressView } from "./progress-view.ts";
 import { defaultSettingsStore, type SettingsStore } from "./settings.ts";
+import { withUpdateHint } from "./stale-extractor.ts";
+import { defaultEnsureTools } from "./tool-runtime.ts";
 
 export const PROFILE_ENV = "MEDIAFORGE_PROFILE";
 export const OUTPUT_DIR_ENV = "MEDIAFORGE_OUTPUT_DIR";
@@ -54,11 +58,18 @@ export interface DownloadDeps {
   onInterrupt: (handler: () => void) => () => void;
   /** Saved user settings (default folder and quality). */
   settings: SettingsStore;
+  /**
+   * Make sure the tools exist before work starts. In a terminal it offers to download them;
+   * otherwise it fails with exit 3 and `run: mediaforge setup`.
+   */
+  ensureTools?: (tools: Tool[]) => Promise<void>;
 }
 
 export const defaultDownloadDeps = (): DownloadDeps => ({
-  createEngine: (onUpdate, options) => new DownloadEngine({ onUpdate, ...options }),
+  createEngine: (onUpdate, options) =>
+    new DownloadEngine({ onUpdate, jsRuntimeArgs: detectJsRuntimeArgs, ...options }),
   env: process.env,
+  ensureTools: defaultEnsureTools(),
   isTTY: Boolean(process.stderr.isTTY),
   onInterrupt: (handler) => {
     process.on("SIGINT", handler);
@@ -105,6 +116,7 @@ export async function runDownload(
     const ids = BUILTIN_PROFILES.map((p) => p.id).join(", ");
     throw new CliError(`Unknown profile: ${profileId}. Available: ${ids}`, ExitCode.Usage);
   }
+  await deps.ensureTools?.(["yt-dlp", "ffmpeg"]);
 
   const view = createProgressView({
     write: io.stderr,
@@ -137,5 +149,8 @@ export async function runDownload(
     io.stderr("Cancelled.\n");
     return ExitCode.Cancelled;
   }
-  throw new CliError(job?.error ?? "Download failed.", job?.errorKind ?? ExitCode.Failure);
+  throw new CliError(
+    withUpdateHint(job?.error ?? "Download failed."),
+    job?.errorKind ?? ExitCode.Failure,
+  );
 }

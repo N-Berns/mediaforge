@@ -2,7 +2,7 @@
 
 Cross-platform media downloader: a browser extension, a desktop host/CLI, and an Android app, built on shared TypeScript packages.
 
-> **Status:** early development (v0.1.0). The shared packages and the standalone desktop CLI exist. The browser extension, the native messaging host, and the Android app are planned and not yet built. `apps/chrome`, `apps/edge`, `apps/firefox`, and `apps/android` are empty placeholders.
+> **Status:** early release (v0.1.0). The desktop CLI is available as a download for Windows, Linux and macOS. The browser extension, the native messaging host and the Android app are planned and not yet built. `apps/chrome`, `apps/edge`, `apps/firefox` and `apps/android` are empty placeholders.
 
 ## How it works
 
@@ -21,7 +21,7 @@ This is the target design. Today only the desktop CLI exists, and it runs standa
 | `packages/shared-protocol` | `@mediaforge/shared-protocol` | Extension ↔ host wire protocol: Zod schemas, message envelopes, native-messaging framing, parsing, `PROTOCOL_VERSION`. |
 | `packages/extension-core`  | `@mediaforge/extension-core`  | Browser-agnostic detection logic: MIME/extension classification, candidate creation, URL de-duplication.               |
 | `packages/media-profiles`  | `@mediaforge/media-profiles`  | Built-in output profiles and variant selection.                                                                        |
-| `packages/binary-resolver` | `@mediaforge/binary-resolver` | Finds the `yt-dlp` and `ffmpeg` executables: env override, then `PATH`, then a bundled `bin/` directory.               |
+| `packages/binary-resolver` | `@mediaforge/binary-resolver` | Finds the `yt-dlp` and `ffmpeg` executables (env override, `PATH`, bundled `bin/`, managed cache) and downloads them. |
 | `apps/desktop`             | `@mediaforge/desktop`         | Desktop CLI and interactive terminal menu (Ink). Downloads with yt-dlp and ffmpeg.                                     |
 | `apps/*`, `tools/*`        | (planned)                     | Browser extensions (`chrome`, `edge`, `firefox`), Android app, tooling. Placeholders only.                             |
 
@@ -37,14 +37,54 @@ Messages are JSON envelopes `{ v, id, type, payload }`, framed for native messag
 - Bump `PROTOCOL_VERSION` when a message shape changes incompatibly.
 - Zod schemas are checked at compile time against the types in `shared-types`, so the two cannot drift apart.
 
-## Requirements
+## Install
+
+Windows (PowerShell):
+
+```powershell
+irm https://github.com/N-Berns/mediaforge/releases/latest/download/install.ps1 | iex
+```
+
+Linux and macOS:
+
+```sh
+curl -fsSL https://github.com/N-Berns/mediaforge/releases/latest/download/install.sh | sh
+```
+
+The installer downloads one `mediaforge` program, checks it against the release's `SHA256SUMS`, puts it in `%LOCALAPPDATA%\MediaForge` (Windows) or `~/.local/bin` (Linux, macOS), adds that folder to your PATH, and then runs `mediaforge setup --yes` to download yt-dlp and ffmpeg. It needs no administrator rights and uses no `sudo`. The program is a single file and needs no Node.js.
+
+**These one-line commands run a script from this repository on your computer with your own permissions.** If you prefer to read it first, save it and run it yourself:
+
+```sh
+curl -fsSL https://github.com/N-Berns/mediaforge/releases/latest/download/install.sh -o install.sh
+less install.sh
+sh install.sh
+```
+
+```powershell
+Invoke-WebRequest https://github.com/N-Berns/mediaforge/releases/latest/download/install.ps1 -OutFile install.ps1
+Get-Content install.ps1
+./install.ps1
+```
+
+If PowerShell refuses with "running scripts is disabled", run `powershell -ExecutionPolicy Bypass -File .\install.ps1` instead (or `Unblock-File .\install.ps1` first).
+
+- Skip the tool download with `--skip-tools` (`sh -s -- --skip-tools` when piping) or `-SkipTools` (`& ([scriptblock]::Create((irm <url>))) -SkipTools`).
+- Pin a version by replacing `latest/download` with `download/vX.Y.Z` in the URL.
+- Supported: Windows x64 (Windows on ARM runs it through emulation), Linux x64 and arm64, macOS x64 and arm64.
+- **Windows:** the program is not code-signed yet, so Windows SmartScreen or Defender may warn about it. This is expected for early releases.
+- **macOS:** the program is ad-hoc signed, not notarized. If you download the binary with a browser instead of the installer and macOS refuses to open it, run `xattr -d com.apple.quarantine ./mediaforge-macos-*`.
+- **ffmpeg licence:** on Windows and Linux MediaForge downloads a static LGPL build of ffmpeg (`LGPL-3.0-or-later`, from [BtbN/FFmpeg-Builds](https://github.com/BtbN/FFmpeg-Builds), pinned to a month-end build because BtbN deletes daily builds after 14 days). On macOS it downloads Martin Riedl's release build (a GPL build, `GPL-3.0-or-later`) from his server; MediaForge does not redistribute it. `packages/binary-resolver/src/tools.lock.json` records the version, source, SHA-256 and licence of every build.
+- **Remove it:** delete the program, MediaForge's tool folder (`%LOCALAPPDATA%\MediaForge\bin`, `~/.local/share/mediaforge`, or `~/Library/Application Support/MediaForge`), its settings file, and the PATH line the installer added.
+
+## Requirements (development)
 
 - Node.js 22 (see `.nvmrc`)
 - pnpm 11
 
 ## Desktop CLI
 
-Run it from the repo root (builds with esbuild, then runs `dist/main.js`):
+After [installing](#install), run `mediaforge`. To run it from a clone of the repo instead (builds with esbuild, then runs `dist/main.js`):
 
 ```sh
 pnpm --filter @mediaforge/desktop start                      # interactive menu (in a terminal)
@@ -57,7 +97,9 @@ pnpm --filter @mediaforge/desktop start doctor
 | ---------- | ---------------------------------------------------------------------------------------------- |
 | `download` | Download media from a URL. Options: `-p/--profile`, `-o/--output`, `--filename`, `-q/--quiet`. |
 | `formats`  | List the formats available for a URL.                                                          |
-| `doctor`   | Check that yt-dlp and ffmpeg are found. `--json` for scripts.                                  |
+| `setup`    | Download yt-dlp and ffmpeg when they are missing. Options: `-y/--yes`, `--tools yt-dlp,ffmpeg`. |
+| `update`   | Download the latest yt-dlp nightly into MediaForge's tool folder. Never changes ffmpeg.        |
+| `doctor`   | Check that yt-dlp and ffmpeg are found, and whether a JavaScript runtime is available. `--json` for scripts. |
 
 - Without a command, a terminal opens the interactive menu. Without a terminal, it prints help.
 - Built-in profiles: `best`, `mp4-1080p`, `mp4-720p`, `audio-mp3-320`, `audio-m4a`. Run `download --help` for the full list.
@@ -70,8 +112,25 @@ The CLI needs both tools. It looks for each in this order:
 1. `MEDIAFORGE_YTDLP_PATH` / `MEDIAFORGE_FFMPEG_PATH` (full path to the executable).
 2. `PATH` (ffmpeg 5.0 or newer).
 3. The bundled directory: `MEDIAFORGE_BIN_DIR`, else `bin/` next to the executable, else the repo-root `bin/` when run through Node.
+4. MediaForge's tool folder, filled by `mediaforge setup`. Override its location with `MEDIAFORGE_CACHE_DIR`.
+
+If a tool is missing, the interactive menu and `download` / `formats` in a terminal offer to download it. Without a terminal they exit with code 3 and print `run: mediaforge setup`. Nothing downloads without a yes. Downloads are checked against a SHA-256 before anything is run. `mediaforge update` fetches the latest yt-dlp nightly; if a `yt-dlp` on your PATH comes first, it says so.
+
+**YouTube** needs a JavaScript runtime for all formats: install [Deno](https://deno.com) or Node.js 20 or newer. The MediaForge program itself cannot serve as that runtime. `doctor` shows whether one was found.
 
 Run `doctor` to see what was found and where.
+
+### Environment variables
+
+| Variable                  | Purpose                                                                                |
+| ------------------------- | -------------------------------------------------------------------------------------- |
+| `MEDIAFORGE_YTDLP_PATH`   | Full path to a yt-dlp executable. An unusable path is an error, not a fallback.        |
+| `MEDIAFORGE_FFMPEG_PATH`  | Full path to an ffmpeg executable. An unusable path is an error, not a fallback.       |
+| `MEDIAFORGE_BIN_DIR`      | Folder with bundled `yt-dlp` and `ffmpeg`, searched after `PATH`.                      |
+| `MEDIAFORGE_CACHE_DIR`    | Where `setup` and `update` put downloaded tools (default: the per-user folder above).  |
+| `MEDIAFORGE_PROFILE`      | Default output profile (a `-p/--profile` flag wins).                                   |
+| `MEDIAFORGE_OUTPUT_DIR`   | Default output folder (a `-o/--output` flag wins).                                     |
+| `MEDIAFORGE_YTDLP_REPO_URL` | Testing only: looks up yt-dlp releases on another server.                            |
 
 ### Exit codes
 
@@ -81,9 +140,9 @@ Run `doctor` to see what was found and where.
 | 1    | Failure                  |
 | 2    | Usage error              |
 | 3    | yt-dlp or ffmpeg missing |
-| 4    | Network error            |
+| 4    | Network error, or a failed or corrupt tool download |
 | 5    | Unsupported site         |
-| 6    | Filesystem error         |
+| 6    | Filesystem error (including disk full or permissions when installing a tool) |
 | 130  | Cancelled (Ctrl+C)       |
 
 Progress and remaining work are tracked in [docs/desktop-cli-checklist.md](docs/desktop-cli-checklist.md).
@@ -105,6 +164,7 @@ pnpm format      # biome format --write
 - **Biome** for linting and formatting (2-space indent, 100-column lines, double quotes).
 - **pnpm workspaces** for the monorepo (`apps/*`, `packages/*`, `tools/*`).
 - **esbuild** bundles the desktop app. **Ink** and **React** render its interactive menu.
+- **@yao-pkg/pkg** builds the single-file binaries; **GitHub Actions** builds, tests and publishes them (see [docs/releasing.md](docs/releasing.md)).
 
 ## Contributing
 
@@ -112,3 +172,4 @@ pnpm format      # biome format --write
 - PR titles use the same format. PR descriptions follow `.github/pull_request_template.md`.
 - Run `pnpm test`, `pnpm typecheck`, and `pnpm lint` before opening a PR.
 - Full conventions and the allowed gitmoji set are in [CLAUDE.md](CLAUDE.md).
+- Release process: [docs/releasing.md](docs/releasing.md).

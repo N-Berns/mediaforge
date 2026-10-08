@@ -25,6 +25,7 @@ import { QualityScreen } from "./screens/QualityScreen.tsx";
 import { type ResultAction, ResultScreen } from "./screens/ResultScreen.tsx";
 import { SettingsScreen } from "./screens/SettingsScreen.tsx";
 import { SetupScreen } from "./screens/SetupScreen.tsx";
+import { UpdateScreen } from "./screens/UpdateScreen.tsx";
 
 type Screen =
   | { name: "home" }
@@ -36,9 +37,10 @@ type Screen =
   /** `run` changes on every retry so the screen starts a fresh download. */
   | { name: "download"; plan: Plan; draft: Draft; run: number }
   | { name: "result"; plan: Plan; draft: Draft; job: EngineJob }
+  | { name: "update"; plan: Plan; draft: Draft }
   | { name: "batch"; urls: string[] }
   | { name: "settings" }
-  | { name: "setup" }
+  | { name: "setup"; prompt?: boolean }
   | { name: "about" };
 
 export function App({ deps }: { deps: AppDeps }) {
@@ -48,6 +50,8 @@ export function App({ deps }: { deps: AppDeps }) {
   /** Counts downloads started, so each (including retries) gets a fresh screen instance. */
   const runCounter = useRef(0);
   const [batchBusy, setBatchBusy] = useState(false);
+  /** True while Home checks the tools, so a second pick does not stack another screen. */
+  const checkingTools = useRef(false);
 
   // Ctrl+C quits everywhere except while downloading, where it cancels the download instead.
   useInput((input, key) => {
@@ -97,6 +101,8 @@ export function App({ deps }: { deps: AppDeps }) {
         draft: state.draft,
         run: ++runCounter.current,
       });
+    } else if (action === "update") {
+      nav.push({ name: "update", plan: state.plan, draft: state.draft });
     } else if (action === "quality") await askQuality(state.draft);
     else if (action === "again") nav.reset({ name: "home" }, { name: "link" });
     else if (action === "home") nav.reset({ name: "home" });
@@ -110,8 +116,25 @@ export function App({ deps }: { deps: AppDeps }) {
           <HomeScreen
             onPick={(choice) => {
               if (choice === "quit") exit();
-              else if (choice === "download") nav.push({ name: "link" });
-              else if (choice === "settings") nav.push({ name: "settings" });
+              else if (choice === "download") {
+                // Check the tools first; if one is missing, offer to download it before the link.
+                // Further picks are ignored until the check is over. If it fails, go on to the link.
+                if (checkingTools.current) return;
+                checkingTools.current = true;
+                void deps
+                  .inspectTools()
+                  .then(
+                    (reports): Screen =>
+                      reports.every((r) => r.found)
+                        ? { name: "link" }
+                        : { name: "setup", prompt: true },
+                    (): Screen => ({ name: "link" }),
+                  )
+                  .then(nav.push)
+                  .finally(() => {
+                    checkingTools.current = false;
+                  });
+              } else if (choice === "settings") nav.push({ name: "settings" });
               else if (choice === "setup") nav.push({ name: "setup" });
               else nav.push({ name: "about" });
             }}
@@ -203,6 +226,20 @@ export function App({ deps }: { deps: AppDeps }) {
         return (
           <ResultScreen job={screen.job} onAction={(action) => void onResult(action, screen)} />
         );
+      case "update":
+        return (
+          <UpdateScreen
+            onBack={nav.back}
+            onDone={() =>
+              nav.replace({
+                name: "download",
+                plan: screen.plan,
+                draft: screen.draft,
+                run: ++runCounter.current,
+              })
+            }
+          />
+        );
       case "batch":
         return (
           <BatchFlow
@@ -217,7 +254,12 @@ export function App({ deps }: { deps: AppDeps }) {
       case "settings":
         return <SettingsScreen onBack={nav.back} />;
       case "setup":
-        return <SetupScreen onBack={nav.back} />;
+        return (
+          <SetupScreen
+            onBack={nav.back}
+            onReady={screen.prompt ? () => nav.replace({ name: "link" }) : undefined}
+          />
+        );
       case "about":
         return <AboutScreen onBack={nav.back} />;
     }

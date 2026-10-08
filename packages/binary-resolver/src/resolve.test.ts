@@ -1,6 +1,6 @@
 import { delimiter, join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { BinaryNotFoundError, resolveBinary } from "./resolve.ts";
+import { BinaryNotFoundError, findOnPath, resolveBinary } from "./resolve.ts";
 import { extractVersion, isFfmpegVersionOk, parseFfmpegVersion } from "./version.ts";
 
 const binDir = join("usr", "bin");
@@ -113,5 +113,76 @@ describe("resolveBinary", () => {
   it("reports what it tried when nothing works", async () => {
     const opts = setup({ [join(binDir, "ffmpeg")]: "ffmpeg version 4.2" });
     await expect(resolveBinary("ffmpeg", opts)).rejects.toThrow(/older than supported/);
+  });
+});
+
+describe("resolveBinary cache step", () => {
+  const cache = join("cache", "bin");
+  const withCache = (files: Record<string, string>) => ({ ...setup(files), cacheDir: cache });
+
+  it("uses the managed cache when nothing else has the tool", async () => {
+    const opts = withCache({ [join(cache, "yt-dlp")]: "2026.10.08" });
+    expect(await resolveBinary("yt-dlp", opts)).toEqual({
+      tool: "yt-dlp",
+      path: join(cache, "yt-dlp"),
+      source: "cache",
+      version: "2026.10.08",
+    });
+  });
+
+  it("prefers PATH, then the bundled folder, over the cache", async () => {
+    const both = withCache({
+      [join(binDir, "yt-dlp")]: "1",
+      [join(bundled, "yt-dlp")]: "2",
+      [join(cache, "yt-dlp")]: "3",
+    });
+    expect((await resolveBinary("yt-dlp", both)).source).toBe("path");
+    const noPath = withCache({ [join(bundled, "yt-dlp")]: "2", [join(cache, "yt-dlp")]: "3" });
+    expect((await resolveBinary("yt-dlp", noPath)).source).toBe("bundled");
+  });
+
+  it("does not hold a cached ffmpeg to the PATH version floor", async () => {
+    const opts = withCache({
+      [join(binDir, "ffmpeg")]: "ffmpeg version 4.2",
+      [join(cache, "ffmpeg")]: "ffmpeg version 4.9",
+    });
+    expect((await resolveBinary("ffmpeg", opts)).source).toBe("cache");
+  });
+
+  it("names the cache in the not-found error", async () => {
+    await expect(resolveBinary("yt-dlp", withCache({}))).rejects.toThrow(/cache in/);
+  });
+
+  it("tries .exe names in the cache on Windows", async () => {
+    const opts = {
+      ...withCache({ [join(cache, "ffmpeg.exe")]: "ffmpeg version 7.1" }),
+      platform: "win32" as const,
+    };
+    expect((await resolveBinary("ffmpeg", opts)).path).toBe(join(cache, "ffmpeg.exe"));
+  });
+});
+
+describe("findOnPath", () => {
+  it("returns the first executable match on PATH", async () => {
+    const path = await findOnPath("node", {
+      env: { PATH: [join("a", "bin"), join("b", "bin")].join(delimiter) },
+      platform: "linux",
+      isExecutable: async (p) => p === join("b", "bin", "node"),
+    });
+    expect(path).toBe(join("b", "bin", "node"));
+  });
+
+  it("tries PATHEXT names on Windows and returns undefined when absent", async () => {
+    const env = { PATH: join("a", "bin"), PATHEXT: ".EXE;.CMD" };
+    expect(
+      await findOnPath("deno", {
+        env,
+        platform: "win32",
+        isExecutable: async (p) => p === join("a", "bin", "deno.exe"),
+      }),
+    ).toBe(join("a", "bin", "deno.exe"));
+    expect(
+      await findOnPath("deno", { env, platform: "win32", isExecutable: async () => false }),
+    ).toBeUndefined();
   });
 });

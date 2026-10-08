@@ -41,6 +41,21 @@ describe("buildYtDlpArgs", () => {
     expect(args[args.indexOf("-f") + 1]).toBe("bv*+ba/b");
   });
 
+  it("adds JS runtime flags before the options end, and none by default", () => {
+    const profile = getProfile("best") as OutputProfile;
+    const withRuntime = buildYtDlpArgs({
+      request: { candidate, profileId: "best" },
+      profile,
+      workDir: "/work",
+      ffmpegPath: "/bin/ffmpeg",
+      jsRuntimeArgs: ["--js-runtimes", "node:/usr/bin/node"],
+    });
+    const at = withRuntime.indexOf("--js-runtimes");
+    expect(withRuntime[at + 1]).toBe("node:/usr/bin/node");
+    expect(at).toBeLessThan(withRuntime.indexOf("--"));
+    expect(build("best")).not.toContain("--js-runtimes");
+  });
+
   it("caps height from the profile", () => {
     expect(build("mp4-720p")[build("mp4-720p").indexOf("-f") + 1]).toBe(
       "bv*[height<=720]+ba/b[height<=720]",
@@ -119,6 +134,19 @@ describe("classifyFailure", () => {
     const failure = classifyFailure(["warning", line], 1);
     expect(failure.exitCode).toBe(code);
     expect(failure.message).not.toMatch(/^ERROR:/);
+  });
+
+  it("adds a JS runtime hint when yt-dlp warned that none was found", () => {
+    const failure = classifyFailure(
+      [
+        "WARNING: [youtube] abc: No supported JavaScript runtime could be found. Only deno is enabled by default.",
+        "ERROR: [youtube] abc: Requested format is not available",
+      ],
+      1,
+    );
+    expect(failure.message).toContain("Requested format is not available");
+    expect(failure.message).toContain("install Deno or Node.js 20 or newer");
+    expect(classifyFailure(["ERROR: something odd"], 1).message).toBe("something odd");
   });
 
   it("falls back to the exit code when stderr is empty", () => {
