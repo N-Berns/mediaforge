@@ -68,17 +68,19 @@ const tarCommand = (): string =>
     ? join(process.env.SystemRoot ?? "C:\\Windows", "System32", "tar.exe")
     : "tar";
 
-export const tarExtract: InstallDeps["extract"] = (archive, dest) =>
+/** GNU tar on Linux cannot read zip, so use `unzip` there. Windows and macOS bsdtar read zip. */
+const extractCommand = (kind: string, archive: string, dest: string): [string, string[]] =>
+  kind === "zip" && process.platform === "linux"
+    ? ["unzip", ["-q", "-o", archive, "-d", dest]]
+    : [tarCommand(), ["-xf", archive, "-C", dest]];
+
+export const tarExtract: InstallDeps["extract"] = (archive, dest, kind) =>
   new Promise((resolve, reject) => {
-    execFile(
-      tarCommand(),
-      ["-xf", archive, "-C", dest],
-      { windowsHide: true },
-      (error, _stdout, stderr) => {
-        if (error) reject(new Error(stderr.trim() || error.message));
-        else resolve();
-      },
-    );
+    const [command, args] = extractCommand(kind, archive, dest);
+    execFile(command, args, { windowsHide: true }, (error, _stdout, stderr) => {
+      if (error) reject(new Error(stderr.trim() || error.message));
+      else resolve();
+    });
   });
 
 export const defaultInstallDeps = (): Pick<InstallDeps, "fetch" | "fs" | "extract"> => ({

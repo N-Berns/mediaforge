@@ -104,7 +104,7 @@ export async function installTool(
         throw new ToolInstallError(
           "extract",
           `Could not unpack the ${tool} download: ${detail}`,
-          "Make sure `tar` is installed (on Linux it needs xz support), then try again.",
+          "Make sure `tar` is installed (on Linux it needs xz support, and `unzip` is needed for zip files), then try again.",
         );
       }
       const wanted = source.member ?? binaryFileName(tool, target.os);

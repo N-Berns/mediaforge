@@ -4,6 +4,7 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
+import { crc32 } from "node:zlib";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { installTool } from "./install.ts";
 import type { ToolsLock } from "./lock.ts";
@@ -28,6 +29,38 @@ async function makeTar(content: string): Promise<string> {
   await writeFile(join(root, "src", "pkg-1", "bin", "ffmpeg"), content);
   await run("tar", ["-cf", "archive.tar", "-C", "src", "."], { cwd: root });
   return join(root, "archive.tar");
+}
+
+/** Build `archive.zip` holding one stored (uncompressed) file, so no zip tool is needed. */
+async function makeZip(name: string, content: string): Promise<string> {
+  const nameBytes = Buffer.from(name);
+  const data = Buffer.from(content);
+  const crc = crc32(data);
+  const local = Buffer.alloc(30);
+  local.writeUInt32LE(0x04034b50, 0);
+  local.writeUInt16LE(20, 4);
+  local.writeUInt32LE(crc, 14);
+  local.writeUInt32LE(data.length, 18);
+  local.writeUInt32LE(data.length, 22);
+  local.writeUInt16LE(nameBytes.length, 26);
+  const central = Buffer.alloc(46);
+  central.writeUInt32LE(0x02014b50, 0);
+  central.writeUInt16LE(20, 4);
+  central.writeUInt16LE(20, 6);
+  central.writeUInt32LE(crc, 16);
+  central.writeUInt32LE(data.length, 20);
+  central.writeUInt32LE(data.length, 24);
+  central.writeUInt16LE(nameBytes.length, 28);
+  const localSize = local.length + nameBytes.length + data.length;
+  const end = Buffer.alloc(22);
+  end.writeUInt32LE(0x06054b50, 0);
+  end.writeUInt16LE(1, 8);
+  end.writeUInt16LE(1, 10);
+  end.writeUInt32LE(central.length + nameBytes.length, 12);
+  end.writeUInt32LE(localSize, 16);
+  const path = join(root, "archive.zip");
+  await writeFile(path, Buffer.concat([local, nameBytes, data, central, nameBytes, end]));
+  return path;
 }
 
 describe("realInstallFs", () => {
@@ -61,6 +94,14 @@ describe("tarExtract", () => {
     await mkdir(out);
     await tarExtract(archive, out, "tar");
     expect(await realInstallFs.listFiles(out)).toContain("pkg-1/bin/ffmpeg");
+  });
+
+  it("unpacks a zip archive (deno ships as zip on every OS)", async () => {
+    const archive = await makeZip("deno", "DENO");
+    const out = join(root, "out");
+    await mkdir(out);
+    await tarExtract(archive, out, "zip");
+    expect(await readFile(join(out, "deno"), "utf8")).toBe("DENO");
   });
 
   it("rejects with tar's message when the archive is unreadable", async () => {
