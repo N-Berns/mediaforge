@@ -36,9 +36,6 @@ export function settingsPath(
   if (platform === "win32") {
     return join(env.APPDATA ?? join(home, "AppData", "Roaming"), "MediaForge", "config.json");
   }
-  if (platform === "darwin") {
-    return join(home, "Library", "Application Support", "MediaForge", "config.json");
-  }
   return join(env.XDG_CONFIG_HOME ?? join(home, ".config"), "mediaforge", "config.json");
 }
 

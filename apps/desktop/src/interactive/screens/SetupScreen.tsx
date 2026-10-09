@@ -1,8 +1,8 @@
 import type { InstallProgress } from "@mediaforge/binary-resolver";
 import { Box, Text } from "ink";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { missingToolHint } from "../../binaries.ts";
-import type { ToolReport } from "../../doctor.ts";
+import { isRequired, type ToolReport } from "../../doctor.ts";
 import { Frame } from "../components/Frame.tsx";
 import { Menu, type MenuItem } from "../components/Menu.tsx";
 import { ProgressBar } from "../components/ProgressBar.tsx";
@@ -21,9 +21,11 @@ export interface SetupScreenProps {
   onBack: () => void;
   /** Set when the user came here because a tool is missing before a download. Adds "Continue". */
   onReady?: () => void;
+  /** Start downloading the missing tools as soon as the check finds some (once). */
+  autoDownload?: boolean;
 }
 
-export function SetupScreen({ onBack, onReady }: SetupScreenProps) {
+export function SetupScreen({ onBack, onReady, autoDownload }: SetupScreenProps) {
   const deps = useDeps();
   const [reports, setReports] = useState<ToolReport[]>();
   const [attempt, setAttempt] = useState(0);
@@ -43,6 +45,10 @@ export function SetupScreen({ onBack, onReady }: SetupScreenProps) {
 
   const missing = reports?.filter((r) => !r.found) ?? [];
   const allFound = reports !== undefined && missing.length === 0;
+  /** Optional tools (Deno) do not hold up a download. */
+  const ready = reports !== undefined && missing.every((r) => !isRequired(r.tool));
+
+  const autoStarted = useRef(false);
 
   const downloadMissing = async () => {
     setBusy(true);
@@ -57,6 +63,14 @@ export function SetupScreen({ onBack, onReady }: SetupScreenProps) {
     setAttempt((n) => n + 1);
   };
 
+  // Arrived from About's "Download missing tools": start without another keypress.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: runs once, when the first check ends
+  useEffect(() => {
+    if (!autoDownload || autoStarted.current || !reports) return;
+    autoStarted.current = true;
+    if (missing.length > 0) void downloadMissing();
+  }, [reports]);
+
   const items: MenuItem<Choice>[] = [];
   if (missing.length > 0) {
     items.push({
@@ -66,7 +80,7 @@ export function SetupScreen({ onBack, onReady }: SetupScreenProps) {
       hint: missing.map((r) => r.tool).join(" and "),
     });
   }
-  if (onReady && allFound) items.push({ value: "continue", icon: ICONS.ok, label: "Continue" });
+  if (onReady && ready) items.push({ value: "continue", icon: ICONS.ok, label: "Continue" });
   items.push(
     { value: "again", icon: ICONS.retry, label: "Check again" },
     { value: "back", icon: ICONS.back, label: "Back" },
@@ -84,7 +98,7 @@ export function SetupScreen({ onBack, onReady }: SetupScreenProps) {
     <Frame
       crumbs={onReady ? ["Home", "Download", "Tools"] : ["Home", "Check setup"]}
       icon={onReady ? ICONS.download : ICONS.setup}
-      tone={reports && !allFound ? "warn" : "accent"}
+      tone={reports && !ready ? "warn" : "accent"}
       title={onReady ? "Download the tools first" : "Check setup"}
       hints={[
         ["↑↓", "Move"],
@@ -93,13 +107,16 @@ export function SetupScreen({ onBack, onReady }: SetupScreenProps) {
       ]}
     >
       {!reports ? (
-        <Spinner label="Looking for yt-dlp and ffmpeg..." />
+        <Spinner label="Looking for yt-dlp, ffmpeg and deno..." />
       ) : (
         <Box flexDirection="column">
           {reports.map((r) => (
             <Box key={r.tool} flexDirection="column" marginBottom={1}>
-              <Text color={r.found ? COLORS.ok : COLORS.error} bold>
-                {r.found ? ICONS.ok : ICONS.error} {r.tool}
+              <Text
+                color={r.found ? COLORS.ok : isRequired(r.tool) ? COLORS.error : COLORS.warn}
+                bold
+              >
+                {r.found ? ICONS.ok : isRequired(r.tool) ? ICONS.error : ICONS.warn} {r.tool}
                 <Text color={COLORS.muted} bold={false}>
                   {r.found ? `  ${r.version ?? "unknown version"}  (${r.source})` : "  not found"}
                 </Text>
@@ -107,14 +124,20 @@ export function SetupScreen({ onBack, onReady }: SetupScreenProps) {
               {r.found ? (
                 <Text color={COLORS.muted}>{`  ${r.path}`}</Text>
               ) : (
-                <Text color={COLORS.muted}>{`  ${missingToolHint(r.tool, deps.binDir)}`}</Text>
+                <Text color={COLORS.muted}>{`  ${
+                  failure
+                    ? missingToolHint(r.tool, deps.binDir)
+                    : 'Choose "Download missing tools" below. MediaForge manages it, no PATH needed.'
+                }`}</Text>
               )}
             </Box>
           ))}
-          <Text color={allFound ? COLORS.ok : COLORS.warn}>
-            {allFound
-              ? "Everything is ready."
-              : "Some tools are missing. Downloads will not work until they are set up."}
+          <Text color={ready ? COLORS.ok : COLORS.warn}>
+            {!ready
+              ? "Some tools are missing. Downloads will not work until they are set up."
+              : allFound
+                ? "Everything is ready."
+                : "Ready. Download deno to make YouTube work."}
           </Text>
           {failure ? <Text color={COLORS.error}>{failure}</Text> : null}
         </Box>

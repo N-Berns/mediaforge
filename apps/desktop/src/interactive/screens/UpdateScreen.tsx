@@ -86,7 +86,7 @@ export function UpdateScreen({ onDone, onBack }: UpdateScreenProps) {
               ["Enter", "Select"],
               ["Esc", "Back"],
             ]
-          : [["Ctrl+C", "Quit"]]
+          : []
       }
     >
       {problem ? (

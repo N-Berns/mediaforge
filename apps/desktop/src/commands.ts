@@ -2,6 +2,7 @@ import { runDoctor } from "./doctor.ts";
 import { runDownload } from "./download.ts";
 import type { ExitCode } from "./exit-codes.ts";
 import { runFormats } from "./formats.ts";
+import { runSelfUpdate } from "./self-update.ts";
 import { runSetup, runUpdate } from "./tool-commands.ts";
 
 export interface Io {
@@ -29,7 +30,7 @@ export const COMMANDS: Command[] = [
   },
   {
     name: "setup",
-    summary: "Download missing yt-dlp and ffmpeg",
+    summary: "Download missing yt-dlp, ffmpeg and deno",
     run: (args, io) => runSetup(args, io),
   },
   {
@@ -38,8 +39,13 @@ export const COMMANDS: Command[] = [
     run: (args, io) => runUpdate(args, io),
   },
   {
+    name: "self-update",
+    summary: "Update MediaForge to the newest release",
+    run: (args, io) => runSelfUpdate(args, io),
+  },
+  {
     name: "doctor",
-    summary: "Check yt-dlp and ffmpeg availability",
+    summary: "Check yt-dlp, ffmpeg and deno availability",
     run: (args, io) => runDoctor(args, io),
   },
 ];

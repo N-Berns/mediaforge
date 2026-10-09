@@ -14,6 +14,11 @@ export interface ToolReport {
   error?: string;
 }
 
+/** Tools that downloads can run without. YouTube needs Deno; every other site does not. */
+export const OPTIONAL_TOOLS: readonly Tool[] = ["deno"];
+
+export const isRequired = (tool: Tool): boolean => !OPTIONAL_TOOLS.includes(tool);
+
 export interface JsRuntimeReport {
   found: boolean;
   name?: string;
@@ -51,7 +56,7 @@ function formatReport(reports: ToolReport[], runtime: JsRuntimeReport, binDir: s
       return [`${r.tool.padEnd(7)}  ${r.version ?? "unknown version"}  (${r.source})  ${r.path}`];
     }
     return [
-      `${r.tool.padEnd(7)}  NOT FOUND`,
+      `${r.tool.padEnd(7)}  NOT FOUND${isRequired(r.tool) ? "" : " (optional)"}`,
       `         ${r.error}`,
       `         ${missingToolHint(r.tool, binDir)}`,
     ];
@@ -63,7 +68,7 @@ function formatReport(reports: ToolReport[], runtime: JsRuntimeReport, binDir: s
   } else {
     lines.push(
       "js runtime  NOT FOUND (optional)",
-      "            YouTube downloads may offer fewer formats. Install Deno (https://deno.com) or Node.js 20 or newer.",
+      "            YouTube downloads may offer fewer formats. Run: mediaforge setup (downloads deno), or install Node.js 20 or newer.",
     );
   }
   return `${lines.join("\n")}\n`;
@@ -74,7 +79,7 @@ export async function runDoctor(
   io: Io,
   resolve: ResolveTool = resolveTool,
   binDir: string = defaultBinDir(),
-  detect: () => Promise<JsRuntime | undefined> = () => detectJsRuntime(),
+  detect: () => Promise<JsRuntime | undefined> = () => detectJsRuntime({ resolve }),
 ): Promise<ExitCode> {
   let json: boolean;
   try {
@@ -90,7 +95,7 @@ export async function runDoctor(
 
   const [reports, runtime] = await Promise.all([inspectTools(resolve), detect()]);
   const jsRuntime = reportRuntime(runtime);
-  const ok = reports.every((r) => r.found);
+  const ok = reports.every((r) => r.found || !isRequired(r.tool));
   io.stdout(
     json
       ? `${JSON.stringify({ ok, tools: reports, jsRuntime }, null, 2)}\n`

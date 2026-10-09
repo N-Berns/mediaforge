@@ -12,7 +12,7 @@ import {
 } from "../../batch.ts";
 import { shorten } from "../../clipboard-hint.ts";
 import { Frame } from "../../components/Frame.tsx";
-import { Menu, type MenuItem } from "../../components/Menu.tsx";
+import { dividerItem, Menu, type MenuItem } from "../../components/Menu.tsx";
 import { useTerminalSize } from "../../components/use-terminal-size.ts";
 import { siteOf } from "../../links.ts";
 import { COLORS, ICONS } from "../../theme.ts";
@@ -120,6 +120,8 @@ export function BatchReviewScreen({ items, initial, onSelect }: BatchReviewScree
         onSelect={onSelect}
         items={[
           ...startRow,
+          // -1 is not a link index, so the divider can never match a real choice.
+          ...(startRow.length > 0 && linkRows.length > 0 ? [dividerItem<ReviewChoice>(-1)] : []),
           ...linkRows,
           ...changeAllRow,
           { value: "back", icon: wide(ICONS.back), label: "Back" },

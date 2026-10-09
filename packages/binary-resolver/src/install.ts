@@ -8,7 +8,7 @@ import type {
   InstallProgress,
   InstallResult,
 } from "./install-types.ts";
-import { ffmpegSource, type ToolsLock } from "./lock.ts";
+import { denoSource, ffmpegSource, type ToolsLock } from "./lock.ts";
 import { repairManifest, writeManifest } from "./manifest.ts";
 import { resolveYtDlpSource } from "./sources.ts";
 import { binaryFileName, type Target } from "./target.ts";
@@ -63,7 +63,9 @@ export async function installTool(
   const source =
     tool === "yt-dlp"
       ? await resolveYtDlpSource(target, deps.fetch, deps.ytDlpRepoUrl)
-      : ffmpegSource(target, deps.lock);
+      : tool === "deno"
+        ? denoSource(target, deps.lock)
+        : ffmpegSource(target, deps.lock);
 
   const download = join(dir, `.${tool}.download`);
   const unpacked = join(dir, `.${tool}.unpacked`);

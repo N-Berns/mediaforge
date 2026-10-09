@@ -1,6 +1,6 @@
 import { getProfile } from "@mediaforge/media-profiles";
 import { Box, Text, useInput } from "ink";
-import { useEffect, useRef, useState } from "react";
+import { useContext, useEffect, useRef, useState } from "react";
 import { candidateFor } from "../../../download.ts";
 import type { EngineJob } from "../../../engine/index.ts";
 import { batchPercent, countJobs } from "../../batch.ts";
@@ -12,6 +12,7 @@ import { Spinner } from "../../components/Spinner.tsx";
 import { useTerminalSize } from "../../components/use-terminal-size.ts";
 import { useDeps } from "../../deps.ts";
 import type { Plan } from "../../flow.ts";
+import { NoticeContext } from "../../notice.tsx";
 import { COLORS, ICONS, STEP_BAR, STEP_COLORS } from "../../theme.ts";
 import { stageLabel } from "../DownloadScreen.tsx";
 
@@ -53,6 +54,10 @@ export function BatchDownloadScreen({ plans, concurrency, onDone }: BatchDownloa
   const { columns, rows } = useTerminalSize();
   const [jobs, setJobs] = useState<(EngineJob | undefined)[]>(() => plans.map(() => undefined));
   const cancelAll = useRef<() => void>(() => {});
+  const { clear } = useContext(NoticeContext);
+  // A new batch starts clean: an old notice no longer applies.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: once per mount
+  useEffect(() => clear(), []);
 
   // The latest callback, so the effect below starts the downloads only once.
   const done = useRef(onDone);
@@ -134,6 +139,7 @@ export function BatchDownloadScreen({ plans, concurrency, onDone }: BatchDownloa
       icon={ICONS.download}
       title={`Downloading ${plans.length} links, ${concurrency} at a time`}
       hints={[["Esc", "Cancel all"]]}
+      ctrlC="Cancel"
     >
       <Spinner label={summary} />
       <Box marginTop={1}>

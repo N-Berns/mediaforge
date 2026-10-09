@@ -2,4 +2,4 @@
 declare const __MEDIAFORGE_VERSION__: string | undefined;
 
 export const VERSION: string =
-  typeof __MEDIAFORGE_VERSION__ === "string" ? __MEDIAFORGE_VERSION__ : "0.1.0";
+  typeof __MEDIAFORGE_VERSION__ === "string" ? __MEDIAFORGE_VERSION__ : "0.2.0";

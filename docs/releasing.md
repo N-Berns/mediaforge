@@ -1,14 +1,14 @@
 # Releasing the desktop CLI
 
-A release is a git tag. Pushing a tag `vX.Y.Z` runs `.github/workflows/release.yml`, which checks the code, builds five binaries, smoke-tests each on its own OS, and publishes a GitHub Release with `SHA256SUMS`, `install.sh` and `install.ps1`.
+A release is a git tag. Pushing a tag `vX.Y.Z` runs `.github/workflows/release.yml`, which checks the code, builds three binaries, smoke-tests each on its own OS, and publishes a GitHub Release with `SHA256SUMS`, `install.sh` and `install.ps1`.
 
 ## How the workflow runs
 
 1. `check`: the tag (without a `-suffix`) must equal the `apps/desktop/package.json` version. Then `pnpm typecheck`, `pnpm test`, `pnpm lint`.
-2. `build`: bundles `apps/desktop` with `MEDIAFORGE_VERSION` set from the tag, then `tools/release/build-binaries.mjs` stages `dist/main.js` next to a `package.json` and runs `@yao-pkg/pkg` in enhanced SEA mode for win-x64, linux-x64, linux-arm64, macos-x64 and macos-arm64. The packaged binary carries its own Node runtime, so users need no Node installed. It cannot serve as yt-dlp's JavaScript runtime.
-3. `verify-binaries`: each binary runs on a native runner (macOS binaries are ad-hoc signed first) through `tools/release/smoke.sh`: `--version`, `--help`, `doctor --json`, and `setup --yes --tools yt-dlp` against a local fake yt-dlp server.
+2. `build`: bundles `apps/desktop` with `MEDIAFORGE_VERSION` set from the tag, then `tools/release/build-binaries.mjs` stages `dist/main.js` next to a `package.json` and runs `@yao-pkg/pkg` in enhanced SEA mode for win-x64, linux-x64, and linux-arm64. The packaged binary carries its own Node runtime, so users need no Node installed. It cannot serve as yt-dlp's JavaScript runtime.
+3. `verify-binaries`: each binary runs on a native runner through `tools/release/smoke.sh`: `--version`, `--help`, `doctor --json`, and `setup --yes --tools yt-dlp` against a local fake yt-dlp server.
 4. `publish`: stamps the tag into `install/install.sh` and `install/install.ps1`, writes `SHA256SUMS`, and creates the release with generated notes. A tag with a dash is marked as a pre-release.
-5. `verify-install` and `verify-install-windows`: run the published installers on Linux, macOS and Windows and check the installed version. They run only when the repository is public: they download the installer anonymously, and GitHub answers 404 for the release files of a private repository. On a private repo they show as "Skipped"; check the published files by hand (see "Checking a release of a private repository" below).
+5. `verify-install` and `verify-install-windows`: run the published installers on Linux and Windows and check the installed version. They run only when the repository is public: they download the installer anonymously, and GitHub answers 404 for the release files of a private repository. On a private repo they show as "Skipped"; check the published files by hand (see "Checking a release of a private repository" below).
 
 yt-dlp and ffmpeg are never part of a release. They are downloaded by the user's machine from upstream.
 
@@ -32,7 +32,7 @@ Push `vX.Y.Z-rc.1`. A tag with a dash is published as a pre-release. Watch every
 
 ## Release
 
-Push `vX.Y.Z`. Check the Releases page: five binaries, `SHA256SUMS`, `install.sh`, `install.ps1` and generated notes. The `verify-install` jobs run the published installers on Linux, macOS and Windows.
+Push `vX.Y.Z`. Check the Releases page: three binaries, `SHA256SUMS`, `install.sh`, `install.ps1` and generated notes. The `verify-install` jobs run the published installers on Linux and Windows.
 
 ## Manual checks (not automated)
 
@@ -40,17 +40,16 @@ Push `vX.Y.Z`. Check the Releases page: five binaries, `SHA256SUMS`, `install.sh
 - YouTube with a runtime: install Deno or Node 20+, repeat. All formats should appear.
 - Interactive menu in a real terminal on each OS: render, arrow keys, a short download.
 - Windows: download the `.exe` in a browser and check what SmartScreen says; note it in the release notes if it blocks.
-- macOS: run the installer on Apple Silicon without Homebrew and check `mediaforge setup` downloads ffmpeg.
 
 ## Testing the installers
 
-`tools/release/test-install.sh` (Linux and macOS) and `tools/release/test-install.ps1` (Windows, run with `pwsh -File`) run the installers against a local fake release. They use `MEDIAFORGE_RELEASE_TAG`, `MEDIAFORGE_RELEASE_BASE_URL` and `MEDIAFORGE_INSTALL_DIR`, which exist for these tests and are not meant for users. CI runs both.
+`tools/release/test-install.sh` (Linux) and `tools/release/test-install.ps1` (Windows, run with `pwsh -File`) run the installers against a local fake release. They use `MEDIAFORGE_RELEASE_TAG`, `MEDIAFORGE_RELEASE_BASE_URL` and `MEDIAFORGE_INSTALL_DIR`, which exist for these tests and are not meant for users. CI runs both.
 
 ## Checking a release of a private repository
 
 The `verify-install` jobs are skipped while the repo is private. To check the published files anyway, download them while logged in and serve them from your own machine:
 
-1. On the release page, download every file (the five binaries, `SHA256SUMS`, `install.sh`, `install.ps1`) into one empty folder, for example `C:\temp\rc`.
+1. On the release page, download every file (the three binaries, `SHA256SUMS`, `install.sh`, `install.ps1`) into one empty folder, for example `C:\temp\rc`.
 2. In that folder, start a small local file server and leave it running:
    ```sh
    node -e "require('http').createServer((q,s)=>require('fs').createReadStream('.'+q.url).on('error',()=>{s.statusCode=404;s.end()}).pipe(s)).listen(8000)"
@@ -62,7 +61,7 @@ The `verify-install` jobs are skipped while the repo is private. To check the pu
    $env:MEDIAFORGE_INSTALL_DIR = "$env:TEMP\mf-check"
    Get-Content -Raw C:\temp\rc\install.ps1 | iex
    ```
-   Linux and macOS:
+   Linux:
    ```sh
    MEDIAFORGE_RELEASE_TAG=v0.1.0-rc.2 MEDIAFORGE_RELEASE_BASE_URL=http://127.0.0.1:8000 \
      MEDIAFORGE_INSTALL_DIR="$HOME/mf-check" sh /path/to/rc/install.sh
@@ -73,7 +72,6 @@ The installer adds its folder to your PATH, so remove that entry afterwards (Win
 
 ## Known limits
 
-- Windows is unsigned and macOS is ad-hoc signed. Windows code signing and Apple Developer ID plus notarization are planned before v1.0.
-- yt-dlp updates are manual (`mediaforge update`). There are no background checks.
+- Windows is unsigned by decision (certificates cost money). macOS is not supported (Apple Developer ID costs money). Users see a SmartScreen warning; the README explains how to proceed and verify the hash.
+- yt-dlp updates are manual (`mediaforge update`). MediaForge itself checks for a newer release once when the interactive app starts and on the About page (`/releases/latest` redirect, stable tags only), and updates through About or `mediaforge self-update`: it downloads the asset named in `RELEASE_ASSETS` (`apps/desktop/src/self-update.ts`) and checks it against the release's `SHA256SUMS`. Keep the asset names there in sync with `tools/release/targets.mjs`.
 - ffmpeg builds for Windows and Linux are pinned to a month-end BtbN autobuild release (BtbN keeps those for two years and deletes daily builds after 14 days). Month-end builds are pruned eventually too, so before each MediaForge release run `pnpm pin:ffmpeg` and confirm each URL in `tools.lock.json` still resolves (see "Before tagging"). An already-published MediaForge release keeps pointing at the URLs it was built with; if upstream removes them, `mediaforge setup` fails with a download error until a new release re-pins.
-- The macOS ffmpeg comes from one third-party server (Martin Riedl). If it disappears, switch to Homebrew only or a self-built LGPL ffmpeg and update `tools.lock.json`.

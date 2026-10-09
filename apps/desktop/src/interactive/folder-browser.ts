@@ -137,9 +137,6 @@ export function pasteTip(platform: NodeJS.Platform): string {
   if (platform === "win32") {
     return "Ctrl+V pastes. In File Explorer, Shift+right-click a folder, then choose Copy as path.";
   }
-  if (platform === "darwin") {
-    return "Ctrl+V pastes. In Finder, right-click the folder, hold Option, then choose Copy as Pathname.";
-  }
   return "Ctrl+V pastes. Copy the path from your file manager's location bar.";
 }
 

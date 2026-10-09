@@ -24,7 +24,7 @@ function capture() {
 
 describe("parseToolList", () => {
   it("defaults to every tool", () => {
-    expect(parseToolList(undefined)).toEqual(["yt-dlp", "ffmpeg"]);
+    expect(parseToolList(undefined)).toEqual(["yt-dlp", "ffmpeg", "deno"]);
   });
 
   it("reads a comma list, trims it and drops duplicates", () => {
@@ -32,10 +32,10 @@ describe("parseToolList", () => {
   });
 
   it("rejects unknown names and empty lists as usage errors", () => {
-    expect(() => parseToolList("deno")).toThrow(/Unknown tool: deno/);
+    expect(() => parseToolList("node")).toThrow(/Unknown tool: node/);
     expect(() => parseToolList(",")).toThrow(/Choose from/);
     try {
-      parseToolList("deno");
+      parseToolList("node");
     } catch (error) {
       expect((error as { exitCode: number }).exitCode).toBe(ExitCode.Usage);
     }
@@ -45,7 +45,7 @@ describe("parseToolList", () => {
 describe("runSetup", () => {
   it("changes nothing and says so when every tool is already available", async () => {
     const c = capture();
-    const { rt, log } = makeRuntime({ present: ["yt-dlp", "ffmpeg"] });
+    const { rt, log } = makeRuntime({ present: ["yt-dlp", "ffmpeg", "deno"] });
     expect(await runSetup(["--yes"], c.io, rt)).toBe(ExitCode.Ok);
     expect(log.installed).toEqual([]);
     expect(c.out()).toContain("already available");
@@ -56,10 +56,11 @@ describe("runSetup", () => {
     const c = capture();
     const { rt, log } = makeRuntime({ present: ["ffmpeg"] });
     expect(await runSetup(["--yes"], c.io, rt)).toBe(ExitCode.Ok);
-    expect(log.installed).toEqual(["yt-dlp"]);
+    expect(log.installed).toEqual(["yt-dlp", "deno"]);
     expect(c.out()).toContain("yt-dlp  downloaded  2026.10.08  /cache/yt-dlp");
     expect(c.out()).toContain("ffmpeg  already available");
-    expect(c.err()).toContain("yt-dlp: downloading");
+    // The fake terminal gets the styled progress line, which has colour codes around the name.
+    expect(c.err()).toMatch(/yt-dlp.*1 B/);
     expect(c.out()).not.toContain("downloading");
   });
 
@@ -68,23 +69,6 @@ describe("runSetup", () => {
     const { rt, log } = makeRuntime();
     await runSetup(["--yes", "--tools", "ffmpeg"], c.io, rt);
     expect(log.installed).toEqual(["ffmpeg"]);
-  });
-
-  it("goes straight to the pinned download on macOS with --yes", async () => {
-    const c = capture();
-    const { rt, log } = makeRuntime({ platform: "darwin", brew: true, answers: [true] });
-    await runSetup(["--yes", "--tools", "ffmpeg"], c.io, rt);
-    expect(log.asked).toEqual([]);
-    expect(log.brewRuns).toBe(0);
-    expect(log.installed).toEqual(["ffmpeg"]);
-  });
-
-  it("offers Homebrew on macOS without --yes and reports it", async () => {
-    const c = capture();
-    const { rt, log } = makeRuntime({ platform: "darwin", brew: true, answers: [true] });
-    await runSetup(["--tools", "ffmpeg"], c.io, rt);
-    expect(log.brewRuns).toBe(1);
-    expect(c.out()).toContain("installed with Homebrew");
   });
 
   it("fails with the download's exit code and hint", async () => {

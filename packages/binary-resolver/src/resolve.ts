@@ -28,11 +28,13 @@ export interface ResolveOptions {
 export const ENV_OVERRIDES: Record<Tool, string> = {
   "yt-dlp": "MEDIAFORGE_YTDLP_PATH",
   ffmpeg: "MEDIAFORGE_FFMPEG_PATH",
+  deno: "MEDIAFORGE_DENO_PATH",
 };
 
 const VERSION_ARGS: Record<Tool, string[]> = {
   "yt-dlp": ["--version"],
   ffmpeg: ["-version"],
+  deno: ["--version"],
 };
 
 export class BinaryNotFoundError extends Error {

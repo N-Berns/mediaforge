@@ -18,7 +18,7 @@ describe("readManifest", () => {
     const raw = JSON.stringify({
       "yt-dlp": entry,
       ffmpeg: { version: 7 },
-      deno: entry,
+      node: entry,
     });
     const mem = memoryInstallFs({ [join(DIR, MANIFEST_FILE)]: raw });
     expect(await readManifest(mem.fs, DIR)).toEqual({ "yt-dlp": entry });

@@ -1,11 +1,5 @@
 import { describe, expect, it } from "vitest";
-import {
-  BTBN_TARGETS,
-  parseRiedlLocation,
-  renderLock,
-  selectBtbnAsset,
-  selectMonthEndRelease,
-} from "./pin-lib.mjs";
+import { BTBN_TARGETS, renderLock, selectBtbnAsset, selectMonthEndRelease } from "./pin-lib.mjs";
 
 // Real asset names from BtbN/FFmpeg-Builds (release autobuild-2026-10-07-13-07), plus the floating
 // "latest" aliases that live in the moving `latest` release and must never be pinned.
@@ -68,32 +62,14 @@ describe("selectBtbnAsset", () => {
   });
 });
 
-describe("parseRiedlLocation", () => {
-  it("makes the redirect absolute and reads the build id from the path", () => {
-    expect(
-      parseRiedlLocation(
-        "/download/macos/arm64/1759999999_8.0.1/ffmpeg.zip",
-        "https://ffmpeg.martin-riedl.de",
-      ),
-    ).toEqual({
-      url: "https://ffmpeg.martin-riedl.de/download/macos/arm64/1759999999_8.0.1/ffmpeg.zip",
-      version: "1759999999_8.0.1",
-    });
-  });
-
-  it("rejects a location without a build folder", () => {
-    expect(() => parseRiedlLocation("/ffmpeg.zip", "https://ffmpeg.martin-riedl.de")).toThrow();
-  });
-});
-
 describe("renderLock", () => {
   it("sorts keys and ends with a newline", () => {
     const text = renderLock({
       schema: 1,
-      ffmpeg: { "linux-x64": { b: 1, a: 2 }, "darwin-arm64": {} },
+      ffmpeg: { "linux-x64": { b: 1, a: 2 }, "aaa-first": {} },
     });
     expect(text.endsWith("\n")).toBe(true);
-    expect(text.indexOf("darwin-arm64")).toBeLessThan(text.indexOf("linux-x64"));
+    expect(text.indexOf("aaa-first")).toBeLessThan(text.indexOf("linux-x64"));
     expect(text.indexOf('"a"')).toBeLessThan(text.indexOf('"b"'));
   });
 });

@@ -1,5 +1,5 @@
 #!/bin/sh
-# MediaForge installer for Linux and macOS.
+# MediaForge installer for Linux.
 #
 #   curl -fsSL https://github.com/N-Berns/mediaforge/releases/latest/download/install.sh | sh
 #   curl -fsSL https://github.com/N-Berns/mediaforge/releases/latest/download/install.sh | sh -s -- --skip-tools
@@ -7,7 +7,7 @@
 # It downloads the mediaforge binary for this computer from the GitHub release this script
 # belongs to, checks its SHA-256 against the release's SHA256SUMS, puts it in ~/.local/bin (adding
 # that folder to your PATH if needed) and, unless you pass --skip-tools, runs
-# `mediaforge setup --yes` to download yt-dlp and ffmpeg. When it finishes it starts MediaForge,
+# `mediaforge setup --yes` to download yt-dlp, ffmpeg and Deno. When it finishes it starts MediaForge,
 # unless you pass --no-launch or there is no terminal to run it in.
 # It never uses sudo and writes nothing outside your home folder. It is short; read it first if
 # you like.
@@ -51,8 +51,7 @@ main() {
   arch="$(uname -m)"
   case "$os" in
     Linux) os=linux ;;
-    Darwin) os=macos ;;
-    *) fail "unsupported operating system: $os (supported: Linux, macOS)" ;;
+    *) fail "unsupported operating system: $os (supported: Linux)" ;;
   esac
   case "$arch" in
     x86_64 | amd64) arch=x64 ;;
@@ -91,9 +90,7 @@ main() {
   profile_file() {
     case "${SHELL:-}" in
       */zsh) printf '%s' "$HOME/.zshrc" ;;
-      */bash)
-        if [ "$os" = "macos" ]; then printf '%s' "$HOME/.bash_profile"; else printf '%s' "$HOME/.bashrc"; fi
-        ;;
+      */bash) printf '%s' "$HOME/.bashrc" ;;
       *) printf '%s' "$HOME/.profile" ;;
     esac
   }

@@ -12,6 +12,7 @@ export const NOTICES = [
     license: "LGPL 2.1 or later (some builds GPL)",
     url: "https://ffmpeg.org/legal.html",
   },
+  { name: "deno", license: "MIT", url: "https://github.com/denoland/deno" },
 ] as const;
 
 export interface AboutInfo {

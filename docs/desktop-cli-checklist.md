@@ -28,9 +28,9 @@ Items marked **(decision)** have open questions. Per `CLAUDE.md`, ask before bui
 - [x] `doctor` command: tool, version, source, path; `--json`; exit 3 if any tool is missing
 - [x] Friendly error when a tool is missing (`requireTool`: what was tried, how to fix, exit 3)
 - [x] Tools are downloaded on demand from upstream with SHA-256 verification into a per-user cache (`mediaforge setup`, `mediaforge update`); not bundled in the release
-- [x] ffmpeg: LGPL build pinned for Windows and Linux; macOS uses a pinned GPL build downloaded from its upstream host (see `tools.lock.json` and the README)
+- [x] ffmpeg: LGPL build pinned for Windows and Linux; macOS is not supported (see `tools.lock.json` and the README)
 - [x] Self-update of yt-dlp into the user data dir (`mediaforge update`, nightly channel)
-- [x] Per-platform release artifacts: win-x64, linux-x64, linux-arm64, macos-x64, macos-arm64
+- [x] Per-platform release artifacts: win-x64, linux-x64, linux-arm64
 
 ## 3. Download engine
 
@@ -39,7 +39,7 @@ Items marked **(decision)** have open questions. Per `CLAUDE.md`, ask before bui
 - [x] Parse yt-dlp progress into `DownloadProgress` (note: resets per stream when video and audio download separately)
 - [x] Apply `OutputProfile` post-processing via yt-dlp flags + ffmpeg (merge, transcode, extract audio)
 - [x] Output rules: default `~/Downloads/MediaForge`, title-based name, auto-number on collision (" (1)"), never overwrite
-- [ ] Cancel a running job and clean up partial files (implemented and unit-tested; real-process cancel via taskkill not yet verified)
+- [x] Cancel a running job and clean up partial files (unit-tested; real-process cancel via taskkill verified by hand)
 - [x] Job model using `DownloadJob` statuses (queued, downloading, processing, completed, failed, cancelled)
 - [x] Queue with a limit of 2 parallel jobs (`DEFAULT_MAX_CONCURRENT`)
 - [x] Error mapping: network, unsupported site, missing tool, filesystem (disk full, permissions)
@@ -99,6 +99,7 @@ Running `mediaforge` with no arguments in a terminal opens a full-screen app. Th
 - [x] Single-file binary per platform, installers (install.sh, install.ps1) and SHA256SUMS
 - [x] Versioning from the git tag; release notes are GitHub's generated notes
 - [x] README section for desktop CLI usage
-- [ ] Windows code signing and macOS Developer ID plus notarization (before v1.0)
-- [ ] Manage a Deno download so YouTube works without a separate JavaScript runtime
-- [ ] winget, Scoop and Homebrew packages
+- [x] Code signing: decided against it (no paid certificates for a hobby project). macOS support dropped; Windows ships unsigned and the README explains SmartScreen and hash checks
+- [x] Manage a Deno download so YouTube works without a separate JavaScript runtime (pinned in `tools.lock.json` via `pnpm pin:deno`; `mediaforge setup` fetches it; optional for `doctor` and downloads; yt-dlp gets `--js-runtimes deno:<path>`; `update` leaves it alone)
+- [x] Self-update of MediaForge: check at startup (notice on Home) and on About with an "Update to ..." button, plus `mediaforge self-update`; stable releases only, SHA-256 checked, restart afterwards
+- [ ] winget and Scoop packages (Homebrew dropped with macOS)

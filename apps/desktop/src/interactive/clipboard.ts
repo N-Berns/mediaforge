@@ -23,7 +23,6 @@ export function clipboardCommands(
       },
     ];
   }
-  if (platform === "darwin") return [{ command: "pbpaste", args: [] }];
   const wayland = env.WAYLAND_DISPLAY ? [{ command: "wl-paste", args: ["-n"] }] : [];
   return [
     ...wayland,

@@ -76,6 +76,7 @@ describe("installTool with the real adapters", () => {
     const key = targetKey(resolveTarget());
     const lock: ToolsLock = {
       schema: 1,
+      deno: {},
       ffmpeg: {
         [key]: {
           version: "9.9",

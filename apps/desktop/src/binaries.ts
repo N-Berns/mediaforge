@@ -57,13 +57,30 @@ export function distinctBundledDir(
   return normalize(bundledDir) === normalize(cacheFolder) ? undefined : bundledDir;
 }
 
+/**
+ * Lookups that worked, kept for the life of the process. Finding a tool runs `--version`, and
+ * yt-dlp needs seconds for that (it unpacks itself on every start), so repeating it is costly.
+ * Failures are not kept, so a tool that gets installed is found on the next try.
+ */
+const resolved = new Map<Tool, Promise<ResolvedBinary>>();
+
+/** Drop the remembered lookups. Call after a tool is installed or updated. */
+export const forgetResolvedTools = (): void => resolved.clear();
+
 /** Resolve a tool using the standard order: env override, PATH, bundled, managed cache. */
 export const resolveTool: ResolveTool = (tool) => {
+  const known = resolved.get(tool);
+  if (known) return known;
   const cache = cacheDir(process.env);
-  return resolveBinary(tool, {
+  const lookup = resolveBinary(tool, {
     bundledDir: distinctBundledDir(defaultBinDir(), cache),
     cacheDir: cache,
   });
+  resolved.set(tool, lookup);
+  lookup.catch(() => {
+    if (resolved.get(tool) === lookup) resolved.delete(tool);
+  });
+  return lookup;
 };
 
 /** How to fix a missing tool, for error messages. */

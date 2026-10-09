@@ -36,9 +36,6 @@ describe("settingsPath", () => {
     expect(settingsPath({}, "win32", "H")).toBe(
       join("H", "AppData", "Roaming", "MediaForge", "config.json"),
     );
-    expect(settingsPath({}, "darwin", "/Users/a")).toBe(
-      join("/Users/a", "Library", "Application Support", "MediaForge", "config.json"),
-    );
     expect(settingsPath({ XDG_CONFIG_HOME: "/cfg" }, "linux", "/home/a")).toBe(
       join("/cfg", "mediaforge", "config.json"),
     );

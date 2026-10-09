@@ -116,7 +116,7 @@ export async function runDownload(
     const ids = BUILTIN_PROFILES.map((p) => p.id).join(", ");
     throw new CliError(`Unknown profile: ${profileId}. Available: ${ids}`, ExitCode.Usage);
   }
-  await deps.ensureTools?.(["yt-dlp", "ffmpeg"]);
+  await deps.ensureTools?.(["yt-dlp", "ffmpeg", "deno"]);
 
   const view = createProgressView({
     write: io.stderr,

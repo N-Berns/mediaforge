@@ -28,7 +28,6 @@ describe("fake yt-dlp repository", () => {
     ["win32", "x64"],
     ["linux", "x64"],
     ["linux", "arm64"],
-    ["darwin", "arm64"],
   ])("is understood by the real client for %s %s", async (platform, arch) => {
     const source = await resolveYtDlpSource(resolveTarget(platform, arch), fetch, `${base}/repo`);
     expect(source.version).toBe(FAKE_TAG);

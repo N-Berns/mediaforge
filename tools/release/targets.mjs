@@ -15,8 +15,6 @@ export const TARGETS = [
   { key: "win-x64", file: "mediaforge-win-x64.exe", runner: "windows-latest" },
   { key: "linux-x64", file: "mediaforge-linux-x64", runner: "ubuntu-24.04" },
   { key: "linux-arm64", file: "mediaforge-linux-arm64", runner: "ubuntu-24.04-arm" },
-  { key: "macos-x64", file: "mediaforge-macos-x64", runner: "macos-15-intel" },
-  { key: "macos-arm64", file: "mediaforge-macos-arm64", runner: "macos-15" },
 ];
 
 export const pkgTarget = (target) => `${PKG_NODE}-${target.key}`;

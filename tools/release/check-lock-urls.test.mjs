@@ -17,13 +17,15 @@ const fakeFetch = (routes) => {
 };
 
 describe("lockUrls", () => {
-  it("lists the target and url of every ffmpeg entry", () => {
+  it("lists the target and url of every ffmpeg and deno entry", () => {
     const lock = {
       ffmpeg: { "linux-x64": { url: "https://a/x" }, "win32-x64": { url: "https://a/y" } },
+      deno: { "linux-x64": { url: "https://a/d" } },
     };
     expect(lockUrls(lock)).toEqual([
-      { target: "linux-x64", url: "https://a/x" },
-      { target: "win32-x64", url: "https://a/y" },
+      { target: "ffmpeg linux-x64", url: "https://a/x" },
+      { target: "ffmpeg win32-x64", url: "https://a/y" },
+      { target: "deno linux-x64", url: "https://a/d" },
     ]);
   });
 

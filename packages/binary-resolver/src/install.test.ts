@@ -27,6 +27,7 @@ const noExtract: InstallDeps["extract"] = async () => {
 
 const lock: ToolsLock = {
   schema: 1,
+  deno: {},
   ffmpeg: {
     "linux-x64": {
       version: "7.1",
@@ -215,9 +216,57 @@ describe("installTool: ffmpeg from an archive", () => {
   it("refuses a target with no pinned build", async () => {
     const mem = memoryInstallFs();
     const error = await installTool(
-      { tool: "ffmpeg", target: { os: "darwin", arch: "arm64" }, dir: DIR },
+      { tool: "ffmpeg", target: { os: "linux", arch: "arm64" }, dir: DIR },
       deps(mem, fetchFor(), { lock }),
     ).catch((e) => e);
     expect(error.kind).toBe("unsupported");
+  });
+});
+
+describe("installTool: deno from a zip", () => {
+  const denoLock: ToolsLock = {
+    schema: 1,
+    ffmpeg: {},
+    deno: {
+      "linux-x64": {
+        version: "2.9.7",
+        url: "https://example.test/deno.zip",
+        sha256: sha("DENO-ZIP"),
+        archive: "zip",
+        member: "deno",
+        license: "MIT",
+        buildInfo: "https://example.test/deno",
+      },
+    },
+  };
+
+  it("installs the pinned build and records it in the manifest", async () => {
+    const mem = memoryInstallFs();
+    const extract: InstallDeps["extract"] = async (_archive, dest) => {
+      await mem.fs.writeText(`${dest}/deno`, "DENO-BIN");
+    };
+    const result = await installTool(
+      { tool: "deno", target: LINUX, dir: DIR },
+      deps(mem, routeFetch({ "https://example.test/deno.zip": () => streamResponse("DENO-ZIP") }), {
+        lock: denoLock,
+        extract,
+      }),
+    );
+    expect(result).toMatchObject({ tool: "deno", version: "2.9.7" });
+    expect(mem.text(`${DIR}/deno`)).toBe("DENO-BIN");
+    expect(mem.mode(`${DIR}/deno`)).toBe(0o755);
+    expect(JSON.parse(mem.text(`${DIR}/manifest.json`)).deno.version).toBe("2.9.7");
+  });
+
+  it("rejects a checksum mismatch", async () => {
+    const mem = memoryInstallFs();
+    const error = await installTool(
+      { tool: "deno", target: LINUX, dir: DIR },
+      deps(mem, routeFetch({ "https://example.test/deno.zip": () => streamResponse("TAMPERED") }), {
+        lock: denoLock,
+      }),
+    ).catch((e) => e);
+    expect(error.kind).toBe("checksum");
+    expect(mem.paths()).toEqual([]);
   });
 });

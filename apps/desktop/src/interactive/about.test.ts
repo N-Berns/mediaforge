@@ -19,7 +19,7 @@ describe("about page data", () => {
   });
 
   it("credits the tools it downloads with their licenses", () => {
-    expect(NOTICES.map((n) => n.name)).toEqual(["yt-dlp", "ffmpeg"]);
+    expect(NOTICES.map((n) => n.name)).toEqual(["yt-dlp", "ffmpeg", "deno"]);
     for (const notice of NOTICES) {
       expect(notice.license).toBeTruthy();
       expect(notice.url).toMatch(/^https:\/\//);

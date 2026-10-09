@@ -1,6 +1,7 @@
 import { Box, Text, useInput } from "ink";
 import { useEffect, useRef, useState } from "react";
 import { COLORS, ICONS } from "../theme.ts";
+import { useEnterLock } from "./use-enter-lock.ts";
 import { useTerminalSize } from "./use-terminal-size.ts";
 
 export interface TextFieldProps {
@@ -62,6 +63,7 @@ export function TextField({
   const [value, setValue] = useState(initial);
   const [cursor, setCursor] = useState(initial.length);
   const [error, setError] = useState<string>();
+  const claim = useEnterLock();
   const pendingSubmit = useRef<ReturnType<typeof setTimeout>>(undefined);
   useEffect(() => () => clearTimeout(pendingSubmit.current), []);
 
@@ -93,7 +95,7 @@ export function TextField({
   const submit = (text: string) => {
     const problem = validate?.(text.trim());
     if (problem) setError(problem);
-    else onSubmit(text.trim());
+    else if (claim()) onSubmit(text.trim());
   };
 
   useInput((input, key) => {

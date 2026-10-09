@@ -9,6 +9,7 @@ import { CliError, ExitCode } from "./exit-codes.ts";
 import { makeRuntime } from "./test-runtime.ts";
 import {
   acquireTool,
+  asciiBar,
   askYesNo,
   createInstallPrinter,
   ensureTools,
@@ -60,7 +61,7 @@ describe("toCliError", () => {
 });
 
 describe("acquireTool", () => {
-  const options = { yes: false, onProgress: ignore };
+  const options = { onProgress: ignore };
 
   it("does nothing when the tool is already available", async () => {
     const { rt, log } = makeRuntime({ present: ["yt-dlp"] });
@@ -75,53 +76,6 @@ describe("acquireTool", () => {
       version: "2026.10.08",
     });
     expect(log.installed).toEqual(["yt-dlp"]);
-  });
-
-  it("asks about Homebrew for ffmpeg on macOS and runs it only on yes", async () => {
-    const yes = makeRuntime({ platform: "darwin", brew: true, answers: [true] });
-    expect(await acquireTool("ffmpeg", yes.rt, options)).toMatchObject({ status: "homebrew" });
-    expect(yes.log.brewRuns).toBe(1);
-    expect(yes.log.installed).toEqual([]);
-
-    const no = makeRuntime({ platform: "darwin", brew: true, answers: [false] });
-    expect(await acquireTool("ffmpeg", no.rt, options)).toMatchObject({ status: "installed" });
-    expect(no.log.brewRuns).toBe(0);
-  });
-
-  it("never asks or runs Homebrew with --yes or without a terminal", async () => {
-    const yes = makeRuntime({ platform: "darwin", brew: true, answers: [true] });
-    await acquireTool("ffmpeg", yes.rt, { yes: true, onProgress: ignore });
-    expect(yes.log.asked).toEqual([]);
-    expect(yes.log.brewRuns).toBe(0);
-
-    const quiet = makeRuntime({ platform: "darwin", brew: true, interactive: false });
-    await acquireTool("ffmpeg", quiet.rt, options);
-    expect(quiet.log.asked).toEqual([]);
-    expect(quiet.log.brewRuns).toBe(0);
-  });
-
-  it("does not offer Homebrew for yt-dlp, on Linux, or when brew is absent", async () => {
-    for (const [tool, platform, brew] of [
-      ["yt-dlp", "darwin", true],
-      ["ffmpeg", "linux", true],
-      ["ffmpeg", "darwin", false],
-    ] as const) {
-      const t = makeRuntime({ platform, brew });
-      await acquireTool(tool, t.rt, options);
-      expect(t.log.asked).toEqual([]);
-    }
-  });
-
-  it("explains it when Homebrew finishes but ffmpeg is still not found", async () => {
-    const { rt } = makeRuntime({
-      platform: "darwin",
-      brew: true,
-      answers: [true],
-      brewLeavesNothing: true,
-    });
-    const error = await acquireTool("ffmpeg", rt, options).catch((e) => e);
-    expect(error).toBeInstanceOf(CliError);
-    expect(error.exitCode).toBe(ExitCode.MissingTool);
   });
 
   it("turns a failed download into a CliError with the right exit code", async () => {
@@ -164,6 +118,23 @@ describe("ensureTools", () => {
     const error = await ensureTools(["yt-dlp", "ffmpeg"], rt, ignore).catch((e) => e);
     expect(error.exitCode).toBe(ExitCode.MissingTool);
     expect(log.installed).toEqual([]);
+  });
+
+  it("offers deno, and downloads it on yes", async () => {
+    const { rt, log } = makeRuntime({ present: ["yt-dlp", "ffmpeg"], answers: [true] });
+    await ensureTools(["yt-dlp", "ffmpeg", "deno"], rt, ignore);
+    expect(log.asked).toEqual(["deno is missing. YouTube needs it. Download it now? (Y/N)"]);
+    expect(log.installed).toEqual(["deno"]);
+  });
+
+  it("carries on when deno is declined, or when there is no terminal", async () => {
+    const declined = makeRuntime({ present: ["yt-dlp", "ffmpeg"], answers: [false] });
+    await ensureTools(["yt-dlp", "ffmpeg", "deno"], declined.rt, ignore);
+    expect(declined.log.installed).toEqual([]);
+
+    const piped = makeRuntime({ present: ["yt-dlp", "ffmpeg"], interactive: false });
+    await ensureTools(["yt-dlp", "ffmpeg", "deno"], piped.rt, ignore);
+    expect(piped.log.asked).toEqual([]);
   });
 
   it("builds the same error as missingToolError", () => {
@@ -240,12 +211,28 @@ describe("createInstallPrinter", () => {
 
   it("updates one line in place on a terminal, then moves on", () => {
     const out: string[] = [];
-    const print = createInstallPrinter((t) => out.push(t), true);
+    const print = createInstallPrinter((t) => out.push(t), true, false);
     print(progress("downloading", { received: 0 }));
     print(progress("downloading", { received: 1048576, total: 2097152 }));
     print(progress("verifying"));
     const text = out.join("");
-    expect(text).toContain("\ryt-dlp: downloading 1.0 MB of 2.0 MB");
-    expect(text.endsWith("\nyt-dlp: verifying checksum\n")).toBe(true);
+    expect(text).toContain("\r  yt-dlp  [############------------]  50%  1.0 MB of 2.0 MB");
+    expect(text.endsWith("\n  yt-dlp  verifying checksum\n")).toBe(true);
+    expect(text).not.toContain("\x1b");
+  });
+
+  it("adds colour on a terminal unless it is turned off", () => {
+    const out: string[] = [];
+    const print = createInstallPrinter((t) => out.push(t), true, true);
+    print(progress("downloading", { received: 1024, total: 2048 }));
+    print(progress("verifying"));
+    expect(out.join("")).toContain("\x1b[36m[############------------]\x1b[0m");
+    expect(out.join("")).toContain("\x1b[2mverifying checksum\x1b[0m");
+  });
+
+  it("draws the bar from 0 to 100 percent", () => {
+    expect(asciiBar(0, 4)).toBe("[----]");
+    expect(asciiBar(50, 4)).toBe("[##--]");
+    expect(asciiBar(150, 4)).toBe("[####]");
   });
 });

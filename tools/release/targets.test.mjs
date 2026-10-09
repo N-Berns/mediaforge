@@ -2,15 +2,9 @@ import { describe, expect, it } from "vitest";
 import { PKG_MODE_ARGS, PKG_NODE, pkgArgs, pkgTarget, TARGETS } from "./targets.mjs";
 
 describe("TARGETS", () => {
-  it("lists the five supported targets with unique keys and files", () => {
-    expect(TARGETS.map((t) => t.key)).toEqual([
-      "win-x64",
-      "linux-x64",
-      "linux-arm64",
-      "macos-x64",
-      "macos-arm64",
-    ]);
-    expect(new Set(TARGETS.map((t) => t.file)).size).toBe(5);
+  it("lists the three supported targets with unique keys and files", () => {
+    expect(TARGETS.map((t) => t.key)).toEqual(["win-x64", "linux-x64", "linux-arm64"]);
+    expect(new Set(TARGETS.map((t) => t.file)).size).toBe(3);
   });
 
   it("names the files the installers look for", () => {

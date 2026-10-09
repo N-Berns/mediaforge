@@ -12,17 +12,17 @@ import {
   tryResolve,
 } from "./tool-runtime.ts";
 
-const SETUP_USAGE = "Usage: mediaforge setup [--yes] [--tools yt-dlp,ffmpeg]";
+const SETUP_USAGE = "Usage: mediaforge setup [--yes] [--tools yt-dlp,ffmpeg,deno]";
 
 export function setupUsage(): string {
   return [
     SETUP_USAGE,
     "",
-    "Download yt-dlp and ffmpeg when they are missing. Tools that are already available are left alone.",
+    "Download yt-dlp, ffmpeg and deno (the JavaScript runtime YouTube needs) when they are missing. Tools that are already available are left alone.",
     "",
     "Options:",
-    "  -y, --yes            Do not ask questions. On macOS, skip the Homebrew offer.",
-    "      --tools <list>   Only these tools, comma separated (default: yt-dlp,ffmpeg)",
+    "  -y, --yes            Accepted for scripts. Setup never asks questions.",
+    "      --tools <list>   Only these tools, comma separated (default: yt-dlp,ffmpeg,deno)",
     "  -h, --help           Show this help",
     "",
   ].join("\n");
@@ -52,8 +52,6 @@ function summaryLine(outcome: AcquireOutcome): string {
       return `${name}  already available  ${outcome.version ?? "unknown version"}  (${outcome.source})  ${outcome.path}`;
     case "installed":
       return `${name}  downloaded  ${outcome.version}  ${outcome.path}`;
-    case "homebrew":
-      return `${name}  installed with Homebrew  ${outcome.path}`;
   }
 }
 
@@ -81,7 +79,7 @@ export async function runSetup(
   const onProgress = createInstallPrinter(io.stderr, rt.interactive);
   const lines: string[] = [];
   for (const tool of tools) {
-    const outcome = await acquireTool(tool, rt, { yes: values.yes ?? false, onProgress });
+    const outcome = await acquireTool(tool, rt, { onProgress });
     lines.push(summaryLine(outcome));
   }
   io.stdout(`${lines.join("\n")}\n`);

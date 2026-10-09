@@ -1,6 +1,7 @@
 import { Box, Text, useInput } from "ink";
 import { useState } from "react";
 import { COLORS, ICONS } from "../theme.ts";
+import { useEnterLock } from "./use-enter-lock.ts";
 
 export interface MenuItem<T> {
   value: T;
@@ -11,7 +12,17 @@ export interface MenuItem<T> {
   disabled?: boolean;
   /** A non-selectable title row that groups the rows after it. Set `disabled` too. */
   heading?: boolean;
+  /** A thin line between two groups of rows. Not selectable, and it gets no number. */
+  divider?: boolean;
 }
+
+/** A divider row. `value` is never selected, so any placeholder of the menu's value type works. */
+export const dividerItem = <T,>(value: T): MenuItem<T> => ({
+  value,
+  label: "",
+  divider: true,
+  disabled: true,
+});
 
 export interface MenuProps<T> {
   items: MenuItem<T>[];
@@ -47,6 +58,8 @@ export function stepIndex(
 }
 
 const LABEL_CAP = 34;
+/** Menus with more rows than this have no number keys, so no number labels. */
+const MAX_NUMBERED = 9;
 
 export function Menu<T>({
   items,
@@ -65,17 +78,26 @@ export function Menu<T>({
     return at >= 0 && !items[at]?.disabled ? at : firstEnabled;
   });
 
+  const claim = useEnterLock();
+  /** The number key of each row: dividers are skipped, so the numbers have no gaps. */
+  const numberOf = items.map((item, at) =>
+    item.divider ? undefined : items.slice(0, at + 1).filter((i) => !i.divider).length,
+  );
+  /** Number keys select a row only in short menus. */
+  const numbered = items.filter((i) => !i.divider).length <= MAX_NUMBERED;
+
+  const select = (item: MenuItem<T> | undefined) => {
+    if (item && !item.disabled && claim()) onSelect(item.value);
+  };
+
   useInput(
     (input, key) => {
       if (key.upArrow) setIndex((i) => stepIndex(items, i, -1));
       else if (key.downArrow) setIndex((i) => stepIndex(items, i, 1));
-      else if (key.return) {
-        const item = items[index];
-        if (item && !item.disabled) onSelect(item.value);
-      } else if (key.escape || key.leftArrow) onBack?.();
-      else if (/^[1-9]$/.test(input) && items.length <= 9) {
-        const item = items[Number(input) - 1];
-        if (item && !item.disabled) onSelect(item.value);
+      else if (key.return) select(items[index]);
+      else if (key.escape || key.leftArrow) onBack?.();
+      else if (/^[1-9]$/.test(input) && numbered) {
+        select(items.find((_, at) => numberOf[at] === Number(input)));
       }
     },
     { isActive },
@@ -94,6 +116,17 @@ export function Menu<T>({
         </Text>
       )}
       {rows.slice(start, end).map(({ item, position }) => {
+        if (item.divider) {
+          return (
+            <Box key={position}>
+              <Text color={COLORS.muted}>
+                {"  "}
+                {numbered ? "  " : ""}
+                {"─".repeat(Math.max(8, labelWidth + 2))}
+              </Text>
+            </Box>
+          );
+        }
         const selected = position === index;
         const color = item.heading
           ? COLORS.accent
@@ -105,6 +138,11 @@ export function Menu<T>({
         return (
           <Box key={position}>
             <Text color={COLORS.accent}>{selected ? `${ICONS.pointer} ` : "  "}</Text>
+            {numbered ? (
+              <Text color={selected ? COLORS.accent : COLORS.muted}>
+                {item.disabled ? "  " : `${numberOf[position]} `}
+              </Text>
+            ) : null}
             <Text
               color={color}
               bold={selected || item.heading}

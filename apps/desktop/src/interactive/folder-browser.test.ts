@@ -177,7 +177,6 @@ describe("new folder names", () => {
 describe("tips and validation", () => {
   it("explains how to copy a path on each system", () => {
     expect(pasteTip("win32")).toContain("Copy as path");
-    expect(pasteTip("darwin")).toContain("Option");
     expect(pasteTip("linux")).toContain("location bar");
     expect(pasteTip("win32")).toContain("Ctrl+V");
   });
