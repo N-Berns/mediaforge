@@ -69,6 +69,19 @@ Get-Content install.ps1
 
 If PowerShell refuses with "running scripts is disabled", run `powershell -ExecutionPolicy Bypass -File .\install.ps1` instead (or `Unblock-File .\install.ps1` first).
 
+<!-- TODO: uncomment once the scoop-mediaforge bucket exists and the install is tested.
+
+Windows with [Scoop](https://scoop.sh):
+
+```powershell
+scoop bucket add mediaforge https://github.com/N-Berns/scoop-mediaforge
+scoop install mediaforge
+mediaforge setup
+```
+
+Update later with `scoop update mediaforge`. Scoop installs the same program and checks its hash; run `mediaforge setup` once to download yt-dlp, ffmpeg and Deno.
+-->
+
 - Skip the tool download with `--skip-tools` (`sh -s -- --skip-tools` when piping) or `-SkipTools` (`& ([scriptblock]::Create((irm <url>))) -SkipTools`).
 - Install without starting MediaForge with `--no-launch` (`sh -s -- --no-launch` when piping) or `-NoLaunch`. It also does not start when there is no interactive terminal.
 - Pin a version by replacing `latest/download` with `download/vX.Y.Z` in the URL.

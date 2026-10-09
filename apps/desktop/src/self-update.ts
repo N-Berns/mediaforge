@@ -1,4 +1,4 @@
-import { basename, dirname, join } from "node:path";
+import { dirname, join } from "node:path";
 import {
   checksumError,
   downloadFile,
@@ -100,11 +100,7 @@ export function compareVersions(a: string, b: string): number {
 
 /** True when the program is a packaged executable, not `node dist/main.js`. */
 export function isPackaged(execPath: string): boolean {
-  return (
-    basename(execPath)
-      .toLowerCase()
-      .replace(/\.exe$/, "") !== "node"
-  );
+  return (execPath.split(/[\\/]/).pop() ?? "").toLowerCase().replace(/\.exe$/, "") !== "node";
 }
 
 /** The tag of the newest stable release, read from the redirect of `<repo>/releases/latest`. */
