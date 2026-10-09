@@ -75,7 +75,7 @@ export function App({ deps }: { deps: AppDeps }) {
         }
       })
       .catch(() => {});
-  }, [deps]);
+  }, [deps, notices.notify]);
 
   // Start the slow tool check now, so it is usually done by the time "Download media" is picked.
   useEffect(() => {

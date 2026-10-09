@@ -1,8 +1,8 @@
 /** Shown on the About page. */
 export const DEVELOPER = "N-Berns";
 
-/** Set to the repository link once it is public; the About page hides the row until then. */
-export const REPO_URL: string | undefined = undefined;
+/** Shown on the About page. Leave it undefined to hide the row. */
+export const REPO_URL: string | undefined = "https://github.com/N-Berns/mediaforge";
 
 /** The tools MediaForge downloads and runs, with the license each one is distributed under. */
 export const NOTICES = [
