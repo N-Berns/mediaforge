@@ -6,6 +6,7 @@ import { DownloadEngine, type EngineFs } from "../engine/index.ts";
 import type { ProcessRunner } from "../engine/process.ts";
 import { CliError, ExitCode } from "../exit-codes.ts";
 import type { MediaInfo } from "../formats.ts";
+import type { UpdateInfo } from "../self-update.ts";
 import { memorySettingsStore, type Settings } from "../settings.ts";
 import { App } from "./App.tsx";
 import type { AppDeps } from "./deps.ts";
@@ -59,6 +60,9 @@ interface Options {
   /** Tools that start out missing. The default `installTool` removes a tool from this set. */
   missing?: Tool[];
   installTool?: AppDeps["installTool"];
+  /** What the release check finds; "offline" makes it fail. Default: already the newest. */
+  update?: Partial<UpdateInfo> | "offline";
+  installUpdate?: AppDeps["installUpdate"];
 }
 
 function setup(options: Options = {}) {
@@ -88,6 +92,7 @@ function setup(options: Options = {}) {
   };
   const missing = new Set<Tool>(options.missing ?? []);
   const installed: Tool[] = [];
+  const updated: string[] = [];
   const deps: AppDeps = {
     download,
     fetchInfo: options.info ?? (async () => INFO),
@@ -107,6 +112,9 @@ function setup(options: Options = {}) {
         missing.has("ffmpeg")
           ? { tool: "ffmpeg", found: false, error: "ffmpeg not found" }
           : { tool: "ffmpeg", found: true, version: "9.0", source: "bundled", path: "/bin/ffmpeg" },
+        missing.has("deno")
+          ? { tool: "deno", found: false, error: "deno not found" }
+          : { tool: "deno", found: true, version: "2.9.7", source: "cache", path: "/cache/deno" },
       ]),
     installTool:
       options.installTool ??
@@ -114,6 +122,22 @@ function setup(options: Options = {}) {
         installed.push(tool);
         missing.delete(tool);
         return { tool, version: "1", path: `/cache/${tool}`, sha256: "s", url: "u" };
+      }),
+    checkUpdate: async () => {
+      if (options.update === "offline") throw new Error("offline");
+      return {
+        current: "9.9.9",
+        latest: "9.9.9",
+        tag: "v9.9.9",
+        newer: false,
+        installable: true,
+        ...options.update,
+      };
+    },
+    installUpdate:
+      options.installUpdate ??
+      (async (info) => {
+        updated.push(info.latest);
       }),
     readClipboard: async () => ("clipboard" in options ? options.clipboard : URL),
     openFolder: async (p) => void opened.push(p),
@@ -128,7 +152,7 @@ function setup(options: Options = {}) {
     version: "9.9.9",
   };
   const app = render(<App deps={deps} />);
-  return { app, deps, store, seenArgs, opened, engineOptions, installed };
+  return { app, deps, store, seenArgs, opened, engineOptions, installed, updated };
 }
 
 type TestApp = ReturnType<typeof setup>["app"];
@@ -360,6 +384,24 @@ describe("back stack", () => {
     await waitFor(app, "Cancel download");
     await press(app, KEY.esc);
     await waitFor(app, "Where should it be saved?");
+    // Nothing else says the download was cancelled, so the page shows a notice.
+    expect(app.lastFrame()).toContain("Download cancelled");
+    app.unmount();
+  });
+
+  it("shows the completed notice after leaving the result page, not on it", async () => {
+    const { app } = await toQuality();
+    await press(app, KEY.enter);
+    await waitFor(app, "Choose a video quality");
+    await press(app, KEY.enter);
+    await waitFor(app, "Where should it be saved?");
+    await press(app, KEY.enter);
+    await waitFor(app, "Download complete");
+    // The result page has its own card; the title is the only "Download complete" on it.
+    expect(app.lastFrame()?.match(/Download complete/g)).toHaveLength(1);
+    await press(app, KEY.esc);
+    await waitFor(app, "What would you like to do?");
+    expect(app.lastFrame()).toContain("Download complete");
     app.unmount();
   });
 });
@@ -816,7 +858,7 @@ describe("check setup", () => {
     app.unmount();
   });
 
-  it("explains how to fix a missing tool", async () => {
+  it("points to the download button for a missing tool, with no PATH talk", async () => {
     const { app } = setup({
       tools: async () => [
         { tool: "yt-dlp", found: true, version: "1", source: "path", path: "/bin/yt-dlp" },
@@ -826,6 +868,30 @@ describe("check setup", () => {
     await waitFor(app, "What would you like to do?");
     await press(app, KEY.down, KEY.down, KEY.enter);
     await waitFor(app, "Some tools are missing");
+    expect(app.lastFrame()).toContain('Choose "Download missing tools" below.');
+    expect(app.lastFrame()).not.toContain("MEDIAFORGE_FFMPEG_PATH");
+    app.unmount();
+  });
+
+  it("falls back to the manual fixes once a download has failed", async () => {
+    const { app } = setup({
+      tools: async () => [
+        { tool: "yt-dlp", found: true, version: "1", source: "path", path: "/bin/yt-dlp" },
+        { tool: "ffmpeg", found: false, error: "ffmpeg not found" },
+      ],
+      installTool: async () => {
+        throw new ToolInstallError(
+          "offline",
+          "Could not reach github.com.",
+          "Check your internet.",
+        );
+      },
+    });
+    await waitFor(app, "What would you like to do?");
+    await press(app, KEY.down, KEY.down, KEY.enter);
+    await waitFor(app, "Download missing tools");
+    await press(app, KEY.enter);
+    await waitFor(app, "Could not reach github.com.");
     expect(app.lastFrame()).toContain("MEDIAFORGE_FFMPEG_PATH");
     app.unmount();
   });
@@ -877,6 +943,42 @@ describe("missing tools", () => {
     await waitFor(t.app, "Everything is ready.");
     expect(t.installed).toEqual(["ffmpeg"]);
     expect(t.app.lastFrame()).not.toContain("Continue");
+    t.app.unmount();
+  });
+
+  it("opens the link screen without waiting for a slow tool check", async () => {
+    const t = setup({ tools: () => new Promise(() => {}) });
+    await waitFor(t.app, "What would you like to do?");
+    await press(t.app, KEY.enter);
+    await waitFor(t.app, URL);
+    t.app.unmount();
+  });
+
+  it("moves to the setup prompt when a slow check finds a missing tool", async () => {
+    const t = setup({
+      tools: async () => {
+        await tick(300);
+        return [{ tool: "yt-dlp", found: false, error: "yt-dlp not found" }];
+      },
+    });
+    await waitFor(t.app, "What would you like to do?");
+    await press(t.app, KEY.enter);
+    await waitFor(t.app, "Download missing tools");
+    t.app.unmount();
+  });
+
+  it("stays on the link screen when a slow check finds nothing missing", async () => {
+    const t = setup({
+      tools: async () => {
+        await tick(300);
+        return [{ tool: "yt-dlp", found: true, version: "1", source: "path", path: "/bin/yt-dlp" }];
+      },
+    });
+    await waitFor(t.app, "What would you like to do?");
+    await press(t.app, KEY.enter);
+    await waitFor(t.app, URL);
+    await tick(400);
+    expect(t.app.lastFrame()).toContain(URL);
     t.app.unmount();
   });
 
@@ -1131,10 +1233,11 @@ describe("home tool check", () => {
   });
 
   it("accepts another pick once the check is over", async () => {
+    // Call 1 is the check that starts with the app; calls 2 and 3 are the two picks.
     let checks = 0;
     const t = setup({
       tools: async () => {
-        if (++checks === 1) throw new Error("probe failed");
+        if (++checks === 2) throw new Error("probe failed");
         return [
           { tool: "yt-dlp", found: true, version: "1", source: "path", path: "/bin/yt-dlp" },
           { tool: "ffmpeg", found: true, version: "9", source: "bundled", path: "/bin/ffmpeg" },
@@ -1148,7 +1251,7 @@ describe("home tool check", () => {
     await waitFor(t.app, "What would you like to do?");
     await press(t.app, KEY.enter);
     await waitFor(t.app, "What do you want to download?");
-    expect(checks).toBe(2);
+    expect(checks).toBe(3);
     t.app.unmount();
   });
 });
@@ -1173,6 +1276,103 @@ describe("about", () => {
     await press(app, KEY.esc);
     await waitFor(app, "What would you like to do?");
     app.unmount();
+  });
+});
+
+describe("updating MediaForge", () => {
+  const NEWER = { latest: "10.0.0", tag: "v10.0.0", newer: true };
+
+  async function openAbout(options: Options) {
+    const t = setup(options);
+    await waitFor(t.app, "What would you like to do?");
+    await moveTo(t.app, "About");
+    await press(t.app, KEY.enter);
+    await waitFor(t.app, "About MediaForge");
+    return t;
+  }
+
+  it("tells the user at startup that a newer version exists", async () => {
+    const { app } = setup({ update: NEWER });
+    await waitFor(app, "MediaForge 10.0.0 is available. Open About to update.");
+    app.unmount();
+  });
+
+  it("says nothing at startup when it is up to date or offline", async () => {
+    for (const update of [undefined, "offline" as const]) {
+      const { app } = setup({ update });
+      await waitFor(app, "What would you like to do?");
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      expect(app.lastFrame()).not.toContain("is available");
+      app.unmount();
+    }
+  });
+
+  it("shows 'up to date' on About, and a quiet message when offline", async () => {
+    const current = await openAbout({});
+    await waitFor(current.app, "MediaForge is up to date.");
+    expect(current.app.lastFrame()).not.toContain("Update to");
+    current.app.unmount();
+
+    const offline = await openAbout({ update: "offline" });
+    await waitFor(offline.app, "Could not check for updates.");
+    offline.app.unmount();
+  });
+
+  it("offers the update on About and installs it on Enter", async () => {
+    const t = await openAbout({ update: NEWER });
+    await waitFor(t.app, "Version 10.0.0 is available (you have 9.9.9).");
+    await waitFor(t.app, "Update to 10.0.0");
+    await press(t.app, KEY.enter);
+    await waitFor(t.app, "Updated to 10.0.0. Restart MediaForge to use it.");
+    expect(t.updated).toEqual(["10.0.0"]);
+    expect(t.app.lastFrame()).not.toContain("Update to 10.0.0");
+    t.app.unmount();
+  });
+
+  it("shows the reason when the update fails, and can try again", async () => {
+    let attempts = 0;
+    const t = await openAbout({
+      update: NEWER,
+      installUpdate: async () => {
+        attempts++;
+        if (attempts === 1) {
+          throw new ToolInstallError(
+            "offline",
+            "Could not reach github.com.",
+            "Check your internet.",
+          );
+        }
+      },
+    });
+    await waitFor(t.app, "Update to 10.0.0");
+    await press(t.app, KEY.enter);
+    await waitFor(t.app, "Could not reach github.com.");
+    await waitFor(t.app, "Try again");
+    await press(t.app, KEY.enter);
+    await waitFor(t.app, "Updated to 10.0.0.");
+    t.app.unmount();
+  });
+
+  it("sends the user from About to Check setup, which downloads the missing tools", async () => {
+    const t = await openAbout({ missing: ["deno"] });
+    await waitFor(t.app, "not found (needed for YouTube)");
+    await waitFor(t.app, "Download missing tools");
+    await press(t.app, KEY.enter);
+    await waitFor(t.app, "Check setup");
+    await waitFor(t.app, "Everything is ready.");
+    expect(t.installed).toEqual(["deno"]);
+    // Back goes to Home, not to About.
+    await press(t.app, KEY.esc);
+    await waitFor(t.app, "What would you like to do?");
+    t.app.unmount();
+  });
+
+  it("does not offer the button when MediaForge runs through Node", async () => {
+    const t = await openAbout({ update: { ...NEWER, installable: false } });
+    await waitFor(t.app, "Version 10.0.0 is available");
+    expect(t.app.lastFrame()).toContain("only in the installed program");
+    expect(t.app.lastFrame()).not.toContain("Update to");
+    t.app.unmount();
   });
 });
 

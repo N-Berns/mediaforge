@@ -1,23 +1,34 @@
 {
+  "deno": {
+    "linux-arm64": {
+      "archive": "zip",
+      "buildInfo": "https://github.com/denoland/deno/releases/tag/v2.9.7",
+      "license": "MIT",
+      "member": "deno",
+      "sha256": "c832298b1ad4422481334855f6003e0f54145762c5a134f20a489511d2f65bbf",
+      "url": "https://github.com/denoland/deno/releases/download/v2.9.7/deno-aarch64-unknown-linux-gnu.zip",
+      "version": "2.9.7"
+    },
+    "linux-x64": {
+      "archive": "zip",
+      "buildInfo": "https://github.com/denoland/deno/releases/tag/v2.9.7",
+      "license": "MIT",
+      "member": "deno",
+      "sha256": "c6527f24f4b16031d3ae4fa9f658d5f11534c8d84ce7dc8502420280919c3490",
+      "url": "https://github.com/denoland/deno/releases/download/v2.9.7/deno-x86_64-unknown-linux-gnu.zip",
+      "version": "2.9.7"
+    },
+    "win32-x64": {
+      "archive": "zip",
+      "buildInfo": "https://github.com/denoland/deno/releases/tag/v2.9.7",
+      "license": "MIT",
+      "member": "deno.exe",
+      "sha256": "a0c3101b4158d1dfb7d6a78a7bf0f3de80c96bb423c152beec8beb22786f2238",
+      "url": "https://github.com/denoland/deno/releases/download/v2.9.7/deno-x86_64-pc-windows-msvc.zip",
+      "version": "2.9.7"
+    }
+  },
   "ffmpeg": {
-    "darwin-arm64": {
-      "archive": "zip",
-      "buildInfo": "https://ffmpeg.martin-riedl.de",
-      "license": "GPL-3.0-or-later",
-      "member": "ffmpeg",
-      "sha256": "c8ed4c4e6978a03c485edbfe4e0a5dc2380f8a30bba5150531b31b094492d924",
-      "url": "https://ffmpeg.martin-riedl.de/download/macos/arm64/1789931890_9.0.2/ffmpeg.zip",
-      "version": "1789931890_9.0.2"
-    },
-    "darwin-x64": {
-      "archive": "zip",
-      "buildInfo": "https://ffmpeg.martin-riedl.de",
-      "license": "GPL-3.0-or-later",
-      "member": "ffmpeg",
-      "sha256": "7c6b4125b191cbf773832dc51f424cf2b6bb7da43007d1e066f95909e47cacd4",
-      "url": "https://ffmpeg.martin-riedl.de/download/macos/amd64/1789931006_9.0.2/ffmpeg.zip",
-      "version": "1789931006_9.0.2"
-    },
     "linux-arm64": {
       "archive": "tar.xz",
       "buildInfo": "https://github.com/BtbN/FFmpeg-Builds/releases/tag/autobuild-2026-09-30-13-08",

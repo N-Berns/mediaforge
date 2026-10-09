@@ -168,7 +168,7 @@ describe("runDownload", () => {
       exitCode: ExitCode.MissingTool,
       message: "yt-dlp is missing.\nrun: mediaforge setup",
     });
-    expect(asked).toEqual([["yt-dlp", "ffmpeg"]]);
+    expect(asked).toEqual([["yt-dlp", "ffmpeg", "deno"]]);
     expect(t.seenArgs).toEqual([]);
   });
 

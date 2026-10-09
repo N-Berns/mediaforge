@@ -1,5 +1,6 @@
 import { useApp, useInput } from "ink";
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import { isRequired } from "../doctor.ts";
 import type { EngineJob } from "../engine/index.ts";
 import type { Settings } from "../settings.ts";
 import { BatchFlow } from "./BatchFlow.tsx";
@@ -14,6 +15,7 @@ import {
 } from "./flow.ts";
 import type { MediaKind } from "./format-choices.ts";
 import { useNav } from "./nav.ts";
+import { NoticeContext, useNoticeState } from "./notice.tsx";
 import { AboutScreen } from "./screens/AboutScreen.tsx";
 import { DownloadScreen } from "./screens/DownloadScreen.tsx";
 import { FolderScreen } from "./screens/FolderScreen.tsx";
@@ -40,18 +42,82 @@ type Screen =
   | { name: "update"; plan: Plan; draft: Draft }
   | { name: "batch"; urls: string[] }
   | { name: "settings" }
-  | { name: "setup"; prompt?: boolean }
+  | { name: "setup"; prompt?: boolean; autoDownload?: boolean }
   | { name: "about" };
+
+/** How long to wait for the tool check before opening the link screen anyway. */
+const TOOL_CHECK_GRACE_MS = 150;
+const SETUP_PROMPT: Screen = { name: "setup", prompt: true };
+const wait = (ms: number) => new Promise<undefined>((resolve) => setTimeout(resolve, ms));
 
 export function App({ deps }: { deps: AppDeps }) {
   const { exit } = useApp();
   const nav = useNav<Screen>({ name: "home" });
+  const notices = useNoticeState();
   const screen = nav.current;
   /** Counts downloads started, so each (including retries) gets a fresh screen instance. */
   const runCounter = useRef(0);
   const [batchBusy, setBatchBusy] = useState(false);
   /** True while Home checks the tools, so a second pick does not stack another screen. */
   const checkingTools = useRef(false);
+  /** Deno is offered once per session; saying no must not block every later download. */
+  const offeredOptional = useRef(false);
+  const screenName = useRef(screen.name);
+  screenName.current = screen.name;
+
+  // Tell the user about a newer release. A failed check (offline) is not worth a message.
+  useEffect(() => {
+    deps
+      .checkUpdate()
+      .then((info) => {
+        if (info.newer) {
+          notices.notify("ok", `MediaForge ${info.latest} is available. Open About to update.`);
+        }
+      })
+      .catch(() => {});
+  }, [deps, notices.notify]);
+
+  // Start the slow tool check now, so it is usually done by the time "Download media" is picked.
+  useEffect(() => {
+    deps.inspectTools().catch(() => {});
+  }, [deps]);
+
+  /**
+   * Open the link step. A missing tool sends the user to the setup prompt first. The check can
+   * take seconds (yt-dlp is slow to start), so when it is not quick the link screen opens at once
+   * and the redirect happens later, only if the user is still on it. A failed check is ignored.
+   */
+  const openDownload = async () => {
+    if (checkingTools.current) return;
+    checkingTools.current = true;
+    try {
+      const missing = deps.inspectTools().then(
+        (reports) => {
+          const required = reports.some((r) => !r.found && isRequired(r.tool));
+          const optional = reports.some((r) => !r.found && !isRequired(r.tool));
+          if (!required && optional && !offeredOptional.current) {
+            offeredOptional.current = true;
+            return true;
+          }
+          return required;
+        },
+        () => false,
+      );
+      const quick = await Promise.race([missing, wait(TOOL_CHECK_GRACE_MS)]);
+      if (quick === true) {
+        nav.push(SETUP_PROMPT);
+        return;
+      }
+      nav.push({ name: "link" });
+      if (quick === undefined) {
+        void missing.then((isMissing) => {
+          if (isMissing && screenName.current === "link") nav.replace(SETUP_PROMPT);
+        });
+      }
+    } finally {
+      checkingTools.current = false;
+    }
+  };
 
   // Ctrl+C quits everywhere except while downloading, where it cancels the download instead.
   useInput((input, key) => {
@@ -116,25 +182,8 @@ export function App({ deps }: { deps: AppDeps }) {
           <HomeScreen
             onPick={(choice) => {
               if (choice === "quit") exit();
-              else if (choice === "download") {
-                // Check the tools first; if one is missing, offer to download it before the link.
-                // Further picks are ignored until the check is over. If it fails, go on to the link.
-                if (checkingTools.current) return;
-                checkingTools.current = true;
-                void deps
-                  .inspectTools()
-                  .then(
-                    (reports): Screen =>
-                      reports.every((r) => r.found)
-                        ? { name: "link" }
-                        : { name: "setup", prompt: true },
-                    (): Screen => ({ name: "link" }),
-                  )
-                  .then(nav.push)
-                  .finally(() => {
-                    checkingTools.current = false;
-                  });
-              } else if (choice === "settings") nav.push({ name: "settings" });
+              else if (choice === "download") void openDownload();
+              else if (choice === "settings") nav.push({ name: "settings" });
               else if (choice === "setup") nav.push({ name: "setup" });
               else nav.push({ name: "about" });
             }}
@@ -214,12 +263,15 @@ export function App({ deps }: { deps: AppDeps }) {
           <DownloadScreen
             key={screen.run}
             plan={screen.plan}
-            onDone={(job) =>
-              // A cancelled download leaves nothing to show: go back to the page before it.
-              job.status === "cancelled"
-                ? nav.back()
-                : nav.replace({ name: "result", plan: screen.plan, draft: screen.draft, job })
-            }
+            onDone={(job) => {
+              // The result page reports success and failure itself, so its notice shows only once
+              // the user leaves it. A cancelled download has no page: say so on the one before.
+              if (job.status === "cancelled") notices.notify("warn", "Download cancelled");
+              else if (job.status === "completed") notices.notify("ok", "Download complete");
+              else notices.notify("error", "Download failed");
+              if (job.status === "cancelled") nav.back();
+              else nav.replace({ name: "result", plan: screen.plan, draft: screen.draft, job });
+            }}
           />
         );
       case "result":
@@ -258,12 +310,22 @@ export function App({ deps }: { deps: AppDeps }) {
           <SetupScreen
             onBack={nav.back}
             onReady={screen.prompt ? () => nav.replace({ name: "link" }) : undefined}
+            autoDownload={screen.autoDownload}
           />
         );
       case "about":
-        return <AboutScreen onBack={nav.back} />;
+        return (
+          <AboutScreen
+            onBack={nav.back}
+            onSetup={() => nav.reset({ name: "home" }, { name: "setup", autoDownload: true })}
+          />
+        );
     }
   })();
 
-  return <DepsContext.Provider value={deps}>{body}</DepsContext.Provider>;
+  return (
+    <DepsContext.Provider value={deps}>
+      <NoticeContext.Provider value={notices}>{body}</NoticeContext.Provider>
+    </DepsContext.Provider>
+  );
 }

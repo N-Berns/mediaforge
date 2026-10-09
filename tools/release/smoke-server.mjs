@@ -12,7 +12,7 @@ import { pathToFileURL } from "node:url";
 import { TARGETS } from "./targets.mjs";
 
 export const FAKE_TAG = "2099.01.01.000000";
-const YTDLP_ASSETS = ["yt-dlp.exe", "yt-dlp_linux", "yt-dlp_linux_aarch64", "yt-dlp_macos"];
+const YTDLP_ASSETS = ["yt-dlp.exe", "yt-dlp_linux", "yt-dlp_linux_aarch64"];
 const sha256 = (data) => createHash("sha256").update(data).digest("hex");
 
 const ytDlpBody = Buffer.from("not a real yt-dlp\n");

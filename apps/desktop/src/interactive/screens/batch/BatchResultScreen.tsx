@@ -67,6 +67,7 @@ export function BatchResultScreen({ plans, jobs, onAction }: BatchResultScreenPr
         ["↑↓", "Move"],
         ["Enter", "Select"],
       ]}
+      hideNotice
     >
       <Box flexDirection="column" marginBottom={1}>
         {order.slice(0, end).map(({ job, plan }) => {

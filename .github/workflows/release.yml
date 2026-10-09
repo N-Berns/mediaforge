@@ -12,8 +12,8 @@ jobs:
   check:
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
         with:
           node-version-file: .nvmrc
       - run: npm install -g pnpm@11
@@ -43,8 +43,8 @@ jobs:
     needs: check
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
         with:
           node-version-file: .nvmrc
       - run: npm install -g pnpm@11
@@ -53,7 +53,7 @@ jobs:
         run: MEDIAFORGE_VERSION="${GITHUB_REF_NAME#v}" pnpm --filter @mediaforge/desktop build
       - name: Build the five binaries
         run: node tools/release/build-binaries.mjs --out out/release
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v6
         with:
           name: raw-binaries
           path: out/release
@@ -68,15 +68,13 @@ jobs:
           - { target: win-x64, runner: windows-latest, file: mediaforge-win-x64.exe }
           - { target: linux-x64, runner: ubuntu-24.04, file: mediaforge-linux-x64 }
           - { target: linux-arm64, runner: ubuntu-24.04-arm, file: mediaforge-linux-arm64 }
-          - { target: macos-x64, runner: macos-15-intel, file: mediaforge-macos-x64 }
-          - { target: macos-arm64, runner: macos-15, file: mediaforge-macos-arm64 }
     runs-on: ${{ matrix.runner }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
         with:
           node-version-file: .nvmrc
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v7
         with:
           name: raw-binaries
           path: raw
@@ -84,13 +82,10 @@ jobs:
         shell: bash
         run: |
           chmod +x "raw/${{ matrix.file }}"
-          if [ "$RUNNER_OS" = "macOS" ]; then
-            codesign --force --sign - "raw/${{ matrix.file }}"
-          fi
       - name: Smoke test
         shell: bash
         run: bash tools/release/smoke.sh "raw/${{ matrix.file }}" "${GITHUB_REF_NAME#v}"
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v6
         with:
           name: final-${{ matrix.target }}
           path: raw/${{ matrix.file }}
@@ -102,11 +97,11 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
         with:
           node-version-file: .nvmrc
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v7
         with:
           pattern: final-*
           merge-multiple: true
@@ -137,7 +132,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        runner: [ubuntu-24.04, ubuntu-24.04-arm, macos-15-intel, macos-15]
+        runner: [ubuntu-24.04, ubuntu-24.04-arm]
     runs-on: ${{ matrix.runner }}
     steps:
       - name: Install from the published release

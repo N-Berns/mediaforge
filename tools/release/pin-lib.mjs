@@ -7,16 +7,6 @@ export const BTBN_TARGETS = {
   "linux-arm64": { suffix: "linuxarm64", archive: "tar.xz", member: "bin/ffmpeg" },
 };
 
-/** Martin Riedl's macOS release builds (GPL: libx264 and libx265 are enabled). */
-export const RIEDL_HOST = "https://ffmpeg.martin-riedl.de";
-export const RIEDL_TARGETS = {
-  "darwin-x64": { arch: "amd64" },
-  "darwin-arm64": { arch: "arm64" },
-};
-
-export const riedlRedirectUrl = (arch) =>
-  `${RIEDL_HOST}/redirect/latest/macos/${arch}/release/ffmpeg.zip`;
-
 const compareVersions = (a, b) => {
   const left = a.split(".").map(Number);
   const right = b.split(".").map(Number);
@@ -78,17 +68,6 @@ export function selectMonthEndRelease(releases, hasAllBuilds, now = new Date()) 
   return found;
 }
 
-/** Turn the redirect from the "latest" URL into the pinned download URL and its build id. */
-export function parseRiedlLocation(location, base) {
-  const url = new URL(location, base);
-  const segments = url.pathname.split("/").filter(Boolean);
-  const version = segments.at(-2);
-  if (segments.length < 2 || !version) {
-    throw new Error(`Unexpected redirect location: ${location}`);
-  }
-  return { url: url.toString(), version };
-}
-
 const sortKeys = (value) => {
   if (Array.isArray(value)) return value.map(sortKeys);
   if (value && typeof value === "object") {
@@ -103,3 +82,10 @@ const sortKeys = (value) => {
 
 /** The lock file text: keys sorted so diffs show only what changed. */
 export const renderLock = (lock) => `${JSON.stringify(sortKeys(lock), null, 2)}\n`;
+
+/** Deno release assets per target. Windows on ARM runs the x64 build, like the other tools. */
+export const DENO_TARGETS = {
+  "win32-x64": { asset: "deno-x86_64-pc-windows-msvc.zip", member: "deno.exe" },
+  "linux-x64": { asset: "deno-x86_64-unknown-linux-gnu.zip", member: "deno" },
+  "linux-arm64": { asset: "deno-aarch64-unknown-linux-gnu.zip", member: "deno" },
+};

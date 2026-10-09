@@ -12,7 +12,7 @@ const entry: LockEntry = {
   license: "LGPL-2.1-or-later",
   buildInfo: "https://example.test/build",
 };
-const lock: ToolsLock = { schema: 1, ffmpeg: { "linux-x64": entry } };
+const lock: ToolsLock = { schema: 1, ffmpeg: { "linux-x64": entry }, deno: {} };
 
 describe("ffmpegSource", () => {
   it("returns the pinned build for the target", () => {
@@ -28,14 +28,14 @@ describe("ffmpegSource", () => {
   it("says so when no build is pinned for the target", () => {
     const error = (() => {
       try {
-        return ffmpegSource(resolveTarget("darwin", "arm64"), lock);
+        return ffmpegSource(resolveTarget("linux", "arm64"), lock);
       } catch (e) {
         return e;
       }
     })() as ToolInstallError;
     expect(error).toBeInstanceOf(ToolInstallError);
     expect(error.kind).toBe("unsupported");
-    expect(error.message).toContain("darwin-arm64");
+    expect(error.message).toContain("linux-arm64");
   });
 });
 
@@ -47,6 +47,7 @@ describe("validateLock", () => {
   it("reports a bad hash, a non-https URL, an unknown archive and a missing license", () => {
     const bad = {
       schema: 1,
+      deno: {},
       ffmpeg: {
         "linux-x64": {
           ...entry,

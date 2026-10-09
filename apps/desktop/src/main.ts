@@ -1,4 +1,8 @@
 import { run } from "./cli.ts";
+import { cleanupAfterUpdate } from "./self-update.ts";
+
+// Remove the old program an update left beside this one. Best effort, never blocks.
+void cleanupAfterUpdate();
 
 const inTerminal = Boolean(process.stdin.isTTY && process.stdout.isTTY);
 

@@ -52,6 +52,7 @@ export function ResultScreen({ job, onAction }: ResultScreenProps) {
         tone="ok"
         title="Download complete"
         hints={[...hints]}
+        hideNotice
       >
         <Card
           tone="ok"
@@ -82,6 +83,7 @@ export function ResultScreen({ job, onAction }: ResultScreenProps) {
       tone={cancelled ? "warn" : "error"}
       title={cancelled ? "Download cancelled" : "Download failed"}
       hints={[...hints]}
+      hideNotice
     >
       {cancelled ? null : (
         <Box flexDirection="column" marginBottom={1}>

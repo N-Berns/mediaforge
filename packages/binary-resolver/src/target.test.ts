@@ -6,8 +6,6 @@ describe("resolveTarget", () => {
     ["win32", "x64", "win32-x64"],
     ["linux", "x64", "linux-x64"],
     ["linux", "arm64", "linux-arm64"],
-    ["darwin", "x64", "darwin-x64"],
-    ["darwin", "arm64", "darwin-arm64"],
   ])("accepts %s %s", (platform, arch, key) => {
     expect(targetKey(resolveTarget(platform, arch))).toBe(key);
   });
@@ -27,6 +25,5 @@ describe("binaryFileName", () => {
   it("adds .exe on Windows only", () => {
     expect(binaryFileName("yt-dlp", "win32")).toBe("yt-dlp.exe");
     expect(binaryFileName("ffmpeg", "linux")).toBe("ffmpeg");
-    expect(binaryFileName("ffmpeg", "darwin")).toBe("ffmpeg");
   });
 });

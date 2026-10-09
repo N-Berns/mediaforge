@@ -15,8 +15,5 @@ export function cacheDir(
   if (platform === "win32") {
     return join(env.LOCALAPPDATA || join(home, "AppData", "Local"), "MediaForge", "bin");
   }
-  if (platform === "darwin") {
-    return join(home, "Library", "Application Support", "MediaForge", "bin");
-  }
   return join(env.XDG_DATA_HOME || join(home, ".local", "share"), "mediaforge", "bin");
 }
