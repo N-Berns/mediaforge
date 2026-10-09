@@ -1,5 +1,5 @@
 import { DEFAULT_PROFILE_ID } from "@mediaforge/media-profiles";
-import { useEffect, useRef, useState } from "react";
+import { useContext, useEffect, useRef, useState } from "react";
 import type { EngineJob } from "../engine/index.ts";
 import type { Settings } from "../settings.ts";
 import {
@@ -20,6 +20,7 @@ import { useDeps } from "./deps.ts";
 import { effectiveFolder, type Plan, toPlan } from "./flow.ts";
 import type { MediaKind } from "./format-choices.ts";
 import { useNav } from "./nav.ts";
+import { NoticeContext } from "./notice.tsx";
 import { BatchDownloadScreen } from "./screens/batch/BatchDownloadScreen.tsx";
 import { BatchLookupScreen } from "./screens/batch/BatchLookupScreen.tsx";
 import { BatchQualityScreen } from "./screens/batch/BatchQualityScreen.tsx";
@@ -54,6 +55,7 @@ export interface BatchFlowProps {
 /** Several links: look them all up, choose a type for each (or per link), then download. */
 export function BatchFlow({ urls, onLinks, onHome, onQuit, onDownloading }: BatchFlowProps) {
   const deps = useDeps();
+  const notices = useContext(NoticeContext);
   const nav = useNav<Stage>({ name: "lookup" });
   const stage = nav.current;
   const [settings, setSettings] = useState<Settings>();
@@ -203,13 +205,25 @@ export function BatchFlow({ urls, onLinks, onHome, onQuit, onDownloading }: Batc
           key={stage.run}
           plans={stage.plans}
           concurrency={settings.concurrency}
-          onDone={(jobs) =>
-            // Cancelled before anything finished: nothing to report, go back a page.
+          onDone={(jobs) => {
+            // Cancelled before anything finished: nothing to report, go back a page and say so.
             // If some links were saved, show what happened to each.
-            jobs.length > 0 && jobs.every((j) => j.status === "cancelled")
-              ? nav.back()
-              : nav.replace({ name: "result", plans: stage.plans, jobs })
-          }
+            if (jobs.length > 0 && jobs.every((j) => j.status === "cancelled")) {
+              notices.notify("warn", "Downloads cancelled");
+              nav.back();
+              return;
+            }
+            const saved = jobs.filter((j) => j.status === "completed").length;
+            if (saved === jobs.length) {
+              notices.notify(
+                "ok",
+                saved === 1 ? "Download complete" : `All ${saved} downloads complete`,
+              );
+            } else {
+              notices.notify("warn", `${saved} of ${jobs.length} saved`);
+            }
+            nav.replace({ name: "result", plans: stage.plans, jobs });
+          }}
         />
       );
     case "result":

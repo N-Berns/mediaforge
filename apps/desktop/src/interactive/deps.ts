@@ -3,6 +3,7 @@ import { createContext, useContext } from "react";
 import type { ToolReport } from "../doctor.ts";
 import type { DownloadDeps } from "../download.ts";
 import type { MediaInfo } from "../formats.ts";
+import type { UpdateInfo, UpdateProgress } from "../self-update.ts";
 import type { FolderFs } from "./folder-browser.ts";
 
 /** Everything the interactive app needs from the outside world. Tests replace all of it. */
@@ -15,6 +16,13 @@ export interface AppDeps {
     tool: Tool,
     onProgress: (progress: InstallProgress) => void,
   ) => Promise<InstallResult>;
+  /** Ask GitHub for the newest MediaForge release. Rejects when it cannot be reached. */
+  checkUpdate: () => Promise<UpdateInfo>;
+  /** Replace the running program with the release in `info`. */
+  installUpdate: (
+    info: UpdateInfo,
+    onProgress: (progress: UpdateProgress) => void,
+  ) => Promise<void>;
   readClipboard: () => Promise<string | undefined>;
   openFolder: (path: string) => Promise<void>;
   /** Size of a finished file in bytes, if it can be read. */

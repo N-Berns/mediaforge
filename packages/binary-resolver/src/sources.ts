@@ -15,13 +15,11 @@ export interface ToolSource {
 
 export const DEFAULT_YTDLP_REPO = "https://github.com/yt-dlp/yt-dlp-nightly-builds";
 
-/** yt-dlp's standalone asset per target. Both macOS CPUs use the universal build. */
+/** yt-dlp's standalone asset per target. */
 export const YTDLP_ASSETS: Record<string, string> = {
   "win32-x64": "yt-dlp.exe",
   "linux-x64": "yt-dlp_linux",
   "linux-arm64": "yt-dlp_linux_aarch64",
-  "darwin-x64": "yt-dlp_macos",
-  "darwin-arm64": "yt-dlp_macos",
 };
 
 /** Read a `SHA2-256SUMS` file: lines of `<hex>  <name>` or `<hex> *<name>`. */

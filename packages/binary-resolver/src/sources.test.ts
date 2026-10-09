@@ -13,7 +13,6 @@ const sums = [
   `${HASH_A}  yt-dlp.exe`,
   `${HASH_B} *yt-dlp_linux`,
   `${HASH_A}  yt-dlp_linux_aarch64`,
-  `${HASH_A}  yt-dlp_macos`,
   "not a checksum line",
   "",
 ].join("\n");
@@ -30,7 +29,7 @@ describe("parseSha256Sums", () => {
     const parsed = parseSha256Sums(sums);
     expect(parsed.get("yt-dlp.exe")).toBe(HASH_A);
     expect(parsed.get("yt-dlp_linux")).toBe(HASH_B.toLowerCase());
-    expect(parsed.size).toBe(4);
+    expect(parsed.size).toBe(3);
   });
 });
 
@@ -40,8 +39,6 @@ describe("resolveYtDlpSource", () => {
     ["win32", "arm64", "yt-dlp.exe"],
     ["linux", "x64", "yt-dlp_linux"],
     ["linux", "arm64", "yt-dlp_linux_aarch64"],
-    ["darwin", "x64", "yt-dlp_macos"],
-    ["darwin", "arm64", "yt-dlp_macos"],
   ])("picks the %s %s asset", async (platform, arch, asset) => {
     const source = await resolveYtDlpSource(
       resolveTarget(platform, arch),

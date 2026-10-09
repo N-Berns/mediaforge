@@ -1,6 +1,6 @@
 import { getProfile } from "@mediaforge/media-profiles";
 import { Box, Text, useInput } from "ink";
-import { useEffect, useRef, useState } from "react";
+import { useContext, useEffect, useRef, useState } from "react";
 import { candidateFor } from "../../download.ts";
 import type { EngineJob, Step, StepKind } from "../../engine/index.ts";
 import { Card } from "../components/Card.tsx";
@@ -11,6 +11,7 @@ import { useTerminalSize } from "../components/use-terminal-size.ts";
 import { useDeps } from "../deps.ts";
 import type { Plan } from "../flow.ts";
 import { describeProgress } from "../hints.ts";
+import { NoticeContext } from "../notice.tsx";
 import { COLORS, ICONS, STEP_BAR, STEP_COLORS } from "../theme.ts";
 
 export interface DownloadScreenProps {
@@ -94,6 +95,10 @@ export function DownloadScreen({ plan, onDone }: DownloadScreenProps) {
   const { columns } = useTerminalSize();
   const [job, setJob] = useState<EngineJob>();
   const control = useRef<{ cancel: () => void }>({ cancel: () => {} });
+  const { clear } = useContext(NoticeContext);
+  // A new download starts clean: an old "cancelled" or "complete" notice no longer applies.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: once per mount
+  useEffect(() => clear(), []);
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: the download starts once per mount
   useEffect(() => {
@@ -138,6 +143,7 @@ export function DownloadScreen({ plan, onDone }: DownloadScreenProps) {
       icon={ICONS.download}
       title="Downloading"
       hints={[["Esc", "Cancel download"]]}
+      ctrlC="Cancel"
     >
       <Card
         rows={[

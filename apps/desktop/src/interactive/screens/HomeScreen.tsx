@@ -47,7 +47,6 @@ export function HomeScreen({ onPick }: { onPick: (choice: HomeChoice) => void })
         ["↑↓", "Move"],
         ["Enter", "Select"],
         ["1-5", "Jump"],
-        ["Ctrl+C", "Quit"],
       ]}
     >
       <Box marginBottom={1}>
@@ -72,7 +71,7 @@ export function HomeScreen({ onPick }: { onPick: (choice: HomeChoice) => void })
             value: "setup",
             icon: ICONS.setup,
             label: "Check setup",
-            hint: "yt-dlp and ffmpeg",
+            hint: "yt-dlp, ffmpeg, deno",
           },
           {
             value: "about",

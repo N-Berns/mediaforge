@@ -77,7 +77,6 @@ describe("progress bar", () => {
 describe("clipboard", () => {
   it("picks the right tool per platform", () => {
     expect(clipboardCommands("win32", {})[0]?.command).toBe("powershell.exe");
-    expect(clipboardCommands("darwin", {})[0]?.command).toBe("pbpaste");
     expect(clipboardCommands("linux", { WAYLAND_DISPLAY: "w" })[0]?.command).toBe("wl-paste");
     expect(clipboardCommands("linux", {})[0]?.command).toBe("xclip");
   });
@@ -95,13 +94,13 @@ describe("clipboard", () => {
     );
     expect(calls).toEqual(["xclip", "xsel"]);
     expect(text).toBe("https://example.com/v\n");
-    expect(await readClipboard(async () => "  \n", "darwin", {})).toBeUndefined();
+    expect(await readClipboard(async () => "  \n", "linux", {})).toBeUndefined();
     expect(
       await readClipboard(
         async () => {
           throw new Error("x");
         },
-        "darwin",
+        "linux",
         {},
       ),
     ).toBeUndefined();
@@ -459,10 +458,6 @@ describe("openCommand", () => {
       command: "explorer.exe",
       args: ['/select,"C:\\a b\\c.mp4"'],
       verbatim: true,
-    });
-    expect(openCommand("/a/c.mp4", "darwin")).toMatchObject({
-      command: "open",
-      args: ["-R", "/a/c.mp4"],
     });
     expect(openCommand("/a/c.mp4", "linux")).toMatchObject({ command: "xdg-open" });
   });

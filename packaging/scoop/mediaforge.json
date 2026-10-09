@@ -1,0 +1,26 @@
+{
+  "version": "0.1.0",
+  "description": "Download video and audio from the terminal with yt-dlp and ffmpeg.",
+  "homepage": "https://github.com/N-Berns/mediaforge",
+  "license": "MIT",
+  "architecture": {
+    "64bit": {
+      "url": "https://github.com/N-Berns/mediaforge/releases/download/v0.1.0/mediaforge-win-x64.exe#/mediaforge.exe",
+      "hash": "7bdf9cf0ae92818328feccbf450d88ad8626d34647983c39fbccbf6773f4ba53"
+    }
+  },
+  "bin": "mediaforge.exe",
+  "notes": "Run 'mediaforge setup' once to download yt-dlp, ffmpeg and Deno.",
+  "checkver": "github",
+  "autoupdate": {
+    "architecture": {
+      "64bit": {
+        "url": "https://github.com/N-Berns/mediaforge/releases/download/v$version/mediaforge-win-x64.exe#/mediaforge.exe",
+        "hash": {
+          "url": "$baseurl/SHA256SUMS",
+          "regex": "$sha256 +mediaforge-win-x64\\.exe"
+        }
+      }
+    }
+  }
+}

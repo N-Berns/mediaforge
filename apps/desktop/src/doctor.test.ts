@@ -47,7 +47,7 @@ describe("runDoctor", () => {
     const parsed = JSON.parse(c.out());
     expect(code).toBe(ExitCode.Ok);
     expect(parsed.ok).toBe(true);
-    expect(parsed.tools).toHaveLength(2);
+    expect(parsed.tools).toHaveLength(3);
   });
 
   it("rejects unknown options with a usage error", async () => {
@@ -81,10 +81,30 @@ describe("runDoctor", () => {
     const c = capture();
     expect(await runDoctor([], c.io, found, "/bin", noRuntime)).toBe(ExitCode.Ok);
     expect(c.out()).toContain("js runtime  NOT FOUND (optional)");
-    expect(c.out()).toContain("Deno");
+    expect(c.out()).toContain("downloads deno");
     const json = capture();
     await runDoctor(["--json"], json.io, found, "/bin", noRuntime);
     expect(JSON.parse(json.out()).jsRuntime).toEqual({ found: false });
+  });
+});
+
+describe("runDoctor with deno", () => {
+  const withoutDeno = async (tool: Tool) => (tool === "deno" ? missing(tool) : found(tool));
+
+  it("treats a missing deno as optional: exit 0, flagged in text and JSON", async () => {
+    const text = capture();
+    expect(await runDoctor([], text.io, withoutDeno, "/bin", noRuntime)).toBe(ExitCode.Ok);
+    expect(text.out()).toContain("deno     NOT FOUND (optional)");
+    const json = capture();
+    expect(await runDoctor(["--json"], json.io, withoutDeno, "/bin", noRuntime)).toBe(ExitCode.Ok);
+    expect(JSON.parse(json.out()).ok).toBe(true);
+  });
+
+  it("still exits 3 when a required tool is missing", async () => {
+    const noFfmpeg = async (tool: Tool) => (tool === "ffmpeg" ? missing(tool) : found(tool));
+    expect(await runDoctor([], capture().io, noFfmpeg, "/bin", noRuntime)).toBe(
+      ExitCode.MissingTool,
+    );
   });
 });
 

@@ -1,6 +1,6 @@
 import type { Tool } from "./version.ts";
 
-export type OsName = "win32" | "linux" | "darwin";
+export type OsName = "win32" | "linux";
 export type CpuArch = "x64" | "arm64";
 
 export interface Target {
@@ -14,7 +14,7 @@ export class UnsupportedTargetError extends Error {
 
   constructor(platform: string, arch: string) {
     super(
-      `Unsupported platform: ${platform}-${arch}. Supported: win32-x64, linux-x64, linux-arm64, darwin-x64, darwin-arm64.`,
+      `Unsupported platform: ${platform}-${arch}. Supported: win32-x64, linux-x64, linux-arm64.`,
     );
     this.name = "UnsupportedTargetError";
     this.platform = platform;
@@ -30,7 +30,7 @@ export function resolveTarget(
   if (platform === "win32" && (arch === "x64" || arch === "arm64")) {
     return { os: "win32", arch: "x64" };
   }
-  if ((platform === "linux" || platform === "darwin") && (arch === "x64" || arch === "arm64")) {
+  if (platform === "linux" && (arch === "x64" || arch === "arm64")) {
     return { os: platform, arch };
   }
   throw new UnsupportedTargetError(platform, arch);

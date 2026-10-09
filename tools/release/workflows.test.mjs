@@ -45,7 +45,7 @@ describe("release.yml", () => {
     const unix = workflow.indexOf("\n  verify-install:");
     const windows = workflow.indexOf("\n  verify-install-windows:");
     for (const body of [workflow.slice(unix, windows), workflow.slice(windows)]) {
-      expect(body).toContain("if: ${{ !github.event.repository.private }}");
+      expect(body).toContain(`if: \${{ !github.event.repository.private }}`);
     }
   });
 

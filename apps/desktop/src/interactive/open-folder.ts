@@ -16,7 +16,6 @@ export function openCommand(
   if (platform === "win32") {
     return { command: "explorer.exe", args: [`/select,"${path}"`], verbatim: true };
   }
-  if (platform === "darwin") return { command: "open", args: ["-R", path], verbatim: false };
   return { command: "xdg-open", args: [dirname(path)], verbatim: false };
 }
 

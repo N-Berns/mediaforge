@@ -2,7 +2,7 @@
 
 Cross-platform media downloader: a browser extension, a desktop host/CLI, and an Android app, built on shared TypeScript packages.
 
-> **Status:** early release (v0.1.0). The desktop CLI is available as a download for Windows, Linux and macOS. The browser extension, the native messaging host and the Android app are planned and not yet built. `apps/chrome`, `apps/edge`, `apps/firefox` and `apps/android` are empty placeholders.
+> **Status:** early release (v0.2.0). The desktop CLI is available as a download for Windows and Linux. The browser extension, the native messaging host and the Android app are planned and not yet built. `apps/chrome`, `apps/edge`, `apps/firefox` and `apps/android` are empty placeholders.
 
 ## How it works
 
@@ -45,13 +45,13 @@ Windows (PowerShell):
 irm https://github.com/N-Berns/mediaforge/releases/latest/download/install.ps1 | iex
 ```
 
-Linux and macOS:
+Linux:
 
 ```sh
 curl -fsSL https://github.com/N-Berns/mediaforge/releases/latest/download/install.sh | sh
 ```
 
-The installer downloads one `mediaforge` program, checks it against the release's `SHA256SUMS`, puts it in `%LOCALAPPDATA%\MediaForge` (Windows) or `~/.local/bin` (Linux, macOS), adds that folder to your PATH, runs `mediaforge setup --yes` to download yt-dlp and ffmpeg, and then starts MediaForge. It needs no administrator rights and uses no `sudo`. The program is a single file and needs no Node.js.
+The installer downloads one `mediaforge` program, checks it against the release's `SHA256SUMS`, puts it in `%LOCALAPPDATA%\MediaForge` (Windows) or `~/.local/bin` (Linux), adds that folder to your PATH, runs `mediaforge setup --yes` to download yt-dlp, ffmpeg and Deno, and then starts MediaForge. It needs no administrator rights and uses no `sudo`. The program is a single file and needs no Node.js.
 
 **These one-line commands run a script from this repository on your computer with your own permissions.** If you prefer to read it first, save it and run it yourself:
 
@@ -69,14 +69,27 @@ Get-Content install.ps1
 
 If PowerShell refuses with "running scripts is disabled", run `powershell -ExecutionPolicy Bypass -File .\install.ps1` instead (or `Unblock-File .\install.ps1` first).
 
+<!-- TODO: uncomment once the scoop-mediaforge bucket exists and the install is tested.
+
+Windows with [Scoop](https://scoop.sh):
+
+```powershell
+scoop bucket add mediaforge https://github.com/N-Berns/scoop-mediaforge
+scoop install mediaforge
+mediaforge setup
+```
+
+Update later with `scoop update mediaforge`. Scoop installs the same program and checks its hash; run `mediaforge setup` once to download yt-dlp, ffmpeg and Deno.
+-->
+
 - Skip the tool download with `--skip-tools` (`sh -s -- --skip-tools` when piping) or `-SkipTools` (`& ([scriptblock]::Create((irm <url>))) -SkipTools`).
 - Install without starting MediaForge with `--no-launch` (`sh -s -- --no-launch` when piping) or `-NoLaunch`. It also does not start when there is no interactive terminal.
 - Pin a version by replacing `latest/download` with `download/vX.Y.Z` in the URL.
-- Supported: Windows x64 (Windows on ARM runs it through emulation), Linux x64 and arm64, macOS x64 and arm64.
-- **Windows:** the program is not code-signed yet, so Windows SmartScreen or Defender may warn about it. This is expected for early releases.
-- **macOS:** the program is ad-hoc signed, not notarized. If you download the binary with a browser instead of the installer and macOS refuses to open it, run `xattr -d com.apple.quarantine ./mediaforge-macos-*`.
-- **ffmpeg licence:** on Windows and Linux MediaForge downloads a static LGPL build of ffmpeg (`LGPL-3.0-or-later`, from [BtbN/FFmpeg-Builds](https://github.com/BtbN/FFmpeg-Builds), pinned to a month-end build because BtbN deletes daily builds after 14 days). On macOS it downloads Martin Riedl's release build (a GPL build, `GPL-3.0-or-later`) from his server; MediaForge does not redistribute it. `packages/binary-resolver/src/tools.lock.json` records the version, source, SHA-256 and licence of every build.
-- **Remove it:** delete the program, MediaForge's tool folder (`%LOCALAPPDATA%\MediaForge\bin`, `~/.local/share/mediaforge`, or `~/Library/Application Support/MediaForge`), its settings file, and the PATH line the installer added.
+- Supported: Windows x64 (Windows on ARM runs it through emulation), Linux x64 and arm64.
+- **macOS is not supported.** Apple charges a yearly fee to sign programs for distribution, and this is a hobby project.
+- **Windows:** the program is not code-signed (certificates cost money), so SmartScreen or Defender may warn about it. Choose "More info", then "Run anyway" if you trust the source. To check the file first, compare its SHA-256 with the release's `SHA256SUMS`: `Get-FileHash .\mediaforge-win-x64.exe -Algorithm SHA256`. The installer does this check for you.
+- **ffmpeg licence:** on Windows and Linux MediaForge downloads a static LGPL build of ffmpeg (`LGPL-3.0-or-later`, from [BtbN/FFmpeg-Builds](https://github.com/BtbN/FFmpeg-Builds), pinned to a month-end build because BtbN deletes daily builds after 14 days). `packages/binary-resolver/src/tools.lock.json` records the version, source, SHA-256 and licence of every build.
+- **Remove it:** delete the program, MediaForge's tool folder (`%LOCALAPPDATA%\MediaForge\bin`, or `~/.local/share/mediaforge`), its settings file, and the PATH line the installer added.
 
 ## Requirements (development)
 
@@ -93,8 +106,9 @@ mediaforge download <url>                     # best quality, saved to ~/Downloa
 mediaforge download <url> -p mp4-720p         # pick an output profile
 mediaforge download <url> -p audio-mp3-320 -o ~/Music --filename "My song"
 mediaforge formats <url>                      # list the formats available for a link
-mediaforge setup                              # download yt-dlp and ffmpeg if missing
+mediaforge setup                              # download yt-dlp, ffmpeg and deno if missing
 mediaforge update                             # update yt-dlp to the latest nightly
+mediaforge self-update                        # update MediaForge itself to the newest release
 mediaforge doctor                             # check that the tools are found
 mediaforge <command> --help                   # options for one command
 mediaforge --version
@@ -112,8 +126,9 @@ pnpm --filter @mediaforge/desktop start download <url> -p mp4-1080p
 | ---------- | ---------------------------------------------------------------------------------------------- |
 | `download` | Download media from a URL. Options: `-p/--profile`, `-o/--output`, `--filename`, `-q/--quiet`. |
 | `formats`  | List the formats available for a URL.                                                          |
-| `setup`    | Download yt-dlp and ffmpeg when they are missing. Options: `-y/--yes`, `--tools yt-dlp,ffmpeg`. |
-| `update`   | Download the latest yt-dlp nightly into MediaForge's tool folder. Never changes ffmpeg.        |
+| `setup`    | Download yt-dlp, ffmpeg and Deno (the JavaScript runtime YouTube needs) when missing. Options: `-y/--yes`, `--tools yt-dlp,ffmpeg,deno`. |
+| `update`   | Download the latest yt-dlp nightly into MediaForge's tool folder. Never changes ffmpeg or Deno. |
+| `self-update` | Replace the `mediaforge` program with the newest release, after checking its SHA-256. |
 | `doctor`   | Check that yt-dlp and ffmpeg are found, and whether a JavaScript runtime is available. `--json` for scripts. |
 
 - Without a command, a terminal opens the interactive menu. Without a terminal, it prints help.
@@ -124,12 +139,12 @@ pnpm --filter @mediaforge/desktop start download <url> -p mp4-1080p
 
 The CLI needs both tools. It looks for each in this order:
 
-1. `MEDIAFORGE_YTDLP_PATH` / `MEDIAFORGE_FFMPEG_PATH` (full path to the executable).
+1. `MEDIAFORGE_YTDLP_PATH` / `MEDIAFORGE_FFMPEG_PATH` / `MEDIAFORGE_DENO_PATH` (full path to the executable).
 2. `PATH` (ffmpeg 5.0 or newer).
 3. The bundled directory: `MEDIAFORGE_BIN_DIR`, else `bin/` next to the executable, else the repo-root `bin/` when run through Node.
 4. MediaForge's tool folder, filled by `mediaforge setup`. Override its location with `MEDIAFORGE_CACHE_DIR`.
 
-If a tool is missing, the interactive menu and `download` / `formats` in a terminal offer to download it. Without a terminal they exit with code 3 and print `run: mediaforge setup`. Nothing downloads without a yes. Downloads are checked against a SHA-256 before anything is run. `mediaforge update` fetches the latest yt-dlp nightly; if a `yt-dlp` on your PATH comes first, it says so.
+If a tool is missing, the interactive menu and `download` / `formats` in a terminal offer to download it. Without a terminal they exit with code 3 and print `run: mediaforge setup`. Nothing downloads without a yes. Downloads are checked against a SHA-256 before anything is run. The interactive app checks GitHub for a newer MediaForge when it starts and again on the About page, where "Update to ..." installs it (restart afterwards). `mediaforge self-update` does the same from the command line; it works on the installed program, not when run through Node. `mediaforge update` fetches the latest yt-dlp nightly; if a `yt-dlp` on your PATH comes first, it says so.
 
 **YouTube** needs a JavaScript runtime for all formats: install [Deno](https://deno.com) or Node.js 20 or newer. The MediaForge program itself cannot serve as that runtime. `doctor` shows whether one was found.
 

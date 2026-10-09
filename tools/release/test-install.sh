@@ -24,7 +24,6 @@ export MEDIAFORGE_INSTALL_DIR="$tmp/bin dir"
 export MEDIAFORGE_RELEASE_BASE_URL="http://127.0.0.1:$port/release"
 
 profile="$HOME/.bashrc"
-if [ "$(uname -s)" = "Darwin" ]; then profile="$HOME/.bash_profile"; fi
 
 fail() {
   echo "FAIL: $*" >&2

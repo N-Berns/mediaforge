@@ -69,10 +69,45 @@ describe("detectJsRuntime", () => {
   });
 });
 
+describe("detectJsRuntime with a managed deno", () => {
+  it("prefers the Deno MediaForge resolves, even when it is not on PATH", async () => {
+    const found = await detectJsRuntime({
+      env: { PATH: "" },
+      platform: "linux",
+      resolve: async (tool) => ({
+        tool,
+        path: "/cache/deno",
+        source: "cache",
+        version: "2.9.7",
+      }),
+    });
+    expect(found).toEqual({ name: "deno", path: "/cache/deno", version: "deno 2.9.7" });
+  });
+
+  it("falls back to PATH when no managed Deno exists", async () => {
+    const found = await detectJsRuntime({
+      env: { PATH: "/a" },
+      platform: "linux",
+      resolve: async () => {
+        throw new Error("missing");
+      },
+      isExecutable: async (path) => path === join("/a", "node"),
+      run: async () => "v22.1.0",
+    });
+    expect(found?.name).toBe("node");
+  });
+});
+
 describe("jsRuntimeArgs", () => {
-  it("needs no flag for Deno or when nothing was found", () => {
+  it("needs no flag when nothing was found", () => {
     expect(jsRuntimeArgs(undefined)).toEqual([]);
-    expect(jsRuntimeArgs({ name: "deno", path: "/bin/deno" })).toEqual([]);
+  });
+
+  it("names Deno and its path, so a downloaded copy off PATH is used", () => {
+    expect(jsRuntimeArgs({ name: "deno", path: "/cache/deno" })).toEqual([
+      "--js-runtimes",
+      "deno:/cache/deno",
+    ]);
   });
 
   it("enables the other runtimes by name and path", () => {

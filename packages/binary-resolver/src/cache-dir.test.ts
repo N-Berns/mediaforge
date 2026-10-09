@@ -28,10 +28,4 @@ describe("cacheDir", () => {
       join("H", ".local", "share", "mediaforge", "bin"),
     );
   });
-
-  it("uses Application Support on macOS", () => {
-    expect(cacheDir({}, "darwin", "H")).toBe(
-      join("H", "Library", "Application Support", "MediaForge", "bin"),
-    );
-  });
 });

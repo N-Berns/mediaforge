@@ -1,6 +1,6 @@
 {
   "name": "mediaforge",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "description": "Cross-platform media downloader: browser extension, desktop host/CLI, and Android app.",
   "type": "module",
@@ -13,6 +13,7 @@
     "lint": "biome check .",
     "format": "biome format --write .",
     "pin:ffmpeg": "node tools/release/pin-ffmpeg.mjs",
+    "pin:deno": "node tools/release/pin-deno.mjs",
     "release:build": "node tools/release/build-binaries.mjs",
     "release:checksums": "node tools/release/checksums.mjs"
   },

@@ -1,7 +1,7 @@
-export type Tool = "yt-dlp" | "ffmpeg";
+export type Tool = "yt-dlp" | "ffmpeg" | "deno";
 
 /** Every tool MediaForge manages. Commands loop over this list instead of naming tools. */
-export const ALL_TOOLS: readonly Tool[] = ["yt-dlp", "ffmpeg"];
+export const ALL_TOOLS: readonly Tool[] = ["yt-dlp", "ffmpeg", "deno"];
 
 /** Oldest ffmpeg a PATH copy may be before the bundled one is preferred. */
 export const MIN_FFMPEG_VERSION = { major: 5, minor: 0 } as const;
@@ -19,6 +19,7 @@ export function parseFfmpegVersion(output: string): { major: number; minor: numb
 /** Pull a display version out of `--version` / `-version` output. */
 export function extractVersion(tool: Tool, output: string): string | undefined {
   if (tool === "ffmpeg") return /^ffmpeg version (\S+)/i.exec(output.trim())?.[1];
+  if (tool === "deno") return /^deno (\S+)/i.exec(output.trim())?.[1];
   return output.trim().split(/\r?\n/)[0]?.trim() || undefined;
 }
 

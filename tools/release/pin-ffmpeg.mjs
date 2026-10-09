@@ -9,19 +9,10 @@
 //   node tools/release/pin-ffmpeg.mjs --list          print the release's asset names and stop
 //   node tools/release/pin-ffmpeg.mjs --dry-run       do everything except write the file
 import { createHash } from "node:crypto";
-import { writeFile } from "node:fs/promises";
+import { readFile, writeFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
-import {
-  BTBN_TARGETS,
-  parseRiedlLocation,
-  RIEDL_HOST,
-  RIEDL_TARGETS,
-  renderLock,
-  riedlRedirectUrl,
-  selectBtbnAsset,
-  selectMonthEndRelease,
-} from "./pin-lib.mjs";
+import { BTBN_TARGETS, renderLock, selectBtbnAsset, selectMonthEndRelease } from "./pin-lib.mjs";
 
 const LOCK_PATH = fileURLToPath(
   new URL("../../packages/binary-resolver/src/tools.lock.json", import.meta.url),
@@ -105,32 +96,9 @@ for (const [target, rule] of Object.entries(BTBN_TARGETS)) {
   };
 }
 
-for (const [target, { arch }] of Object.entries(RIEDL_TARGETS)) {
-  const redirect = await fetch(riedlRedirectUrl(arch), { redirect: "manual" });
-  const location = redirect.headers.get("location");
-  if (!location) throw new Error(`${target}: no redirect from ${riedlRedirectUrl(arch)}`);
-  const { url, version } = parseRiedlLocation(location, RIEDL_HOST);
-  console.error(`${target}: ${url}`);
-  const sha256 = await sha256Of(url);
-  // The site also publishes a checksum next to each file; the two must agree.
-  const published = await fetch(`${url}.sha256`).then((r) => (r.ok ? r.text() : undefined));
-  const publishedHash = published?.trim().split(/\s+/)[0]?.toLowerCase();
-  if (publishedHash && publishedHash !== sha256) {
-    throw new Error(`${target}: downloaded hash ${sha256} differs from published ${publishedHash}`);
-  }
-  ffmpeg[target] = {
-    version,
-    url,
-    sha256,
-    archive: "zip",
-    member: "ffmpeg",
-    // The binary's configure line has --enable-gpl --enable-version3.
-    license: "GPL-3.0-or-later",
-    buildInfo: RIEDL_HOST,
-  };
-}
-
-const text = renderLock({ schema: 1, ffmpeg });
+// The deno section is pinned by pin-deno.mjs; keep what is there.
+const { deno } = JSON.parse(await readFile(LOCK_PATH, "utf8"));
+const text = renderLock({ schema: 1, ffmpeg, ...(deno && { deno }) });
 if (values["dry-run"]) {
   console.log(text);
 } else {

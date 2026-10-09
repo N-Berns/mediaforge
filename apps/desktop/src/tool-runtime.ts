@@ -1,10 +1,8 @@
-import { spawn } from "node:child_process";
 import { createInterface } from "node:readline/promises";
 import {
   BinaryNotFoundError,
   cacheDir,
   defaultInstallDeps,
-  findOnPath,
   type InstallProgress,
   type InstallResult,
   installTool,
@@ -14,7 +12,8 @@ import {
   ToolInstallError,
   UnsupportedTargetError,
 } from "@mediaforge/binary-resolver";
-import { type ResolveTool, resolveTool } from "./binaries.ts";
+import { forgetResolvedTools, type ResolveTool, resolveTool } from "./binaries.ts";
+import { isRequired } from "./doctor.ts";
 import { CliError, ExitCode } from "./exit-codes.ts";
 import { formatBytes } from "./progress-view.ts";
 
@@ -25,11 +24,9 @@ export const YTDLP_REPO_ENV = "MEDIAFORGE_YTDLP_REPO_URL";
 export interface ToolRuntime {
   resolve: ResolveTool;
   install: (tool: Tool, onProgress: (progress: InstallProgress) => void) => Promise<InstallResult>;
-  platform: NodeJS.Platform;
   /** True when a person can answer: stdin and stderr are terminals. */
   interactive: boolean;
   ask: (question: string) => Promise<boolean>;
-  brew: { available: () => Promise<boolean>; install: () => Promise<void> };
 }
 
 export async function tryResolve(
@@ -68,16 +65,13 @@ export const missingToolError = (tool: Tool): CliError =>
 
 export type AcquireOutcome =
   | { tool: Tool; status: "present"; path: string; source: string; version?: string }
-  | { tool: Tool; status: "installed"; path: string; version: string }
-  | { tool: Tool; status: "homebrew"; path: string; version?: string };
+  | { tool: Tool; status: "installed"; path: string; version: string };
 
 export interface AcquireOptions {
-  /** `--yes`: never ask, never run Homebrew. */
-  yes: boolean;
   onProgress: (progress: InstallProgress) => void;
 }
 
-/** Make one tool available: use what is there, else (macOS ffmpeg) offer Homebrew, else download. */
+/** Make one tool available: use what is there, else download. */
 export async function acquireTool(
   tool: Tool,
   rt: ToolRuntime,
@@ -94,34 +88,6 @@ export async function acquireTool(
     };
   }
 
-  const offerHomebrew =
-    tool === "ffmpeg" &&
-    rt.platform === "darwin" &&
-    !options.yes &&
-    rt.interactive &&
-    (await rt.brew.available());
-  if (offerHomebrew) {
-    const useBrew = await rt.ask(
-      "ffmpeg is missing. Install it with Homebrew (brew install ffmpeg)? (Y = Homebrew, N = download a pinned build)",
-    );
-    if (useBrew) {
-      await rt.brew.install();
-      const found = await tryResolve("ffmpeg", rt.resolve);
-      if (!found) {
-        throw new CliError(
-          "Homebrew finished, but ffmpeg is still not on PATH.\nOpen a new terminal, or run: mediaforge setup",
-          ExitCode.MissingTool,
-        );
-      }
-      return {
-        tool,
-        status: "homebrew",
-        path: found.path,
-        ...(found.version !== undefined && { version: found.version }),
-      };
-    }
-  }
-
   try {
     const result = await rt.install(tool, options.onProgress);
     return { tool, status: "installed", path: result.path, version: result.version };
@@ -133,6 +99,8 @@ export async function acquireTool(
 /**
  * Before work that needs tools: in a terminal, offer to download what is missing; otherwise stop
  * with exit 3 and `run: mediaforge setup`. Nothing downloads without a yes.
+ * Optional tools (deno) are offered the same way, but a no, a failure or a missing terminal just
+ * skips them: downloads from sites that do not need them still work.
  */
 export async function ensureTools(
   tools: Tool[],
@@ -141,11 +109,23 @@ export async function ensureTools(
 ): Promise<void> {
   for (const tool of tools) {
     if (await tryResolve(tool, rt.resolve)) continue;
-    if (!rt.interactive) throw missingToolError(tool);
-    if (!(await rt.ask(`${tool} is missing. Download it now? (Y/N)`))) {
-      throw missingToolError(tool);
+    const required = isRequired(tool);
+    if (!rt.interactive) {
+      if (required) throw missingToolError(tool);
+      continue;
     }
-    await acquireTool(tool, rt, { yes: false, onProgress });
+    const question = required
+      ? `${tool} is missing. Download it now? (Y/N)`
+      : `${tool} is missing. YouTube needs it. Download it now? (Y/N)`;
+    if (!(await rt.ask(question))) {
+      if (required) throw missingToolError(tool);
+      continue;
+    }
+    try {
+      await acquireTool(tool, rt, { onProgress });
+    } catch (error) {
+      if (required) throw error;
+    }
   }
 }
 
@@ -180,17 +160,38 @@ export const PHASE_LABELS = {
   installing: "installing",
 } as const;
 
+/** An ASCII progress bar such as `[########----------------]`. */
+export function asciiBar(percent: number, width = 24): string {
+  const filled = Math.round((Math.min(100, Math.max(0, percent)) / 100) * width);
+  return `[${"#".repeat(filled)}${"-".repeat(width - filled)}]`;
+}
+
+const paint = (on: boolean, code: string, text: string) =>
+  on ? `\x1b[${code}m${text}\x1b[0m` : text;
+
 /**
- * Prints install progress: one line per phase, plus (with `inline`) a download counter that
- * updates in place. Without a terminal there are no control characters, so logs stay readable.
+ * Prints install progress. Without a terminal it prints one plain line per phase, with no control
+ * characters, so logs stay readable. With `inline` (a terminal) the lines are indented, the download
+ * shows a bar that updates in place, and `color` (on unless NO_COLOR is set) adds colour.
  */
-export function createInstallPrinter(write: (text: string) => void, inline: boolean) {
+export function createInstallPrinter(
+  write: (text: string) => void,
+  inline: boolean,
+  color = inline && !process.env.NO_COLOR,
+) {
   let counterOpen = false;
   return (progress: InstallProgress): void => {
+    const name = paint(color, "1;36", progress.tool.padEnd(6));
     if (progress.phase === "downloading" && progress.received) {
       if (!inline) return;
-      const total = progress.total ? ` of ${formatBytes(progress.total)}` : "";
-      write(`\r${progress.tool}: downloading ${formatBytes(progress.received)}${total}   `);
+      const { received, total } = progress;
+      const percent = total ? Math.min(100, (received / total) * 100) : undefined;
+      const bar =
+        percent === undefined
+          ? ""
+          : `${paint(color, "36", asciiBar(percent))} ${String(Math.floor(percent)).padStart(3)}%  `;
+      const amount = `${formatBytes(received)}${total ? ` of ${formatBytes(total)}` : ""}`;
+      write(`\r  ${name}  ${bar}${amount}${color ? "\x1b[K" : "   "}`);
       counterOpen = true;
       return;
     }
@@ -198,22 +199,13 @@ export function createInstallPrinter(write: (text: string) => void, inline: bool
       write("\n");
       counterOpen = false;
     }
-    write(`${progress.tool}: ${PHASE_LABELS[progress.phase]}\n`);
+    if (!inline) {
+      write(`${progress.tool}: ${PHASE_LABELS[progress.phase]}\n`);
+      return;
+    }
+    write(`  ${name}  ${paint(color, "2", PHASE_LABELS[progress.phase])}\n`);
   };
 }
-
-const brewAvailable = async () => (await findOnPath("brew")) !== undefined;
-
-const brewInstallFfmpeg = () =>
-  new Promise<void>((resolve, reject) => {
-    const child = spawn("brew", ["install", "ffmpeg"], { stdio: "inherit" });
-    child.once("error", reject);
-    child.once("close", (code) =>
-      code === 0
-        ? resolve()
-        : reject(new CliError(`brew install ffmpeg failed (exit code ${code}).`, ExitCode.Failure)),
-    );
-  });
 
 export function defaultToolRuntime(
   env: Record<string, string | undefined> = process.env,
@@ -223,12 +215,15 @@ export function defaultToolRuntime(
   const deps = { ...defaultInstallDeps(), ...(repo && { ytDlpRepoUrl: repo }) };
   return {
     resolve: resolveTool,
-    install: (tool, onProgress) =>
-      installTool({ tool, target: resolveTarget(), dir, onProgress }, deps),
-    platform: process.platform,
+    install: async (tool, onProgress) => {
+      try {
+        return await installTool({ tool, target: resolveTarget(), dir, onProgress }, deps);
+      } finally {
+        forgetResolvedTools();
+      }
+    },
     interactive: Boolean(process.stdin.isTTY && process.stderr.isTTY),
     ask: (question) => askYesNo(question),
-    brew: { available: brewAvailable, install: brewInstallFfmpeg },
   };
 }
 

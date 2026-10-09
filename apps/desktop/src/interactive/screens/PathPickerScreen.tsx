@@ -3,6 +3,7 @@ import { useEffect, useState } from "react";
 import { Frame } from "../components/Frame.tsx";
 import { visibleWindow } from "../components/Menu.tsx";
 import { cleanPaste, visibleSlice } from "../components/TextField.tsx";
+import { useEnterLock } from "../components/use-enter-lock.ts";
 import { useTerminalSize } from "../components/use-terminal-size.ts";
 import { useDeps } from "../deps.ts";
 import {
@@ -43,7 +44,12 @@ function insertText(platform: NodeJS.Platform, text: string, input: string): str
  * One box for the folder path, with the matching folders listed under it: type to narrow the
  * list, Tab to step into the highlighted folder, Enter to choose the folder shown in the box.
  */
-export function PathPickerScreen({ crumbs, startDir, onPick, onCancel }: PathPickerProps) {
+export function PathPickerScreen({ crumbs, startDir, onPick: pick, onCancel }: PathPickerProps) {
+  const claim = useEnterLock();
+  /** A double Enter picks the folder once. */
+  const onPick = (dir: string) => {
+    if (claim()) pick(dir);
+  };
   const deps = useDeps();
   const { folders } = deps;
   const { columns, rows } = useTerminalSize();
