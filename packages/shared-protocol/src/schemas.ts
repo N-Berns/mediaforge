@@ -1,4 +1,5 @@
 import type {
+  DownloadJob,
   DownloadProgress,
   DownloadRequest,
   MediaCandidate,
@@ -50,6 +51,47 @@ export const DownloadProgressSchema = z.object({
   percent: z.number().min(0).max(100).optional(),
 });
 
+export const DownloadStatusSchema = z.enum([
+  "queued",
+  "downloading",
+  "processing",
+  "completed",
+  "failed",
+  "cancelled",
+]);
+
+export const DownloadJobSchema = z.object({
+  id: z.string(),
+  request: DownloadRequestSchema,
+  status: DownloadStatusSchema,
+  progress: DownloadProgressSchema,
+  outputPath: z.string().optional(),
+  error: z.string().optional(),
+  createdAt: z.number(),
+  updatedAt: z.number(),
+});
+
+/** What a sniffed stream needs to be fetched the way the browser fetched it. */
+export const RequestContextSchema = z.object({
+  referer: z.string().optional(),
+  userAgent: z.string().optional(),
+  cookies: z.string().optional(),
+  headers: z.record(z.string(), z.string()).optional(),
+});
+
+export const SetupStateSchema = z.enum(["ready", "installing", "failed"]);
+
+/** The settings the extension may read and write. */
+export const ExtensionSettingsSchema = z.object({
+  extensionUi: z.enum(["popup", "overlay"]),
+  keepRunning: z.boolean(),
+  folder: z.string().optional(),
+  quality: z.string().optional(),
+});
+
+export type SetupState = z.infer<typeof SetupStateSchema>;
+export type ExtensionSettings = z.infer<typeof ExtensionSettingsSchema>;
+
 // Compile-time guarantee that the runtime schemas match the shared domain types.
 type Equals<A, B> =
   (<T>() => T extends A ? 1 : 2) extends <T>() => T extends B ? 1 : 2 ? true : false;
@@ -59,4 +101,5 @@ export type _SchemaChecks = [
   Assert<Equals<z.infer<typeof MediaCandidateSchema>, MediaCandidate>>,
   Assert<Equals<z.infer<typeof DownloadRequestSchema>, DownloadRequest>>,
   Assert<Equals<z.infer<typeof DownloadProgressSchema>, DownloadProgress>>,
+  Assert<Equals<z.infer<typeof DownloadJobSchema>, DownloadJob>>,
 ];

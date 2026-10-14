@@ -99,3 +99,94 @@ describe("parseHostMessage", () => {
     expect(result.ok).toBe(false);
   });
 });
+
+describe("protocol v2", () => {
+  const v = PROTOCOL_VERSION;
+
+  it("is version 2", () => {
+    expect(PROTOCOL_VERSION).toBe(2);
+  });
+
+  it("accepts the new extension messages", () => {
+    for (const type of ["jobs.list", "jobs.subscribe", "jobs.unsubscribe", "settings.get"]) {
+      expect(parseExtensionMessage({ v, id: "1", type, payload: {} }).ok).toBe(true);
+    }
+  });
+
+  it("accepts a partial settings.set and rejects a bad extensionUi", () => {
+    const ok = parseExtensionMessage({
+      v,
+      id: "1",
+      type: "settings.set",
+      payload: { keepRunning: true },
+    });
+    expect(ok.ok).toBe(true);
+    const bad = parseExtensionMessage({
+      v,
+      id: "1",
+      type: "settings.set",
+      payload: { extensionUi: "huge" },
+    });
+    expect(bad.ok).toBe(false);
+  });
+
+  it("accepts download.start with a request context", () => {
+    const result = parseExtensionMessage({
+      v,
+      id: "1",
+      type: "download.start",
+      payload: {
+        candidate,
+        profileId: "best",
+        context: { referer: "https://example.com/", headers: { Origin: "https://example.com" } },
+      },
+    });
+    expect(result.ok).toBe(true);
+  });
+
+  it("requires setup and keepRunning on hello.ack", () => {
+    const base = {
+      v,
+      id: "1",
+      type: "hello.ack",
+      payload: {
+        hostVersion: "0.3.0",
+        ytDlp: { available: true },
+        ffmpeg: { available: true },
+      },
+    };
+    expect(parseHostMessage(base).ok).toBe(false);
+    const full = { ...base, payload: { ...base.payload, setup: "ready", keepRunning: false } };
+    expect(parseHostMessage(full).ok).toBe(true);
+  });
+
+  it("accepts jobs.snapshot, settings.value and setup.progress", () => {
+    const job = {
+      id: "j1",
+      request: { candidate, profileId: "best" },
+      status: "downloading",
+      progress: { bytesDownloaded: 10 },
+      createdAt: 1,
+      updatedAt: 2,
+    };
+    expect(
+      parseHostMessage({ v, id: "1", type: "jobs.snapshot", payload: { jobs: [job] } }).ok,
+    ).toBe(true);
+    expect(
+      parseHostMessage({
+        v,
+        id: "1",
+        type: "settings.value",
+        payload: { extensionUi: "overlay", keepRunning: false },
+      }).ok,
+    ).toBe(true);
+    expect(
+      parseHostMessage({
+        v,
+        id: "1",
+        type: "setup.progress",
+        payload: { state: "installing", tool: "yt-dlp", phase: "downloading", percent: 40 },
+      }).ok,
+    ).toBe(true);
+  });
+});
