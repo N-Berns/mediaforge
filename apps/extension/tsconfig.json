@@ -1,0 +1,15 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "rootDir": "src",
+    "outDir": ".tsbuild",
+    "types": ["firefox-webext-browser"]
+  },
+  "include": ["src"],
+  "references": [
+    { "path": "../../packages/extension-core" },
+    { "path": "../../packages/media-profiles" },
+    { "path": "../../packages/shared-protocol" },
+    { "path": "../../packages/shared-types" }
+  ]
+}

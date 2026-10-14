@@ -1,0 +1,19 @@
+{
+  "name": "@mediaforge/extension",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@mediaforge/extension-core": "workspace:*",
+    "@mediaforge/media-profiles": "workspace:*",
+    "@mediaforge/shared-protocol": "workspace:*",
+    "@mediaforge/shared-types": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/firefox-webext-browser": "^143.0.1",
+    "esbuild": "^0.28.2"
+  },
+  "scripts": {
+    "build": "node --experimental-strip-types build.mjs"
+  }
+}

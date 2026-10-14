@@ -244,6 +244,28 @@ importers:
         specifier: ^4.0.0
         version: 4.0.0(@types/react@19.3.0)
 
+  apps/extension:
+    dependencies:
+      '@mediaforge/extension-core':
+        specifier: workspace:*
+        version: link:../../packages/extension-core
+      '@mediaforge/media-profiles':
+        specifier: workspace:*
+        version: link:../../packages/media-profiles
+      '@mediaforge/shared-protocol':
+        specifier: workspace:*
+        version: link:../../packages/shared-protocol
+      '@mediaforge/shared-types':
+        specifier: workspace:*
+        version: link:../../packages/shared-types
+    devDependencies:
+      '@types/firefox-webext-browser':
+        specifier: ^143.0.1
+        version: 143.0.1
+      esbuild:
+        specifier: ^0.28.2
+        version: 0.28.2
+
   packages/binary-resolver: {}
 
   packages/extension-core:
@@ -658,6 +680,9 @@ packages:
 
   '@types/estree@1.0.9':
     resolution: {integrity: sha512-GhdPgy1el4/ImP05X05Uw4cw2/M93BCUmnEvWZNStlCzEKME4Fkk+YpoA5OiHNQmoS7Cafb8Xa3Pya8m1Qrzeg==}
+
+  '@types/firefox-webext-browser@143.0.1':
+    resolution: {integrity: sha512-vDoqYr4fe1dqZXmgkzpxki47AhxfwvXD2juY2pADCKykIh10u8Yq2oe3lKZ88s33pxqj7SYULEq6kFW3c6UJzw==}
 
   '@types/node@26.6.4':
     resolution: {integrity: sha512-ldVPDCzj7fsaGZrLB0NuHuTvJcsNasysBAqMolr/cgxrLd1xbqxIr3XJiPnHHJUCxj5sNF1vnRj9aWnrVh5Jcg==}
@@ -1871,6 +1896,8 @@ snapshots:
   '@types/deep-eql@4.0.2': {}
 
   '@types/estree@1.0.9': {}
+
+  '@types/firefox-webext-browser@143.0.1': {}
 
   '@types/node@26.6.4':
     dependencies:

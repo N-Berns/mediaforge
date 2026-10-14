@@ -1,0 +1,59 @@
+:root {
+  color-scheme: light dark;
+}
+body {
+  width: 340px;
+  margin: 0;
+  font:
+    13px / 1.4 system-ui,
+    sans-serif;
+}
+#app {
+  padding: 12px;
+  display: grid;
+  gap: 10px;
+}
+.banner {
+  padding: 8px 10px;
+  border-radius: 6px;
+  background: Canvas;
+  border: 1px solid GrayText;
+}
+.banner[data-tone="warn"] {
+  border-color: #b26a00;
+}
+.banner[data-tone="error"] {
+  border-color: #b00020;
+}
+.row {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 8px;
+  align-items: center;
+}
+.row .sub {
+  color: GrayText;
+  font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+button {
+  font: inherit;
+  padding: 4px 10px;
+}
+progress {
+  width: 100%;
+}
+.toggle {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+h2 {
+  font-size: 12px;
+  margin: 0;
+  color: GrayText;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
