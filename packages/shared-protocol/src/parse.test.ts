@@ -1,5 +1,6 @@
 import type { MediaCandidate } from "@mediaforge/shared-types";
 import { describe, expect, it } from "vitest";
+import { FIREFOX_ADDON_ID, NATIVE_HOST_NAME } from "./host.ts";
 import { parseExtensionMessage, parseHostMessage } from "./parse.ts";
 import { PROTOCOL_VERSION } from "./version.ts";
 
@@ -177,7 +178,7 @@ describe("protocol v2", () => {
         v,
         id: "1",
         type: "settings.value",
-        payload: { extensionUi: "overlay", keepRunning: false },
+        payload: { extensionUi: "overlay", keepRunning: false, askQuality: true },
       }).ok,
     ).toBe(true);
     expect(
@@ -188,5 +189,79 @@ describe("protocol v2", () => {
         payload: { state: "installing", tool: "yt-dlp", phase: "downloading", percent: 40 },
       }).ok,
     ).toBe(true);
+  });
+});
+
+describe("media probe", () => {
+  const v = PROTOCOL_VERSION;
+
+  it("accepts media.probe with an http url and rejects a bad one", () => {
+    const ok = parseExtensionMessage({
+      v,
+      id: "1",
+      type: "media.probe",
+      payload: { url: "https://example.com/watch?v=1" },
+    });
+    expect(ok.ok).toBe(true);
+    const bad = parseExtensionMessage({
+      v,
+      id: "1",
+      type: "media.probe",
+      payload: { url: "nope" },
+    });
+    expect(bad.ok).toBe(false);
+  });
+
+  it("accepts media.info with formats", () => {
+    const result = parseHostMessage({
+      v,
+      id: "1",
+      type: "media.info",
+      payload: {
+        url: "https://example.com/watch?v=1",
+        title: "A video",
+        durationSec: 61,
+        formats: [
+          {
+            id: "137",
+            label: "1080p",
+            height: 1080,
+            container: "mp4",
+            hasVideo: true,
+            hasAudio: false,
+          },
+          {
+            id: "140",
+            label: "Audio 128 kbps",
+            hasVideo: false,
+            hasAudio: true,
+            approxBytes: 1000,
+          },
+        ],
+      },
+    });
+    expect(result.ok).toBe(true);
+  });
+
+  it("requires askQuality on settings.value and allows it on settings.set", () => {
+    const missing = parseHostMessage({
+      v,
+      id: "1",
+      type: "settings.value",
+      payload: { extensionUi: "overlay", keepRunning: false },
+    });
+    expect(missing.ok).toBe(false);
+    const set = parseExtensionMessage({
+      v,
+      id: "1",
+      type: "settings.set",
+      payload: { askQuality: false },
+    });
+    expect(set.ok).toBe(true);
+  });
+
+  it("exposes the fixed host and add-on identifiers", () => {
+    expect(NATIVE_HOST_NAME).toBe("com.mediaforge.host");
+    expect(FIREFOX_ADDON_ID).toBe("mediaforge@n-berns");
   });
 });

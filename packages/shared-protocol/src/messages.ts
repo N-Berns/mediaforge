@@ -4,6 +4,7 @@ import {
   DownloadProgressSchema,
   DownloadRequestSchema,
   ExtensionSettingsSchema,
+  ProbedMediaSchema,
   RequestContextSchema,
   SetupStateSchema,
 } from "./schemas.ts";
@@ -84,6 +85,9 @@ export const ErrorMessage = message(
   z.object({ code: z.string(), message: z.string(), replyTo: z.string().optional() }),
 );
 
+export const MediaProbeMessage = message("media.probe", z.object({ url: z.url() }));
+export const MediaInfoMessage = message("media.info", ProbedMediaSchema);
+
 export const ExtensionToHostMessage = z.discriminatedUnion("type", [
   HelloMessage,
   DownloadStartMessage,
@@ -94,6 +98,7 @@ export const ExtensionToHostMessage = z.discriminatedUnion("type", [
   JobsUnsubscribeMessage,
   SettingsGetMessage,
   SettingsSetMessage,
+  MediaProbeMessage,
 ]);
 export const HostToExtensionMessage = z.discriminatedUnion("type", [
   HelloAckMessage,
@@ -104,6 +109,7 @@ export const HostToExtensionMessage = z.discriminatedUnion("type", [
   JobsSnapshotMessage,
   SettingsValueMessage,
   SetupProgressMessage,
+  MediaInfoMessage,
 ]);
 
 export type ExtensionToHostMessage = z.infer<typeof ExtensionToHostMessage>;

@@ -85,12 +85,36 @@ export const SetupStateSchema = z.enum(["ready", "installing", "failed"]);
 export const ExtensionSettingsSchema = z.object({
   extensionUi: z.enum(["popup", "overlay"]),
   keepRunning: z.boolean(),
+  askQuality: z.boolean(),
   folder: z.string().optional(),
   quality: z.string().optional(),
 });
 
 export type SetupState = z.infer<typeof SetupStateSchema>;
 export type ExtensionSettings = z.infer<typeof ExtensionSettingsSchema>;
+
+export const ProbedFormatSchema = z.object({
+  id: z.string(),
+  label: z.string(),
+  width: z.number().int().positive().optional(),
+  height: z.number().int().positive().optional(),
+  container: z.string().optional(),
+  hasVideo: z.boolean(),
+  hasAudio: z.boolean(),
+  approxBytes: z.number().nonnegative().optional(),
+});
+
+/** What the core learned about a page URL from yt-dlp. */
+export const ProbedMediaSchema = z.object({
+  url: z.string(),
+  title: z.string().optional(),
+  thumbnail: z.string().optional(),
+  durationSec: z.number().nonnegative().optional(),
+  formats: z.array(ProbedFormatSchema),
+});
+
+export type ProbedFormat = z.infer<typeof ProbedFormatSchema>;
+export type ProbedMedia = z.infer<typeof ProbedMediaSchema>;
 
 // Compile-time guarantee that the runtime schemas match the shared domain types.
 type Equals<A, B> =
