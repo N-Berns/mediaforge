@@ -1,6 +1,7 @@
 import { stat } from "node:fs/promises";
 import { render } from "ink";
 import { defaultBinDir } from "../binaries.ts";
+import { applyAutostart } from "../core/autostart.ts";
 import { inspectTools } from "../doctor.ts";
 import { defaultDownloadDeps } from "../download.ts";
 import { defaultOutputDir } from "../engine/index.ts";
@@ -49,6 +50,7 @@ export function realDeps(): AppDeps {
     configPath: settingsPath(process.env),
     target: `${process.platform}-${process.arch}`,
     defaultOutputDir: defaultOutputDir(),
+    applyAutostart: (enabled) => applyAutostart(enabled),
     binDir: defaultBinDir(),
     version: VERSION,
   };

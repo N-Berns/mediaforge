@@ -17,6 +17,8 @@ type Choice =
   | "askQuality"
   | "sortByType"
   | "concurrency"
+  | "keepRunning"
+  | "extensionUi"
   | "reset"
   | "back";
 type Mode = "menu" | "folder" | "quality" | "concurrency" | "reset";
@@ -42,9 +44,15 @@ export function SettingsScreen({ onBack }: { onBack: () => void }) {
 
   if (!settings) return null;
 
-  const save = async (next: Settings) => {
+  /**
+   * Save `next`. With `syncAutostart`, a successful save also sets the login entry for
+   * `next.keepRunning`, so a core started at login matches the setting.
+   */
+  const save = async (next: Settings, syncAutostart = false) => {
     try {
       await deps.download.settings.save(next);
+      // Never rejects in practice; a failure here must not read as a failed save.
+      if (syncAutostart) await deps.applyAutostart(next.keepRunning).catch(() => {});
       setSettings(next);
       setNote({ tone: "ok", text: "Saved" });
     } catch (error) {
@@ -141,10 +149,15 @@ export function SettingsScreen({ onBack }: { onBack: () => void }) {
             All settings go back to the built-in defaults, and you will be asked each time.
           </Text>
         </Box>
+        <Box marginBottom={1}>
+          <Text color={COLORS.muted}>
+            Background running is turned off too, so MediaForge no longer starts at login.
+          </Text>
+        </Box>
         <Menu<boolean>
           initial={false}
           onBack={() => setMode("menu")}
-          onSelect={(yes) => (yes ? void save({ ...DEFAULT_SETTINGS }) : setMode("menu"))}
+          onSelect={(yes) => (yes ? void save({ ...DEFAULT_SETTINGS }, true) : setMode("menu"))}
           items={[
             { value: false, icon: ICONS.back, label: "No, keep my settings" },
             { value: true, icon: ICONS.retry, label: "Yes, reset" },
@@ -179,6 +192,13 @@ export function SettingsScreen({ onBack }: { onBack: () => void }) {
             void save({ ...settings, askQuality: !settings.askQuality });
           } else if (choice === "sortByType") {
             void save({ ...settings, sortByType: !settings.sortByType });
+          } else if (choice === "keepRunning") {
+            void save({ ...settings, keepRunning: !settings.keepRunning }, true);
+          } else if (choice === "extensionUi") {
+            void save({
+              ...settings,
+              extensionUi: settings.extensionUi === "overlay" ? "popup" : "overlay",
+            });
           } else setMode(choice);
         }}
         items={[
@@ -207,6 +227,18 @@ export function SettingsScreen({ onBack }: { onBack: () => void }) {
             icon: ICONS.download,
             label: "Downloads at once",
             hint: `${settings.concurrency} (when you give several links)`,
+          },
+          {
+            value: "keepRunning",
+            icon: ICONS.settings,
+            label: "Keep running in the background",
+            hint: `${settings.keepRunning ? ICONS.on : ICONS.off} ${settings.keepRunning ? "Yes, start at login" : "No, start when the browser needs it"}`,
+          },
+          {
+            value: "extensionUi",
+            icon: ICONS.video,
+            label: "Download button on videos",
+            hint: `${settings.extensionUi === "overlay" ? ICONS.on : ICONS.off} ${settings.extensionUi === "overlay" ? "Yes (browser extension)" : "No, toolbar popup only"}`,
           },
           { value: "reset", icon: ICONS.retry, label: "Reset to built-in defaults" },
           { value: "back", icon: ICONS.back, label: "Back" },

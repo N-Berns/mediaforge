@@ -35,6 +35,8 @@ export interface AppDeps {
   target: string;
   /** Where downloads go unless settings or the user say otherwise. */
   defaultOutputDir: string;
+  /** Start the background core at login, or stop doing so. Never rejects. */
+  applyAutostart: (enabled: boolean) => Promise<void>;
   /** Where bundled tools are looked up, for "how to fix" messages. */
   binDir: string;
   version: string;

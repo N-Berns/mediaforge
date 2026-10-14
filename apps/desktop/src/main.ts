@@ -1,8 +1,12 @@
-import { run } from "./cli.ts";
+import { isRelayInvocation, run } from "./cli.ts";
 import { cleanupAfterUpdate } from "./self-update.ts";
 
+// The core and the relay are started in the background, the relay by the browser on every launch.
+// They must stay fast and silent, so they skip the update cleanup and leave stdout alone.
+const background = process.argv[2] === "--core" || isRelayInvocation(process.argv[2]);
+
 // Remove the old program an update left beside this one. Best effort, never blocks.
-void cleanupAfterUpdate();
+if (!background) void cleanupAfterUpdate();
 
 const inTerminal = Boolean(process.stdin.isTTY && process.stdout.isTTY);
 
@@ -17,5 +21,11 @@ process.exitCode = await run(
     interactive: inTerminal
       ? async () => (await import("./interactive/start.tsx")).startInteractive()
       : undefined,
+    core: async () => (await import("./core/run-core.ts")).runDefaultCore(),
+    relay: async () => (await import("./core/relay.ts")).runDefaultRelay(),
   },
 );
+
+// The background modes can leave pipes and timers open (the core may even return at once after
+// relaunching itself hidden). Leave explicitly so nothing keeps the process alive.
+if (background) process.exit(process.exitCode);

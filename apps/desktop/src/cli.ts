@@ -24,11 +24,37 @@ export function helpText(): string {
 export interface RunOptions {
   /** Opens the interactive menu. Provided only when running in a real terminal. */
   interactive?: () => Promise<number>;
+  /** The long-lived background core (`--core`). */
+  core?: () => Promise<number>;
+  /** The browser native-messaging relay (`--native-host`). */
+  relay?: () => Promise<number>;
 }
+
+/**
+ * Chrome cannot pass flags to a native host on Windows; it passes the extension origin as the
+ * first argument instead.
+ */
+export const isRelayInvocation = (first: string | undefined): boolean =>
+  first === "--native-host" || /^(chrome|moz)-extension:\/\//.test(first ?? "");
 
 /** Run the CLI and return the process exit code. Never throws. */
 export async function run(argv: string[], io: Io, options: RunOptions = {}): Promise<number> {
   const [first, ...rest] = argv;
+
+  // Background modes are not commands: they stay out of the help text and COMMANDS.
+  if (first === "--core" || isRelayInvocation(first)) {
+    const mode = first === "--core" ? options.core : options.relay;
+    if (!mode) {
+      io.stderr(`${first} is not available here.\n`);
+      return ExitCode.Usage;
+    }
+    try {
+      return await mode();
+    } catch (error) {
+      io.stderr(`Unexpected error: ${error instanceof Error ? error.message : String(error)}\n`);
+      return ExitCode.Failure;
+    }
+  }
 
   if (first === "-h" || first === "--help") {
     io.stdout(helpText());

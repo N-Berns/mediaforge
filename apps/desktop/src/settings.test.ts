@@ -55,6 +55,8 @@ describe("sanitizeSettings", () => {
         askQuality: false,
         sortByType: false,
         concurrency: 3,
+        keepRunning: true,
+        extensionUi: "popup",
       }),
     ).toEqual({
       folder: "/x",
@@ -63,6 +65,8 @@ describe("sanitizeSettings", () => {
       askQuality: false,
       sortByType: false,
       concurrency: 3,
+      keepRunning: true,
+      extensionUi: "popup",
     });
   });
 
@@ -99,6 +103,8 @@ describe("fileSettingsStore", () => {
       askQuality: true,
       sortByType: false,
       concurrency: 3,
+      keepRunning: true,
+      extensionUi: "popup",
     });
 
     expect(dirs).toEqual(["cfg"]);
@@ -110,6 +116,8 @@ describe("fileSettingsStore", () => {
       askQuality: true,
       sortByType: false,
       concurrency: 3,
+      keepRunning: true,
+      extensionUi: "popup",
     });
     expect(await store.load()).toEqual({
       folder: "/music",
@@ -118,6 +126,8 @@ describe("fileSettingsStore", () => {
       askQuality: true,
       sortByType: false,
       concurrency: 3,
+      keepRunning: true,
+      extensionUi: "popup",
     });
   });
 });

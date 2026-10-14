@@ -221,6 +221,9 @@ importers:
       '@mediaforge/media-profiles':
         specifier: workspace:*
         version: link:../../packages/media-profiles
+      '@mediaforge/shared-protocol':
+        specifier: workspace:*
+        version: link:../../packages/shared-protocol
       '@mediaforge/shared-types':
         specifier: workspace:*
         version: link:../../packages/shared-types

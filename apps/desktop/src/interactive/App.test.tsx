@@ -1,6 +1,6 @@
 import { type Tool, ToolInstallError } from "@mediaforge/binary-resolver";
 import { render } from "ink-testing-library";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { DownloadDeps } from "../download.ts";
 import { DownloadEngine, type EngineFs } from "../engine/index.ts";
 import type { ProcessRunner } from "../engine/process.ts";
@@ -93,6 +93,8 @@ function setup(options: Options = {}) {
   const missing = new Set<Tool>(options.missing ?? []);
   const installed: Tool[] = [];
   const updated: string[] = [];
+  /** Each value the Run key was set for. */
+  const autostart: boolean[] = [];
   const deps: AppDeps = {
     download,
     fetchInfo: options.info ?? (async () => INFO),
@@ -150,9 +152,10 @@ function setup(options: Options = {}) {
     defaultOutputDir: "/downloads",
     binDir: "/app/bin",
     version: "9.9.9",
+    applyAutostart: async (enabled) => void autostart.push(enabled),
   };
   const app = render(<App deps={deps} />);
-  return { app, deps, store, seenArgs, opened, engineOptions, installed, updated };
+  return { app, deps, store, seenArgs, opened, engineOptions, installed, updated, autostart };
 }
 
 type TestApp = ReturnType<typeof setup>["app"];
@@ -646,14 +649,48 @@ describe("settings", () => {
     t.app.unmount();
   });
 
+  it("turns background running on and off", async () => {
+    const t = await openSettings();
+    await moveTo(t.app, "Keep running in the background");
+    await press(t.app, KEY.enter);
+    await waitFor(t.app, "Saved");
+    expect((await t.store.load()).keepRunning).toBe(true);
+    expect(t.autostart).toEqual([true]);
+
+    await press(t.app, KEY.enter);
+    await vi.waitFor(() => expect(t.autostart).toEqual([true, false]));
+    expect((await t.store.load()).keepRunning).toBe(false);
+    t.app.unmount();
+  });
+
+  it("leaves the login entry alone when another setting changes", async () => {
+    const t = await openSettings();
+    await moveTo(t.app, "Sort into folders by type");
+    await press(t.app, KEY.enter);
+    await waitFor(t.app, "Saved");
+    expect(t.autostart).toEqual([]);
+    t.app.unmount();
+  });
+
+  it("switches the browser button between popup and overlay", async () => {
+    const t = await openSettings();
+    await moveTo(t.app, "Download button on videos");
+    await press(t.app, KEY.enter);
+    await waitFor(t.app, "Saved");
+    expect((await t.store.load()).extensionUi).toBe("popup");
+    t.app.unmount();
+  });
+
   it("resets only after confirmation", async () => {
     const t = await openSettings({ settings: { folder: "/x", askQuality: false } });
     await moveTo(t.app, "Reset to built-in defaults");
     await press(t.app, KEY.enter);
     await waitFor(t.app, "Reset all settings?");
+    expect(t.app.lastFrame()).toContain("Background running is turned off");
     await press(t.app, KEY.enter);
     await waitFor(t.app, "Default download folder");
     expect((await t.store.load()).folder).toBe("/x");
+    expect(t.autostart).toEqual([]);
 
     await moveTo(t.app, "Reset to built-in defaults");
     await press(t.app, KEY.enter);
@@ -665,7 +702,10 @@ describe("settings", () => {
       askQuality: true,
       sortByType: true,
       concurrency: 2,
+      keepRunning: false,
+      extensionUi: "overlay",
     });
+    expect(t.autostart).toEqual([false]);
     t.app.unmount();
   });
 

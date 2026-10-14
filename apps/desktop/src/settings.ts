@@ -16,6 +16,10 @@ export interface Settings {
   sortByType: boolean;
   /** How many links download at the same time when several are given (1 to 4). */
   concurrency: number;
+  /** Keep the background core running with no idle exit, and start it at login. */
+  keepRunning: boolean;
+  /** Browser extension surface: toolbar popup only, or popup plus a button on videos. */
+  extensionUi: "popup" | "overlay";
 }
 
 export const MAX_CONCURRENCY = 4;
@@ -25,6 +29,8 @@ export const DEFAULT_SETTINGS: Settings = {
   askQuality: true,
   sortByType: true,
   concurrency: 2,
+  keepRunning: false,
+  extensionUi: "overlay",
 };
 
 /** Per-user config file location for each OS. */
@@ -52,6 +58,11 @@ export function sanitizeSettings(raw: unknown): Settings {
       (o.concurrency as number) <= MAX_CONCURRENCY
         ? (o.concurrency as number)
         : DEFAULT_SETTINGS.concurrency,
+    keepRunning: typeof o.keepRunning === "boolean" ? o.keepRunning : DEFAULT_SETTINGS.keepRunning,
+    extensionUi:
+      o.extensionUi === "popup" || o.extensionUi === "overlay"
+        ? o.extensionUi
+        : DEFAULT_SETTINGS.extensionUi,
   };
   if (typeof o.folder === "string" && o.folder.trim()) settings.folder = o.folder.trim();
   if (typeof o.quality === "string" && getProfile(o.quality)) settings.quality = o.quality;
