@@ -1,3 +1,4 @@
+import { NATIVE_HOST_NAME } from "@mediaforge/shared-protocol";
 import { COMMANDS, type Io } from "./commands.ts";
 import { CliError, ExitCode } from "./exit-codes.ts";
 import { errorTip } from "./sites.ts";
@@ -37,12 +38,26 @@ export interface RunOptions {
 export const isRelayInvocation = (first: string | undefined): boolean =>
   first === "--native-host" || /^(chrome|moz)-extension:\/\//.test(first ?? "");
 
+const HOST_MANIFEST_FILE = `${NATIVE_HOST_NAME}.json`.toLowerCase();
+
+/**
+ * True when the browser started this program as its native messaging host. Chrome passes the
+ * extension origin; Firefox passes the host manifest path and then the add-on id.
+ */
+export function isRelayArgv(argv: string[]): boolean {
+  const [first, second] = argv;
+  if (isRelayInvocation(first)) return true;
+  if (typeof first !== "string" || typeof second !== "string") return false;
+  const base = first.split(/[\\/]/).pop()?.toLowerCase();
+  return base === HOST_MANIFEST_FILE;
+}
+
 /** Run the CLI and return the process exit code. Never throws. */
 export async function run(argv: string[], io: Io, options: RunOptions = {}): Promise<number> {
   const [first, ...rest] = argv;
 
   // Background modes are not commands: they stay out of the help text and COMMANDS.
-  if (first === "--core" || isRelayInvocation(first)) {
+  if (first === "--core" || isRelayArgv(argv)) {
     const mode = first === "--core" ? options.core : options.relay;
     if (!mode) {
       io.stderr(`${first} is not available here.\n`);

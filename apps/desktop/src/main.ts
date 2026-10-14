@@ -1,9 +1,9 @@
-import { isRelayInvocation, run } from "./cli.ts";
+import { isRelayArgv, run } from "./cli.ts";
 import { cleanupAfterUpdate } from "./self-update.ts";
 
 // The core and the relay are started in the background, the relay by the browser on every launch.
 // They must stay fast and silent, so they skip the update cleanup and leave stdout alone.
-const background = process.argv[2] === "--core" || isRelayInvocation(process.argv[2]);
+const background = process.argv[2] === "--core" || isRelayArgv(process.argv.slice(2));
 
 // Remove the old program an update left beside this one. Best effort, never blocks.
 if (!background) void cleanupAfterUpdate();

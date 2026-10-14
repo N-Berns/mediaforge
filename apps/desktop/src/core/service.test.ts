@@ -46,8 +46,9 @@ function fakeEngine(notify: (job: EngineJob) => void, autoStart: boolean) {
   const jobs = new Map<string, EngineJob>();
   let n = 0;
   const submitted: unknown[] = [];
+  const submitOptions: unknown[] = [];
   const engine = {
-    submit: (request: EngineJob["request"]) => {
+    submit: (request: EngineJob["request"], options?: unknown) => {
       const job: EngineJob = {
         id: `job-${++n}`,
         request,
@@ -58,6 +59,7 @@ function fakeEngine(notify: (job: EngineJob) => void, autoStart: boolean) {
       };
       jobs.set(job.id, job);
       submitted.push(request);
+      submitOptions.push(options);
       notify({ ...job });
       if (autoStart) {
         job.status = "downloading";
@@ -69,7 +71,7 @@ function fakeEngine(notify: (job: EngineJob) => void, autoStart: boolean) {
     list: () => [...jobs.values()],
     get: (id: string) => jobs.get(id),
   };
-  return { engine, jobs, submitted };
+  return { engine, jobs, submitted, submitOptions };
 }
 
 interface SetupOptions {
@@ -77,6 +79,7 @@ interface SetupOptions {
   /** The engine starts each job inside `submit`, as the real one does with free capacity. */
   autoStart?: boolean;
   probeTool?: CoreServiceDeps["probeTool"];
+  probe?: CoreServiceDeps["probe"];
   settings?: Partial<Settings>;
 }
 
@@ -107,6 +110,7 @@ function setup(options: SetupOptions = {}) {
     provisioner,
     version: "9.9.9",
     probeTool: options.probeTool ?? (async () => ({ available: true, version: "1" })),
+    probe: options.probe ?? (async (url) => ({ url, formats: [] })),
     applyAutostart: autostart,
     onActivity,
     now: () => clock,
@@ -641,5 +645,114 @@ describe("jobs and settings", () => {
     const t = setup();
     await t.send("download.cancel", { jobId: "ghost" });
     expect(t.sent[0]).toMatchObject({ type: "error", payload: { code: "unknown-job" } });
+  });
+});
+
+describe("media.probe and variantId", () => {
+  const media = {
+    url: "https://example.com/watch",
+    title: "Clip",
+    formats: [
+      { id: "137", label: "1080p", hasVideo: true, hasAudio: false },
+      { id: "140", label: "Audio 128 kbps", hasVideo: false, hasAudio: true },
+    ],
+  };
+
+  it("replies media.info", async () => {
+    const t = setup({ probe: async () => media });
+    await t.send("media.probe", { url: media.url }, "p1");
+    expect(t.sent[0]).toMatchObject({ id: "p1", type: "media.info", payload: { title: "Clip" } });
+  });
+
+  it("maps an unsupported probe to unsupported-site and a non-http url to invalid-url", async () => {
+    const { UnsupportedSiteError } = await import("./probe.ts");
+    const t = setup({
+      probe: async () => {
+        throw new UnsupportedSiteError("nope");
+      },
+    });
+    await t.send("media.probe", { url: media.url });
+    expect(t.sent[0]).toMatchObject({ type: "error", payload: { code: "unsupported-site" } });
+    t.sent.length = 0;
+    await t.send("media.probe", { url: "ftp://example.com/x" });
+    expect(t.sent[0]).toMatchObject({ type: "error", payload: { code: "invalid-url" } });
+  });
+
+  it("downloads a probed variant with the resolved selector", async () => {
+    const t = setup({ probe: async () => media });
+    await t.send("media.probe", { url: media.url });
+    t.sent.length = 0;
+    await t.send("download.start", {
+      candidate: { ...candidate, url: media.url, pageUrl: media.url },
+      profileId: "best",
+      variantId: "137",
+    });
+    expect(t.fake.submitOptions[0]).toMatchObject({ formatSelector: "137+ba/137" });
+  });
+
+  it("switches an audio-only pick to the audio profile", async () => {
+    const t = setup({ probe: async () => media });
+    await t.send("media.probe", { url: media.url });
+    await t.send("download.start", {
+      candidate: { ...candidate, url: media.url, pageUrl: media.url },
+      profileId: "best",
+      variantId: "140",
+    });
+    expect((t.fake.submitted[0] as { profileId: string }).profileId).toBe("audio-m4a");
+  });
+
+  it("rejects a variantId the core never returned", async () => {
+    const t = setup({ probe: async () => media });
+    await t.send("download.start", {
+      candidate: { ...candidate, url: media.url, pageUrl: media.url },
+      profileId: "best",
+      variantId: "999",
+    });
+    expect(t.sent[0]).toMatchObject({ type: "error", payload: { code: "unknown-variant" } });
+    expect(t.fake.submitted).toHaveLength(0);
+  });
+});
+
+describe("context", () => {
+  it("passes a valid context to the engine, never into the job", async () => {
+    const t = setup();
+    await t.send("download.start", {
+      candidate,
+      profileId: "best",
+      context: { referer: "https://example.com/", cookies: "session=abc123def" },
+    });
+    expect(t.fake.submitOptions[0]).toMatchObject({
+      context: { cookies: "session=abc123def" },
+    });
+    expect(JSON.stringify(t.sent)).not.toContain("abc123def");
+    t.sent.length = 0;
+    await t.send("jobs.list");
+    expect(JSON.stringify(t.sent)).not.toContain("abc123def");
+  });
+
+  it("rejects a context with a line break", async () => {
+    const t = setup();
+    await t.send("download.start", {
+      candidate,
+      profileId: "best",
+      context: { cookies: "a=1\r\nX: y" },
+    });
+    expect(t.sent[0]).toMatchObject({ type: "error", payload: { code: "invalid-context" } });
+    expect(t.fake.submitted).toHaveLength(0);
+  });
+
+  it("never adds the context to progress or failure frames", async () => {
+    const t = setup({ autoStart: true });
+    await t.send("download.start", {
+      candidate,
+      profileId: "best",
+      context: { cookies: "session=abc123def", headers: { "X-Token": "tok-987654" } },
+    });
+    t.update("job-1", { status: "downloading", progress: { bytesDownloaded: 5 } });
+    t.update("job-1", { status: "failed", error: "denied [redacted]" });
+    const text = JSON.stringify(t.sent);
+    expect(text).not.toContain("abc123def");
+    expect(text).not.toContain("tok-987654");
+    expect(t.sent.some((m) => m.type === "download.failed")).toBe(true);
   });
 });

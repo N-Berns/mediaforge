@@ -9,7 +9,99 @@ import { memorySettingsStore, type SettingsStore } from "../settings.ts";
 import { makeRuntime } from "../test-runtime.ts";
 import type { ToolRuntime } from "../tool-runtime.ts";
 import { type Connection, connectCore, listenCore, newToken, readToken, tokenPath } from "./ipc.ts";
-import { type RunCoreDeps, refreshStampPath, runCore, startCoreProcess } from "./run-core.ts";
+import {
+  createPageProbe,
+  PROBE_TIMEOUT_MS,
+  type RunCoreDeps,
+  refreshStampPath,
+  runCore,
+  startCoreProcess,
+} from "./run-core.ts";
+
+describe("createPageProbe", () => {
+  const pageInfo = {
+    title: "Clip",
+    extractor_key: "Youtube",
+    formats: [
+      { format_id: "18", ext: "mp4", width: 640, height: 360, vcodec: "avc1", acodec: "mp4a" },
+    ],
+  };
+  const ready = { ready: async () => ({ state: "ready" as const }) };
+  const resolveTool = async (tool: "yt-dlp" | "ffmpeg" | "deno") => ({
+    tool,
+    path: `/bin/${tool}`,
+    source: "path" as const,
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("waits for setup before resolving yt-dlp", async () => {
+    let finishSetup: () => void = () => {};
+    const setupDone = new Promise<void>((resolve) => {
+      finishSetup = resolve;
+    });
+    const events: string[] = [];
+    const probe = createPageProbe(
+      {
+        ready: async () => {
+          await setupDone;
+          events.push("ready");
+          return { state: "ready" };
+        },
+      },
+      {
+        resolve: async (tool) => {
+          events.push(`resolve ${tool}`);
+          return resolveTool(tool);
+        },
+        run: async (_c, _a, h) => {
+          h.onStdoutLine(JSON.stringify(pageInfo));
+          return { exitCode: 0 };
+        },
+      },
+    );
+    const result = probe("https://example.com/watch");
+    await sleep(5);
+    expect(events).toEqual([]);
+    finishSetup();
+    expect(await result).toMatchObject({ url: "https://example.com/watch", title: "Clip" });
+    expect(events).toEqual(["ready", "resolve yt-dlp"]);
+  });
+
+  it("aborts a probe that hangs past the timeout and frees its slot", async () => {
+    vi.useFakeTimers();
+    const signals: AbortSignal[] = [];
+    let calls = 0;
+    const probe = createPageProbe(ready, {
+      resolve: resolveTool,
+      run: (_c, _a, h, signal) => {
+        calls++;
+        signals.push(signal);
+        // The first two never finish on their own; the third answers.
+        if (calls <= 2) return new Promise(() => {});
+        h.onStdoutLine(JSON.stringify(pageInfo));
+        return Promise.resolve({ exitCode: 0 });
+      },
+    });
+    expect(PROBE_TIMEOUT_MS).toBe(40_000);
+    const first = probe("https://example.com/1");
+    const second = probe("https://example.com/2");
+    const third = probe("https://example.com/3");
+    const firstFailed = expect(first).rejects.toThrow("Checking this page took too long.");
+    const secondFailed = expect(second).rejects.toThrow("Checking this page took too long.");
+    await vi.advanceTimersByTimeAsync(39_999);
+    expect(calls).toBe(2);
+    expect(signals.some((s) => s.aborted)).toBe(false);
+    await vi.advanceTimersByTimeAsync(1);
+    await firstFailed;
+    await secondFailed;
+    expect(signals.slice(0, 2).every((s) => s.aborted)).toBe(true);
+    expect(await third).toMatchObject({ url: "https://example.com/3" });
+    expect(calls).toBe(3);
+  });
+});
 
 const running: { stop: AbortController; exit: Promise<number> }[] = [];
 const clients: Connection[] = [];

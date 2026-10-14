@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { isRelayInvocation, run } from "./cli.ts";
+import { isRelayArgv, isRelayInvocation, run } from "./cli.ts";
 import { ExitCode } from "./exit-codes.ts";
 import { VERSION } from "./version.ts";
 
@@ -169,5 +169,41 @@ describe("isRelayInvocation", () => {
     expect(isRelayInvocation("--core")).toBe(false);
     expect(isRelayInvocation("download")).toBe(false);
     expect(isRelayInvocation("https://chrome-extension://abc")).toBe(false);
+  });
+});
+
+describe("isRelayArgv", () => {
+  const io = { stdout: () => {}, stderr: () => {} };
+
+  it("accepts Chrome, the explicit flag, and Firefox's manifest path plus add-on id", () => {
+    expect(isRelayArgv(["--native-host"])).toBe(true);
+    expect(isRelayArgv(["chrome-extension://abc/", "--parent-window=1"])).toBe(true);
+    expect(
+      isRelayArgv([
+        "C:\\Users\\n\\AppData\\Local\\MediaForge\\com.mediaforge.host.json",
+        "mediaforge@n-berns",
+      ]),
+    ).toBe(true);
+    expect(
+      isRelayArgv(["/home/n/.mozilla/native-messaging-hosts/com.mediaforge.host.json", "id"]),
+    ).toBe(true);
+  });
+
+  it("does not treat ordinary commands or other json files as relay mode", () => {
+    expect(isRelayArgv(["download", "com.mediaforge.host.json"])).toBe(false);
+    expect(isRelayArgv(["settings.json", "x"])).toBe(false);
+    expect(isRelayArgv(["com.mediaforge.host.json"])).toBe(false);
+    expect(isRelayArgv([])).toBe(false);
+  });
+
+  it("run() starts the relay for Firefox's argv", async () => {
+    let called = 0;
+    await run(["C:\\x\\com.mediaforge.host.json", "mediaforge@n-berns"], io, {
+      relay: async () => {
+        called++;
+        return 0;
+      },
+    });
+    expect(called).toBe(1);
   });
 });

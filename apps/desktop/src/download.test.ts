@@ -5,7 +5,7 @@ import type { EngineJob } from "./engine/index.ts";
 import { DownloadEngine, type EngineFs } from "./engine/index.ts";
 import type { ProcessRunner } from "./engine/process.ts";
 import { CliError, ExitCode } from "./exit-codes.ts";
-import { formatFormatsTable, runFormats } from "./formats.ts";
+import { fetchMediaInfo, formatFormatsTable, runFormats } from "./formats.ts";
 import {
   createProgressView,
   formatBytes,
@@ -352,6 +352,21 @@ describe("formats", () => {
         },
       ),
     ).rejects.toMatchObject({ exitCode: ExitCode.UnsupportedSite });
+  });
+
+  it("passes the caller's abort signal to the runner", async () => {
+    const controller = new AbortController();
+    let received: AbortSignal | undefined;
+    await fetchMediaInfo("https://example.com/v", {
+      resolve: found,
+      signal: controller.signal,
+      run: async (_c, _a, h, signal) => {
+        received = signal;
+        h.onStdoutLine(JSON.stringify(info));
+        return { exitCode: 0 };
+      },
+    });
+    expect(received).toBe(controller.signal);
   });
 
   it("makes sure yt-dlp exists before listing formats", async () => {

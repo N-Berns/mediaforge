@@ -37,6 +37,8 @@ export interface MediaInfo {
   channel?: string;
   /** Seconds. */
   duration?: number;
+  /** yt-dlp's extractor name, e.g. "Youtube" or "Generic". */
+  extractor_key?: string;
   formats?: RawFormat[];
 }
 
@@ -85,6 +87,8 @@ export interface FormatsDeps {
   ensureTools?: (tools: Tool[]) => Promise<void>;
   /** Extra yt-dlp flags that enable a JavaScript runtime. Default: none. */
   jsRuntimeArgs?: () => Promise<string[]>;
+  /** Stops yt-dlp when aborted. Default: never aborted. */
+  signal?: AbortSignal;
 }
 
 const defaultFormatsDeps = (): FormatsDeps => ({
@@ -116,7 +120,7 @@ export async function fetchMediaInfo(
       url,
     ],
     { onStdoutLine: (l) => stdout.push(l), onStderrLine: (l) => stderr.push(l) },
-    new AbortController().signal,
+    deps.signal ?? new AbortController().signal,
   );
   if (exitCode !== 0) {
     const failure = classifyFailure(stderr, exitCode);

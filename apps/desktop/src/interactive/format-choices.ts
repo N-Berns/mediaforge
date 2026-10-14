@@ -126,7 +126,7 @@ function toChoices(all: Entry[]): Choice<FormatPick>[] {
  */
 const streamNote = (f: RawFormat) => (f.protocol?.startsWith("m3u8") ? "HLS stream" : "");
 
-function resolutionName(f: RawFormat): string {
+export function resolutionName(f: RawFormat): string {
   const fps = f.fps && f.fps > 30 ? String(f.fps) : "";
   return f.height ? `${f.height}p${fps}` : "Video";
 }

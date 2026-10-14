@@ -233,4 +233,51 @@ describe("DownloadEngine", () => {
     await engine.whenSettled(engine.submit(request()).id);
     expect(seen[seen.indexOf("--js-runtimes") + 1]).toBe("node:/usr/bin/node");
   });
+
+  it("passes the request context to yt-dlp and keeps its secrets out of the job and errors", async () => {
+    const { fs } = fakeFs();
+    let seen: string[] = [];
+    const updates: string[] = [];
+    const engine = new DownloadEngine({
+      resolve: found,
+      fs,
+      onUpdate: (job) => updates.push(JSON.stringify(job)),
+      run: runner(async (h, _s, args) => {
+        seen = args;
+        h.onStderrLine("ERROR: 403 for Cookie: session=abc123def");
+        return 1;
+      }),
+    });
+    const submitted = engine.submit(request(), { context: { cookies: "session=abc123def" } });
+    const job = await engine.whenSettled(submitted.id);
+    expect(job?.status).toBe("failed");
+    expect(job?.error).not.toContain("abc123def");
+    expect(job?.error).toContain("[redacted]");
+    expect(seen).toContain("--add-header");
+    expect(seen).toContain("Cookie:session=abc123def");
+    expect(seen.indexOf("Cookie:session=abc123def")).toBeLessThan(seen.indexOf("--"));
+    const stored = engine.get(submitted.id);
+    expect(stored).not.toHaveProperty("context");
+    expect(JSON.stringify(stored)).not.toContain("abc123def");
+    expect(updates.join("|")).not.toContain("abc123def");
+  });
+
+  it("keeps redacting after earlier jobs with a context have finished", async () => {
+    const { fs } = fakeFs();
+    const engine = new DownloadEngine({
+      resolve: found,
+      fs,
+      maxConcurrent: 1,
+      run: runner(async (h, _s, args) => {
+        const cookie = args.find((a) => a.startsWith("Cookie:")) ?? "";
+        h.onStderrLine(`ERROR: denied ${cookie.slice(7)}`);
+        return 1;
+      }),
+    });
+    const a = engine.submit(request(), { context: { cookies: "session=firstsecret" } });
+    const b = engine.submit(request(), { context: { cookies: "session=secondsecret" } });
+    const [ja, jb] = await Promise.all([engine.whenSettled(a.id), engine.whenSettled(b.id)]);
+    expect(ja?.error).toBe("denied [redacted]");
+    expect(jb?.error).toBe("denied [redacted]");
+  });
 });

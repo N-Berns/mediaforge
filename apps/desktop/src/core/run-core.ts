@@ -3,9 +3,12 @@ import { randomUUID } from "node:crypto";
 import { mkdir, stat, writeFile } from "node:fs/promises";
 import type { Server, Socket } from "node:net";
 import { dirname, join } from "node:path";
-import { resolveTool } from "../binaries.ts";
+import type { ProbedMedia } from "@mediaforge/shared-protocol";
+import { type ResolveTool, resolveTool } from "../binaries.ts";
 import { DownloadEngine, type EngineJob } from "../engine/index.ts";
+import { type ProcessRunner, runProcess } from "../engine/process.ts";
 import { ExitCode } from "../exit-codes.ts";
+import { type FormatsDeps, fetchMediaInfo } from "../formats.ts";
 import { detectJsRuntimeArgs } from "../js-runtime.ts";
 import { DEFAULT_SETTINGS, defaultSettingsStore, type SettingsStore } from "../settings.ts";
 import { defaultToolRuntime, type ToolRuntime, tryResolve } from "../tool-runtime.ts";
@@ -13,6 +16,7 @@ import { VERSION } from "../version.ts";
 import { applyAutostart, coreSpawnCommand } from "./autostart.ts";
 import { IdleMonitor } from "./idle.ts";
 import { type Connection, listenCore, newToken, pipePath, tokenPath, writeToken } from "./ipc.ts";
+import { createProbeLimiter, toProbedMedia } from "./probe.ts";
 import { type Provisioner, startProvisioning } from "./provisioner.ts";
 import { type ClientHandle, CoreService } from "./service.ts";
 
@@ -33,6 +37,8 @@ export interface RunCoreDeps {
     provisioner: Provisioner,
     options: { maxConcurrent: number },
   ) => DownloadEngine;
+  /** Builds the page prober. Absent in tests that never probe. */
+  createProbe?: (provisioner: Provisioner) => (url: string) => Promise<ProbedMedia>;
   version: string;
   idleGraceMs: number;
   /** How often to re-check idleness, so turning `keepRunning` off is noticed. */
@@ -180,6 +186,11 @@ export async function runCore(deps: RunCoreDeps): Promise<number> {
           ? { available: true, ...(found.version && { version: found.version }) }
           : { available: false };
       },
+      probe:
+        deps.createProbe?.(setup) ??
+        (async () => {
+          throw new Error("Probing is not available.");
+        }),
       applyAutostart: syncAutostart,
       onActivity: check,
       now: () => Date.now(),
@@ -300,6 +311,60 @@ export async function runCore(deps: RunCoreDeps): Promise<number> {
   });
 }
 
+/** Longest one page probe may run; yt-dlp can hang on a slow or hostile site. */
+export const PROBE_TIMEOUT_MS = 40_000;
+/** Probes allowed to run at once. */
+const MAX_PROBES = 2;
+
+export interface PageProbeDeps {
+  resolve: ResolveTool;
+  run: ProcessRunner;
+  jsRuntimeArgs?: () => Promise<string[]>;
+  /** Default `PROBE_TIMEOUT_MS`. */
+  timeoutMs?: number;
+}
+
+/**
+ * The core's page prober: waits for first-run setup, runs at most two yt-dlp probes at once, and
+ * stops one that runs past the timeout so it cannot hold its slot forever.
+ */
+export function createPageProbe(
+  provisioner: Pick<Provisioner, "ready">,
+  deps: PageProbeDeps,
+): (url: string) => Promise<ProbedMedia> {
+  const limit = createProbeLimiter(MAX_PROBES);
+  const timeoutMs = deps.timeoutMs ?? PROBE_TIMEOUT_MS;
+  const resolve: ResolveTool = async (tool) => {
+    await provisioner.ready();
+    return deps.resolve(tool);
+  };
+  return (url) =>
+    limit(async () => {
+      const abort = new AbortController();
+      const formats: FormatsDeps = {
+        resolve,
+        run: deps.run,
+        ...(deps.jsRuntimeArgs && { jsRuntimeArgs: deps.jsRuntimeArgs }),
+        signal: abort.signal,
+      };
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      const timedOut = new Promise<never>((_, reject) => {
+        timer = setTimeout(() => {
+          abort.abort();
+          reject(new Error("Checking this page took too long."));
+        }, timeoutMs);
+      });
+      const work = fetchMediaInfo(url, formats).then((info) => toProbedMedia(url, info));
+      // Settles at the timeout even if the runner ignores the abort, which frees the slot.
+      work.catch(() => {});
+      try {
+        return await Promise.race([work, timedOut]);
+      } finally {
+        clearTimeout(timer);
+      }
+    });
+}
+
 /** Set in the environment of the hidden copy, so it never starts another one. */
 export const CORE_CHILD_ENV = "MEDIAFORGE_CORE_CHILD";
 
@@ -376,6 +441,12 @@ export function runDefaultCore(): Promise<number> {
               await provisioner.ready();
               return resolveTool(tool);
             },
+          }),
+        createProbe: (provisioner) =>
+          createPageProbe(provisioner, {
+            resolve: resolveTool,
+            run: runProcess,
+            jsRuntimeArgs: detectJsRuntimeArgs,
           }),
         version: VERSION,
         idleGraceMs: 60_000,

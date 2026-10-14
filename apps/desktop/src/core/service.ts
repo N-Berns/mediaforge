@@ -4,14 +4,18 @@ import {
   type ExtensionToHostMessage,
   type HostToExtensionMessage,
   PROTOCOL_VERSION,
+  type ProbedMedia,
   parseExtensionMessage,
 } from "@mediaforge/shared-protocol";
 import type { DownloadJob } from "@mediaforge/shared-types";
+import { contextError } from "../engine/args.ts";
 import type { DownloadEngine, EngineJob } from "../engine/index.ts";
 import { defaultOutputDir } from "../engine/paths.ts";
+import { CliError, ExitCode } from "../exit-codes.ts";
 import { kindOfProfile, withKindFolder } from "../kind-folder.ts";
 import { type SettingsStore, sanitizeSettings } from "../settings.ts";
 import { filenameError, folderSettingError, outputDirError } from "./path-rules.ts";
+import { type KnownFormat, selectorFor, UnsupportedSiteError } from "./probe.ts";
 import type { Provisioner, SetupStatus } from "./provisioner.ts";
 
 export interface ServiceClient {
@@ -30,6 +34,8 @@ export interface CoreServiceDeps {
   provisioner: Provisioner;
   version: string;
   probeTool(tool: "yt-dlp" | "ffmpeg"): Promise<{ available: boolean; version?: string }>;
+  /** Lists the formats of one page. Never prompts; rejects when the page cannot be probed. */
+  probe(url: string): Promise<ProbedMedia>;
   applyAutostart(enabled: boolean): Promise<void>;
   /** Called after every client or job change, so the idle monitor can re-check. */
   onActivity(): void;
@@ -59,6 +65,8 @@ const SNAPSHOT_LIMIT = 200;
 const SNAPSHOT_MAX_BYTES = 900_000;
 /** Longest error text sent back for an invalid message; zod issue lists can run to many KiB. */
 const MAX_ERROR_TEXT = 1000;
+/** Probed pages whose format ids are remembered, so a `variantId` can be checked. */
+const MAX_PROBED_URLS = 64;
 const TERMINAL = new Set(["completed", "failed", "cancelled"]);
 
 const encoder = new TextEncoder();
@@ -78,12 +86,25 @@ const toProtocolJob = (job: EngineJob): DownloadJob => ({
   updatedAt: job.updatedAt,
 });
 
+function describeProbeError(error: unknown): { code: string; text: string } {
+  const text = (error instanceof Error ? error.message : String(error)).slice(0, 500);
+  if (error instanceof UnsupportedSiteError) return { code: "unsupported-site", text };
+  if (error instanceof CliError) {
+    if (error.exitCode === ExitCode.UnsupportedSite) return { code: "unsupported-site", text };
+    if (error.exitCode === ExitCode.MissingTool) return { code: "setup-incomplete", text };
+    if (error.exitCode === ExitCode.Network) return { code: "network", text };
+  }
+  return { code: "probe-failed", text };
+}
+
 export class CoreService {
   readonly #deps: CoreServiceDeps;
   readonly #engine: DownloadEngine;
   readonly #clients = new Set<ClientState>();
   /** When and with which status each job's progress was last passed on, for throttling. */
   readonly #lastProgress = new Map<string, { at: number; status: EngineJob["status"] }>();
+  /** Format ids returned by `media.probe`, per page url, oldest first. */
+  readonly #formats = new Map<string, Map<string, KnownFormat>>();
   /** The last setup frame passed on, for throttling download progress per tool and phase. */
   #lastSetup:
     | { at: number; state: SetupStatus["state"]; tool?: string; phase?: string }
@@ -190,6 +211,8 @@ export class CoreService {
         return this.#sendSettings(state, message.id);
       case "settings.set":
         return this.#setSettings(state, message);
+      case "media.probe":
+        return this.#probe(state, message);
       default: {
         // Compile-time: adding a message type without a case fails here. Runtime: say so.
         const unhandled: never = message;
@@ -230,6 +253,43 @@ export class CoreService {
     return newest.slice(dropped);
   }
 
+  async #probe(
+    state: ClientState,
+    message: Extract<ExtensionToHostMessage, { type: "media.probe" }>,
+  ): Promise<void> {
+    const url = message.payload.url;
+    if (!/^https?:\/\//i.test(url)) {
+      this.#error(state, message.id, "invalid-url", "Only http and https links can be probed.");
+      return;
+    }
+    try {
+      const media = await this.#deps.probe(url);
+      this.#remember(url, media);
+      this.#reply(state, message.id, "media.info", media);
+    } catch (error) {
+      const { code, text } = describeProbeError(error);
+      this.#error(state, message.id, code, text);
+    }
+  }
+
+  #remember(url: string, media: ProbedMedia): void {
+    this.#formats.delete(url);
+    this.#formats.set(
+      url,
+      new Map(
+        media.formats.map((f) => [
+          f.id,
+          { id: f.id, hasVideo: f.hasVideo, hasAudio: f.hasAudio } satisfies KnownFormat,
+        ]),
+      ),
+    );
+    while (this.#formats.size > MAX_PROBED_URLS) {
+      const oldest = this.#formats.keys().next().value;
+      if (oldest === undefined) break;
+      this.#formats.delete(oldest);
+    }
+  }
+
   async #hello(state: ClientState, id: string): Promise<void> {
     // A probe that fails must not cost the client its handshake: report the tool as missing.
     const probe = async (tool: "yt-dlp" | "ffmpeg") => {
@@ -257,9 +317,8 @@ export class CoreService {
     state: ClientState,
     message: Extract<ExtensionToHostMessage, { type: "download.start" }>,
   ): Promise<void> {
-    const { context: _context, outputDir: requestedDir, ...request } = message.payload;
-    const profile = getProfile(request.profileId);
-    if (!profile) {
+    const { context, outputDir: requestedDir, ...request } = message.payload;
+    if (!getProfile(request.profileId)) {
       this.#error(state, message.id, "unknown-profile", `Unknown profile: ${request.profileId}`);
       return;
     }
@@ -267,6 +326,33 @@ export class CoreService {
     const nameProblem = request.filename ? filenameError(request.filename) : undefined;
     if (nameProblem) {
       this.#error(state, message.id, "invalid-filename", nameProblem);
+      return;
+    }
+    const contextProblem = context ? contextError(context) : undefined;
+    if (contextProblem) {
+      this.#error(state, message.id, "invalid-context", contextProblem);
+      return;
+    }
+    let formatSelector: string | undefined;
+    let profileId = request.profileId;
+    if (request.variantId !== undefined) {
+      const known = this.#formats.get(request.candidate.url)?.get(request.variantId);
+      if (!known) {
+        this.#error(
+          state,
+          message.id,
+          "unknown-variant",
+          "That format was not offered for this link.",
+        );
+        return;
+      }
+      formatSelector = selectorFor(known);
+      if (known.hasAudio && !known.hasVideo) profileId = "audio-m4a";
+    }
+    // The sort folder follows the profile actually used, which a variant may have changed.
+    const profile = getProfile(profileId);
+    if (!profile) {
+      this.#error(state, message.id, "unknown-profile", `Unknown profile: ${profileId}`);
       return;
     }
     const settings = await this.#deps.settings.load();
@@ -288,10 +374,10 @@ export class CoreService {
     const outputDir = settings.sortByType
       ? withKindFolder(base || defaultOutputDir(), kindOfProfile(profile), true)
       : base;
-    const job = this.#engine.submit({
-      ...request,
-      ...(outputDir && { outputDir }),
-    });
+    const job = this.#engine.submit(
+      { ...request, profileId, ...(outputDir && { outputDir }) },
+      { ...(formatSelector && { formatSelector }), ...(context && { context }) },
+    );
     state.jobs.add(job.id);
     // The engine reports the job from inside `submit`, before this client owns it, and may have
     // started it already. Answer with where the job is now; later changes arrive via #onJob.
@@ -303,6 +389,7 @@ export class CoreService {
     this.#reply(state, id, "settings.value", {
       extensionUi: s.extensionUi,
       keepRunning: s.keepRunning,
+      askQuality: s.askQuality,
       ...(s.folder && { folder: s.folder }),
       ...(s.quality && { quality: s.quality }),
     });

@@ -5,7 +5,7 @@ import { getProfile } from "@mediaforge/media-profiles";
 import type { DownloadJob, DownloadRequest, OutputProfile } from "@mediaforge/shared-types";
 import { type ResolveTool, requireTool, resolveTool } from "../binaries.ts";
 import { CliError, ExitCode } from "../exit-codes.ts";
-import { buildYtDlpArgs } from "./args.ts";
+import { buildYtDlpArgs, contextSecrets, type RequestContext, redactSecrets } from "./args.ts";
 import { defaultOutputDir, fileExists, splitName, uniquePath } from "./paths.ts";
 import { type ProcessRunner, runProcess } from "./process.ts";
 import {
@@ -77,6 +77,8 @@ interface Entry {
   settle: (job: EngineJob) => void;
   formatSelector: string | undefined;
   plan: PlannedStep[] | undefined;
+  /** Never copied onto the job: it carries cookies and headers. */
+  context: RequestContext | undefined;
 }
 
 export interface SubmitOptions {
@@ -84,6 +86,8 @@ export interface SubmitOptions {
   formatSelector?: string;
   /** Steps expected for the chosen format, so they can be shown before they start. */
   plan?: PlannedStep[];
+  /** Referer, user agent, cookies and headers; kept off the job and redacted from errors. */
+  context?: RequestContext;
 }
 
 const TERMINAL = new Set(["completed", "failed", "cancelled"]);
@@ -136,6 +140,7 @@ export class DownloadEngine {
       settle,
       formatSelector: options.formatSelector,
       plan: options.plan,
+      context: options.context,
     });
     this.#queue.push(job.id);
     this.#onUpdate?.({ ...job });
@@ -191,6 +196,8 @@ export class DownloadEngine {
 
   #finish(entry: Entry, patch: Partial<EngineJob>): void {
     this.#update(entry, patch);
+    // The secrets are no longer needed once the final state is out.
+    entry.context = undefined;
     entry.settle({ ...entry.job });
   }
 
@@ -215,6 +222,7 @@ export class DownloadEngine {
     const profile = getProfile(job.request.profileId) as OutputProfile;
     const outputDir = resolve(job.request.outputDir ?? this.#outputDir);
     const workDir = join(outputDir, `.mediaforge-${job.id}`);
+    const secrets = contextSecrets(entry.context);
     let outcome: Partial<EngineJob>;
 
     this.#update(entry, { status: "downloading" });
@@ -277,6 +285,7 @@ export class DownloadEngine {
           formatSelector: entry.formatSelector,
           ffmpegProgressFile: progressFile,
           jsRuntimeArgs,
+          context: entry.context,
         }),
         {
           onStdoutLine: onLine,
@@ -300,14 +309,18 @@ export class DownloadEngine {
         outcome = { status: "completed", outputPath: finalPath, ...stepsPatch() };
       } else {
         const failure = classifyFailure(stderr, exitCode);
-        outcome = { status: "failed", error: failure.message, errorKind: failure.exitCode };
+        outcome = {
+          status: "failed",
+          error: redactSecrets(failure.message, secrets),
+          errorKind: failure.exitCode,
+        };
       }
     } catch (error) {
       outcome = controller.signal.aborted
         ? { status: "cancelled" }
         : {
             status: "failed",
-            error: error instanceof Error ? error.message : String(error),
+            error: redactSecrets(error instanceof Error ? error.message : String(error), secrets),
             errorKind: error instanceof CliError ? error.exitCode : ExitCode.Failure,
           };
     }
