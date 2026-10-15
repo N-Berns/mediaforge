@@ -27,6 +27,11 @@ await build({
 await copyFile("src/popup/popup.html", `${out}/popup.html`);
 await copyFile("src/popup/popup.css", `${out}/popup.css`);
 
+await mkdir(`${out}/icons`, { recursive: true });
+for (const size of [16, 32, 48, 128]) {
+  await copyFile(`../../assets/brand/png/icon-${size}.png`, `${out}/icons/icon-${size}.png`);
+}
+
 // The manifest is built from the TypeScript source so tests and the build share one definition.
 const { buildManifest } = await import("./src/manifest.ts");
 const pkg = JSON.parse(await readFile("package.json", "utf8"));

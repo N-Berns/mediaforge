@@ -40,6 +40,16 @@ export interface MediaInfo {
   /** yt-dlp's extractor name, e.g. "Youtube" or "Generic". */
   extractor_key?: string;
   formats?: RawFormat[];
+  /** Uploaded subtitles: language -> files in each format. */
+  subtitles?: Record<string, RawSubtitle[]>;
+  /** Machine-generated captions, including YouTube's auto-translations. */
+  automatic_captions?: Record<string, RawSubtitle[]>;
+}
+
+export interface RawSubtitle {
+  ext?: string;
+  url?: string;
+  name?: string;
 }
 
 /** "avc1.640028" -> "avc1"; "none" or missing -> "-". */

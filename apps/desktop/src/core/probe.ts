@@ -1,5 +1,5 @@
-import type { ProbedFormat, ProbedMedia } from "@mediaforge/shared-protocol";
-import type { MediaInfo, RawFormat } from "../formats.ts";
+import type { ProbedFormat, ProbedMedia, ProbedSubtitle } from "@mediaforge/shared-protocol";
+import type { MediaInfo, RawFormat, RawSubtitle } from "../formats.ts";
 import {
   isAudio,
   isVideo,
@@ -41,6 +41,42 @@ function toFormat(f: RawFormat, duration: number | undefined): ProbedFormat {
   };
 }
 
+/** Most tracks offered, to keep `media.info` small. */
+export const MAX_SUBTITLES = 60;
+
+/** Live-chat "subtitles" are not captions. */
+const NOT_CAPTIONS = new Set(["live_chat"]);
+
+/**
+ * YouTube lists every language as an auto-translation of the spoken one; those entries carry a
+ * `tlang=` parameter. Only tracks with an untranslated file are real captions.
+ */
+const isTranslation = (files: RawSubtitle[]): boolean =>
+  files.length > 0 && files.every((file) => /[?&]tlang=/.test(file.url ?? ""));
+
+function subtitlesOf(info: MediaInfo): ProbedSubtitle[] {
+  const out: ProbedSubtitle[] = [];
+  const manual = new Set<string>();
+  const add = (table: Record<string, RawSubtitle[]> | undefined, auto: boolean) => {
+    for (const [lang, files] of Object.entries(table ?? {})) {
+      if (NOT_CAPTIONS.has(lang) || !Array.isArray(files)) continue;
+      // An auto track is dropped when it is a translation, or a human track already covers it.
+      if (auto && (isTranslation(files) || manual.has(lang))) continue;
+      if (!auto) manual.add(lang);
+      const name = files.find((f) => f.name)?.name;
+      out.push({ lang, auto, ...(name && { name }) });
+    }
+  };
+  add(info.subtitles, false);
+  add(info.automatic_captions, true);
+  // YouTube lists the spoken language twice, as `en` and `en-orig`: the same track.
+  const langs = new Set(out.map((t) => t.lang));
+  const unique = out.filter(
+    (t) => !(t.auto && t.lang.endsWith("-orig") && langs.has(t.lang.slice(0, -5))),
+  );
+  return unique.slice(0, MAX_SUBTITLES);
+}
+
 /** Turn yt-dlp's JSON into the `media.info` payload. Best format first. */
 export function toProbedMedia(url: string, info: MediaInfo): ProbedMedia {
   if (info.extractor_key === "Generic") {
@@ -57,11 +93,14 @@ export function toProbedMedia(url: string, info: MediaInfo): ProbedMedia {
     formats.push(format);
     if (formats.length === MAX_FORMATS) break;
   }
+  const subtitles = subtitlesOf(info);
   return {
     url,
     ...(info.title && { title: info.title }),
     ...(info.duration !== undefined && { durationSec: info.duration }),
     formats,
+    // Always present from a host that can save subtitles, so an absent list means an older host.
+    subtitles,
   };
 }
 

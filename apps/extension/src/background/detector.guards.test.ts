@@ -24,14 +24,12 @@ const d = (url: string, contentType?: string) => ({
 });
 
 describe("detector guards", () => {
-  it("treats a rejecting getTab as no tab", async () => {
+  it("treats a rejecting getTab as no tab and uses the response URL as the page", async () => {
     const { store, detector } = setup(async () => {
       throw new Error("No tab with id 1");
     });
-    await expect(
-      detector.handle(d("https://cdn.test/v.mp4", "video/mp4")),
-    ).resolves.toBeUndefined();
-    expect(await store.list(1)).toEqual([]);
+    await expect(detector.handle(d("https://cdn.test/v.mp4", "video/mp4"))).resolves.toBe(true);
+    expect((await store.list(1)).map((c) => c.pageUrl)).toEqual(["https://cdn.test/v.mp4"]);
   });
 
   it("rejects explicit non-media content types even for media-looking URLs", async () => {
@@ -72,11 +70,11 @@ describe("detector guards", () => {
     expect(await store.list(1)).toEqual([]);
   });
 
-  it("skips non-http tabs", async () => {
+  it("falls back to the response URL when the tab is not http(s)", async () => {
     for (const url of ["about:blank", "moz-extension://abc/page.html", "chrome://x"]) {
       const { store, detector } = setup(async () => ({ url, title: "x" }));
       await detector.handle(d("https://cdn.test/v.mp4", "video/mp4"));
-      expect(await store.list(1)).toEqual([]);
+      expect((await store.list(1)).map((c) => c.pageUrl)).toEqual(["https://cdn.test/v.mp4"]);
     }
   });
 });

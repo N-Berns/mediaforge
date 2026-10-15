@@ -461,6 +461,19 @@ describe("openCommand", () => {
     });
     expect(openCommand("/a/c.mp4", "linux")).toMatchObject({ command: "xdg-open" });
   });
+
+  it("opens a folder itself, without selecting anything in it", () => {
+    expect(openCommand("C:\\a b\\Media", "win32", false)).toEqual({
+      command: "explorer.exe",
+      args: ['"C:\\a b\\Media"'],
+      verbatim: true,
+    });
+    expect(openCommand("/a/Media", "linux", false)).toEqual({
+      command: "xdg-open",
+      args: ["/a/Media"],
+      verbatim: false,
+    });
+  });
 });
 
 describe("run with an interactive hook", () => {

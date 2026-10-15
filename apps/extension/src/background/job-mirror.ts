@@ -3,6 +3,8 @@ import type { HostToExtensionMessage } from "@mediaforge/shared-protocol";
 export interface MirrorJob {
   id: string;
   title?: string;
+  /** What this job is of its page: a format such as "1080p mp4", or "en subtitles". */
+  label?: string;
   status: string;
   percent?: number;
   speed?: number;
@@ -17,7 +19,7 @@ export type JobMirrorApi = ReturnType<typeof createJobMirror>;
 const TERMINAL = new Set(["completed", "failed", "cancelled"]);
 
 /** Fields a viewer can see; `updatedAt` alone never counts as a change. */
-const VISIBLE = ["title", "status", "percent", "speed", "outputPath", "error"] as const;
+const VISIBLE = ["title", "label", "status", "percent", "speed", "outputPath", "error"] as const;
 
 const sameRow = (a: MirrorJob | undefined, b: MirrorJob): boolean =>
   a !== undefined && VISIBLE.every((key) => a[key] === b[key]);
@@ -26,16 +28,22 @@ const sameRow = (a: MirrorJob | undefined, b: MirrorJob): boolean =>
 export function createJobMirror() {
   const jobs = new Map<string, MirrorJob>();
   const titles = new Map<string, string>();
+  const labels = new Map<string, string>();
+  /** Finished jobs the user cleared; the core's snapshots must not bring them back. */
+  const cleared = new Set<string>();
 
   /** Applies a patch and reports whether the visible row changed. */
   const merge = (id: string, patch: Partial<MirrorJob>): boolean => {
+    if (cleared.has(id)) return false;
     const previous = jobs.get(id);
     const title = patch.title ?? titles.get(id) ?? previous?.title;
+    const label = labels.get(id) ?? previous?.label;
     const next: MirrorJob = {
       ...(previous ?? { id, status: "queued", updatedAt: 0 }),
       ...patch,
       id,
       ...(title && { title }),
+      ...(label && { label }),
       updatedAt: Date.now(),
     };
     if (sameRow(previous, next)) return false;
@@ -44,6 +52,11 @@ export function createJobMirror() {
   };
 
   return {
+    noteLabel(jobId: string, label: string): void {
+      labels.set(jobId, label);
+      const existing = jobs.get(jobId);
+      if (existing) jobs.set(jobId, { ...existing, label });
+    },
     noteTitle(jobId: string, title: string): void {
       titles.set(jobId, title);
       const existing = jobs.get(jobId);
@@ -52,15 +65,28 @@ export function createJobMirror() {
     list(): MirrorJob[] {
       return [...jobs.values()].sort((a, b) => b.updatedAt - a.updatedAt);
     },
+    /** Hides every finished job from the list; returns whether any row went away. */
+    clearFinished(): boolean {
+      let removed = false;
+      for (const [id, job] of jobs) {
+        if (!TERMINAL.has(job.status)) continue;
+        cleared.add(id);
+        jobs.delete(id);
+        removed = true;
+      }
+      return removed;
+    },
     apply(message: HostToExtensionMessage): boolean {
       switch (message.type) {
         case "jobs.snapshot": {
           const next = new Map<string, MirrorJob>();
           for (const job of message.payload.jobs) {
+            if (cleared.has(job.id)) continue;
             const title = job.request.candidate.pageTitle ?? job.request.candidate.url;
             next.set(job.id, {
               id: job.id,
               title,
+              ...(labels.get(job.id) && { label: labels.get(job.id) as string }),
               status: job.status,
               ...(job.progress.percent !== undefined && { percent: job.progress.percent }),
               ...(job.progress.speed !== undefined && { speed: job.progress.speed }),
@@ -70,6 +96,7 @@ export function createJobMirror() {
             });
           }
           for (const id of [...titles.keys()]) if (!next.has(id)) titles.delete(id);
+          for (const id of [...labels.keys()]) if (!next.has(id)) labels.delete(id);
           const changed =
             next.size !== jobs.size || [...next].some(([id, row]) => !sameRow(jobs.get(id), row));
           if (!changed) return false;

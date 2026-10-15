@@ -1,4 +1,13 @@
-import { findMediaIndex, isWorthOverlay, labelFor, placeButton } from "./overlay-logic.ts";
+import {
+  BRAND,
+  findMediaIndex,
+  isTargetGone,
+  isWorthOverlay,
+  labelFor,
+  MARK_RUNS,
+  MARK_VIEWBOX,
+  placeButton,
+} from "./overlay-logic.ts";
 
 const root = globalThis as unknown as { browser?: typeof browser; chrome: typeof browser };
 const api = root.browser ?? root.chrome;
@@ -8,12 +17,18 @@ const api = root.browser ?? root.chrome;
 // the background takes the tab and frame URL from the message sender, never from the page.
 let host: HTMLElement | undefined;
 let button: HTMLButtonElement | undefined;
+let label: HTMLSpanElement | undefined;
 let target: HTMLMediaElement | undefined;
 let enabled = false;
 let listening = false;
 let busy = false;
 let disposed = false;
 let resetTimer: ReturnType<typeof setTimeout> | undefined;
+// While the button is up, a timer re-checks its video: pages can remove, hide or move it, or
+// swap the whole view, without any event the overlay listens to.
+let trackTimer: ReturnType<typeof setInterval> | undefined;
+let shownUrl = "";
+const TRACK_MS = 300;
 
 async function send<T>(message: { kind: string }, fallback: T): Promise<T> {
   try {
@@ -44,6 +59,31 @@ function applyHostStyle(el: HTMLElement, top: number, left: number): void {
   el.style.setProperty("left", `${left}px`, "important");
 }
 
+const SVG_NS = "http://www.w3.org/2000/svg";
+
+/** The MediaForge icon, drawn from its pixel runs. Attributes only: page CSP cannot block them. */
+function markIcon(): SVGSVGElement {
+  const svg = document.createElementNS(SVG_NS, "svg");
+  svg.setAttribute("viewBox", MARK_VIEWBOX);
+  svg.setAttribute("width", "18");
+  svg.setAttribute("height", "17");
+  svg.setAttribute("shape-rendering", "crispEdges");
+  svg.setAttribute("aria-hidden", "true");
+  svg.style.cssText = "flex:none;display:block;";
+  for (const [x, y, width, fill] of MARK_RUNS) {
+    const rect = document.createElementNS(SVG_NS, "rect");
+    rect.setAttribute("x", String(x));
+    rect.setAttribute("y", String(y));
+    rect.setAttribute("width", String(width));
+    rect.setAttribute("height", "24");
+    rect.setAttribute("fill", fill);
+    svg.append(rect);
+  }
+  return svg;
+}
+
+const BUTTON_STYLE = `display:inline-flex;align-items:center;gap:7px;font:600 12px system-ui,sans-serif;padding:5px 11px 5px 8px;border:1px solid ${BRAND.ember};border-radius:8px;background:${BRAND.ink};color:${BRAND.glow};cursor:pointer;box-shadow:0 1px 6px rgba(0,0,0,.55);`;
+
 function ensureButton(): HTMLButtonElement {
   if (button && host) return button;
   host = document.createElement("div");
@@ -51,9 +91,16 @@ function ensureButton(): HTMLButtonElement {
   const root = host.attachShadow({ mode: "closed" });
   const created = document.createElement("button");
   button = created;
-  created.textContent = "Download";
-  created.style.cssText =
-    "font:600 12px system-ui,sans-serif;padding:5px 10px;border:0;border-radius:6px;background:#1a73e8;color:#fff;cursor:pointer;box-shadow:0 1px 4px rgba(0,0,0,.4);";
+  label = document.createElement("span");
+  label.textContent = "Download";
+  created.append(markIcon(), label);
+  created.style.cssText = BUTTON_STYLE;
+  created.addEventListener("mouseenter", () => {
+    created.style.borderColor = BRAND.flame;
+  });
+  created.addEventListener("mouseleave", () => {
+    created.style.borderColor = BRAND.ember;
+  });
   // Keep the page's players from reacting to our clicks.
   for (const type of ["mousedown", "mouseup", "pointerdown", "pointerup", "dblclick"]) {
     created.addEventListener(type, (event) => event.stopPropagation());
@@ -63,16 +110,16 @@ function ensureButton(): HTMLButtonElement {
     event.preventDefault();
     if (!event.isTrusted || busy) return;
     busy = true;
-    created.textContent = "Sending…";
-    const result = await send<{ status?: string }>(
+    setLabel("Opening…");
+    const result = await send<{ status?: string; reason?: string; popup?: boolean }>(
       { kind: "overlayDownload" },
       { status: "error" },
     );
-    created.textContent = labelFor(result.status);
+    setLabel(labelFor(result.status, result.reason, result.popup === true));
     clearTimeout(resetTimer);
     resetTimer = setTimeout(() => {
       busy = false;
-      created.textContent = "Download";
+      setLabel("Download");
     }, 2000);
   });
   root.append(created);
@@ -80,10 +127,17 @@ function ensureButton(): HTMLButtonElement {
   return created;
 }
 
+function setLabel(text: string): void {
+  if (label) label.textContent = text;
+}
+
 function hide(): void {
+  clearInterval(trackTimer);
+  trackTimer = undefined;
   host?.remove();
   host = undefined;
   button = undefined;
+  label = undefined;
   target = undefined;
 }
 
@@ -95,6 +149,7 @@ function show(media: HTMLMediaElement): void {
     return;
   }
   const b = ensureButton();
+  if (target !== media) shownUrl = location.href;
   target = media;
   const pos = placeButton(
     rect,
@@ -102,6 +157,19 @@ function show(media: HTMLMediaElement): void {
     { width: b.offsetWidth || 90, height: b.offsetHeight || 28 },
   );
   if (host) applyHostStyle(host, pos.top, pos.left);
+  trackTimer ??= setInterval(track, TRACK_MS);
+}
+
+/** Drops the button once its video is gone, otherwise keeps it on the video's corner. */
+function track(): void {
+  if (
+    !target ||
+    isTargetGone({ connected: target.isConnected, shownUrl, currentUrl: location.href })
+  ) {
+    hide();
+    return;
+  }
+  show(target);
 }
 
 function mediaAt(event: Event): HTMLMediaElement | undefined {
@@ -161,7 +229,11 @@ async function refresh(): Promise<void> {
 }
 
 function onVisibility(): void {
-  if (document.visibilityState === "visible") void refresh();
+  if (document.visibilityState === "visible")
+    api.runtime.onMessage.addListener((message: unknown) => {
+      if ((message as { kind?: string } | undefined)?.kind === "overlayChanged") void refresh();
+    });
+  void refresh();
 }
 
 function suspend(): void {

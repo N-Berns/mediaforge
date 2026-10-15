@@ -34,10 +34,13 @@ const media = {
   url: "https://example.com/watch",
   title: "Clip",
   formats: [
-    { id: "137", label: "1080p", hasVideo: true, hasAudio: false },
+    { id: "137", label: "1080p", container: "mp4", hasVideo: true, hasAudio: false },
     { id: "18", label: "360p", hasVideo: true, hasAudio: true },
   ],
 };
+
+/** A page with nothing to choose, so a download starts without the picker. */
+const single = { ...media, formats: [{ id: "18", label: "360p", hasVideo: true, hasAudio: true }] };
 
 function setup(
   options: {
@@ -45,11 +48,15 @@ function setup(
     quality?: string;
     probeFails?: string;
     cookieFails?: boolean;
+    connection?: ConnectionState;
     now?: () => number;
     /** The reply (or thrown error) for download.start call number `n` (0-based). */
     downloadStart?: (n: number) => HostToExtensionMessage | Error;
     /** The media for media.probe call number `n` (0-based). */
     probeMedia?: (n: number) => typeof media;
+    openPopup?: (windowId: number | undefined) => Promise<boolean>;
+    /** The error code folder.open fails with; it succeeds when absent. */
+    folderOpenFails?: string;
   } = {},
 ) {
   let downloads = 0;
@@ -58,7 +65,7 @@ function setup(
   const pushListeners: Array<(m: HostToExtensionMessage) => void> = [];
   const stateListeners: Array<(s: ConnectionState) => void> = [];
   const requests: Array<{ type: string; payload: Record<string, unknown> }> = [];
-  const state: ConnectionState = { kind: "ready" };
+  const state: ConnectionState = options.connection ?? { kind: "ready" };
   const client = {
     state: () => state,
     onState: (l: (s: ConnectionState) => void) => {
@@ -87,6 +94,16 @@ function setup(
           throw new NativeRequestError(options.probeFails, "no");
         }
         return reply("media.info", options.probeMedia?.(probesRun++) ?? media);
+      }
+      if (type === "folder.open") {
+        if (options.folderOpenFails) {
+          const { NativeRequestError } = await import("./native-client.ts");
+          throw new NativeRequestError(
+            options.folderOpenFails,
+            "Could not open the folder: EACCES",
+          );
+        }
+        return reply("folder.opened", {});
       }
       if (type === "download.start") {
         const custom = options.downloadStart?.(downloads++);
@@ -118,6 +135,7 @@ function setup(
     },
     userAgent: "UA/1.0",
     now: options.now ?? (() => 9),
+    ...(options.openPopup && { openPopup: options.openPopup }),
   });
   return { controller, store, mirror, requests, pushListeners, stateListeners, cookieCalls };
 }
@@ -148,7 +166,7 @@ describe("controller", () => {
   });
 
   it("downloads a page URL without sending cookies", async () => {
-    const t = setup();
+    const t = setup({ probeMedia: () => single });
     const result = await t.controller.handle(
       { kind: "download", tabId: 1, source: { type: "page", url: media.url, title: "Clip" } },
       popup,
@@ -202,7 +220,7 @@ describe("controller", () => {
   });
 
   it("overlay download prefers the probed page, else the newest sniffed candidate, else nothing", async () => {
-    const supported = setup();
+    const supported = setup({ probeMedia: () => single });
     expect(await supported.controller.handle({ kind: "overlayDownload" }, sender)).toEqual({
       status: "started",
       jobId: "job-1",
@@ -218,11 +236,12 @@ describe("controller", () => {
     const empty = setup({ probeFails: "unsupported-site" });
     expect(await empty.controller.handle({ kind: "overlayDownload" }, sender)).toEqual({
       status: "nothing",
+      reason: "unsupported",
     });
   });
 
   it("overlay download probes the sender frame URL when it is http(s), else the tab URL", async () => {
-    const frame = setup();
+    const frame = setup({ probeMedia: () => single });
     await frame.controller.handle(
       { kind: "overlayDownload" },
       { tab: sender.tab, url: "https://embed.example.net/player/1" },
@@ -259,7 +278,7 @@ describe("controller", () => {
   });
 
   it("frame downloads carry no context, drop the tab title, and ignore blob/data frame URLs", async () => {
-    const frame = setup();
+    const frame = setup({ probeMedia: () => single });
     await frame.controller.handle(
       { kind: "overlayDownload" },
       { tab: sender.tab, url: "https://embed.example.net/player/1" },
@@ -268,7 +287,7 @@ describe("controller", () => {
     expect(started?.payload).not.toHaveProperty("context");
     expect(started?.payload).toMatchObject({ candidate: { pageTitle: media.title } });
 
-    const same = setup();
+    const same = setup({ probeMedia: () => single });
     await same.controller.handle(
       { kind: "overlayDownload" },
       { tab: sender.tab, url: sender.tab.url },
@@ -284,6 +303,77 @@ describe("controller", () => {
         url: sender.tab.url,
       });
     }
+  });
+
+  it("reports why the overlay found nothing", async () => {
+    const failed = setup({ probeFails: "boom" });
+    expect(await failed.controller.handle({ kind: "overlayDownload" }, sender)).toEqual({
+      status: "nothing",
+      reason: "error",
+      message: "no",
+    });
+
+    const down = setup({ connection: { kind: "connecting" } });
+    expect(await down.controller.handle({ kind: "overlayDownload" }, sender)).toEqual({
+      status: "nothing",
+      reason: "unavailable",
+    });
+    expect(down.requests.some((r) => r.type === "media.probe")).toBe(false);
+
+    const nonWeb = setup();
+    expect(await nonWeb.controller.handle({ kind: "overlayDownload" }, { tab: { id: 1 } })).toEqual(
+      { status: "nothing", reason: "no-media" },
+    );
+  });
+
+  it("truncates a long probe error message to 120 characters", async () => {
+    const t = setup({ probeFails: "boom" });
+    const { NativeRequestError } = await import("./native-client.ts");
+    const long = createController({
+      client: {
+        state: () => ({ kind: "ready" }),
+        onState: () => () => {},
+        onPush: () => () => {},
+        request: async (type: string) => {
+          if (type === "settings.get") {
+            return reply("settings.value", {
+              extensionUi: "overlay",
+              keepRunning: false,
+              askQuality: false,
+            });
+          }
+          throw new NativeRequestError("boom", "x".repeat(500));
+        },
+      } as never,
+      store: t.store,
+      mirror: t.mirror,
+      getCookies: async () => "",
+      userAgent: "UA",
+      now: () => 1,
+    });
+    const result = (await long.handle({ kind: "overlayDownload" }, sender)) as {
+      reason: string;
+      message: string;
+    };
+    expect(result.reason).toBe("error");
+    expect(result.message).toHaveLength(120);
+  });
+
+  it("falls back to a sniffed direct file whose page is the file itself", async () => {
+    const url = "https://www.w3schools.com/html/mov_bbb.mp4";
+    const t = setup({ probeFails: "unsupported-site" });
+    await t.store.add(1, { ...candidate, id: url, url, pageUrl: url });
+    const result = await t.controller.handle(
+      { kind: "overlayDownload" },
+      { tab: { id: 1, url, title: "mov_bbb.mp4" }, url },
+    );
+    expect(result).toEqual({ status: "started", jobId: "job-1" });
+    const start = t.requests.filter((r) => r.type === "download.start");
+    expect(start).toHaveLength(1);
+    expect(start[0]?.payload).toMatchObject({
+      candidate: { url, source: "network" },
+      context: { referer: "https://www.w3schools.com/", cookies: "session=abc123def" },
+    });
   });
 
   it("forgets every URL recorded for a tab", async () => {
@@ -434,7 +524,7 @@ describe("controller", () => {
       ).toEqual({ status: "nothing" });
       expect(
         await t.controller.handle({ kind: "overlayDownload" }, { tab: { id: 1, url, title: "x" } }),
-      ).toEqual({ status: "nothing" });
+      ).toEqual({ status: "nothing", reason: "no-media" });
     }
     expect(t.requests).toEqual([]);
   });
@@ -674,6 +764,94 @@ describe("controller: pending picker", () => {
   });
 });
 
+describe("controller: the picker is the default", () => {
+  it("asks for a choice whenever a page offers one, whatever askQuality says", async () => {
+    const t = setup({ askQuality: false });
+    expect(
+      await t.controller.handle(
+        { kind: "download", tabId: 1, source: { type: "page", url: media.url } },
+        popup,
+      ),
+    ).toMatchObject({ status: "needs-picker" });
+    expect(startCount(t)).toBe(0);
+  });
+
+  it("asks when the only format comes with subtitles, and not when nothing is on offer", async () => {
+    const withSubs = setup({
+      probeMedia: () => ({ ...single, subtitles: [{ lang: "en", auto: false }] }) as never,
+    });
+    expect(
+      await withSubs.controller.handle(
+        { kind: "download", tabId: 1, source: { type: "page", url: media.url } },
+        popup,
+      ),
+    ).toMatchObject({ status: "needs-picker" });
+
+    const plain = setup({ probeMedia: () => single });
+    expect(
+      await plain.controller.handle(
+        { kind: "download", tabId: 1, source: { type: "page", url: media.url } },
+        popup,
+      ),
+    ).toEqual({ status: "started", jobId: "job-1" });
+  });
+
+  it("keeps the page title clean and labels the job with the picked format", async () => {
+    const t = setup();
+    await t.controller.handle(
+      { kind: "download", tabId: 1, source: { type: "page", url: media.url }, variantId: "137" },
+      popup,
+    );
+    expect(t.requests.find((r) => r.type === "download.start")?.payload.candidate).toMatchObject({
+      url: media.url,
+      pageTitle: "Clip",
+    });
+    expect(t.mirror.list()[0]).toMatchObject({ title: "Clip", label: "1080p mp4" });
+  });
+});
+
+describe("controller: the overlay opens the popup", () => {
+  it("opens it before anything is awaited and reports whether it opened", async () => {
+    const calls: Array<number | undefined> = [];
+    let probesAtOpen = -1;
+    const t = setup({
+      probeMedia: () => single,
+      openPopup: (windowId) => {
+        calls.push(windowId);
+        probesAtOpen = t.requests.filter((r) => r.type === "media.probe").length;
+        return Promise.resolve(true);
+      },
+    });
+    const result = await t.controller.handle(
+      { kind: "overlayDownload" },
+      { tab: { ...sender.tab, windowId: 7 } },
+    );
+    expect(calls).toEqual([7]);
+    expect(probesAtOpen).toBe(0);
+    expect(result).toMatchObject({ status: "started", popup: true });
+  });
+
+  it("falls back to the old answer when the browser refuses", async () => {
+    const t = setup({ openPopup: () => Promise.reject(new Error("user input required")) });
+    expect(await t.controller.handle({ kind: "overlayDownload" }, sender)).toMatchObject({
+      status: "needs-picker",
+      popup: false,
+    });
+    const state = (await t.controller.handle({ kind: "getState", tabId: 1 }, popup)) as PopupState;
+    expect(state.picker).toEqual(media);
+  });
+
+  it("forgets the pending picker once the popup has taken it", async () => {
+    const t = setup();
+    await t.controller.handle({ kind: "overlayDownload" }, sender);
+    expect(await t.controller.handle({ kind: "clearPicker", tabId: 1 }, popup)).toEqual({
+      ok: true,
+    });
+    const state = (await t.controller.handle({ kind: "getState", tabId: 1 }, popup)) as PopupState;
+    expect(state.picker).toBeUndefined();
+  });
+});
+
 describe("controller: overlay fallback choice", () => {
   it("prefers the oldest manifest over later variant playlists and files", async () => {
     const t = setup({ probeFails: "unsupported-site" });
@@ -734,5 +912,74 @@ describe("controller: download.start replies", () => {
       ),
     ).toEqual({ status: "started", jobId: "job-8" });
     expect(done.mirror.list()[0]).toMatchObject({ id: "job-8", title: "A page" });
+  });
+});
+
+describe("debug command", () => {
+  const decisions = [{ url: "https://cdn.test/v.mp4", accepted: true, reason: "media" }];
+  const build = () => {
+    const t = setup();
+    const controller = createController({
+      client: {
+        state: () => ({ kind: "ready" }),
+        onState: () => () => {},
+        onPush: () => () => {},
+      } as never,
+      store: t.store,
+      mirror: t.mirror,
+      getCookies: async () => "",
+      userAgent: "UA",
+      now: () => 1,
+      getDecisions: (tabId) => (tabId === 1 ? decisions : []),
+    });
+    return controller;
+  };
+
+  it("returns decisions to the popup and rejects content scripts", async () => {
+    const controller = build();
+    expect(await controller.handle({ kind: "debug", tabId: 1 }, popup)).toEqual(decisions);
+    expect(await controller.handle({ kind: "debug", tabId: 1 }, sender)).toEqual({
+      ok: false,
+      message: "not allowed",
+    });
+  });
+});
+
+describe("openFolder", () => {
+  it("asks the core for the download folder, or for one job's file, never with a path", async () => {
+    const t = setup();
+    expect(await t.controller.handle({ kind: "openFolder" }, popup)).toEqual({ ok: true });
+    expect(await t.controller.handle({ kind: "openFolder", jobId: "job-1" }, popup)).toEqual({
+      ok: true,
+    });
+    expect(t.requests.filter((r) => r.type === "folder.open").map((r) => r.payload)).toEqual([
+      {},
+      { jobId: "job-1" },
+    ]);
+  });
+
+  it("passes the core's reason on when the folder cannot be opened", async () => {
+    const t = setup({ folderOpenFails: "open-failed" });
+    expect(await t.controller.handle({ kind: "openFolder" }, popup)).toEqual({
+      ok: false,
+      message: "Could not open the folder: EACCES",
+    });
+  });
+
+  it("asks for an update when the core does not know the request", async () => {
+    const t = setup({ folderOpenFails: "invalid-message" });
+    expect(await t.controller.handle({ kind: "openFolder" }, popup)).toEqual({
+      ok: false,
+      message: "Update MediaForge to open folders from the browser.",
+    });
+  });
+
+  it("is a popup command only", async () => {
+    const t = setup();
+    expect(await t.controller.handle({ kind: "openFolder" }, sender)).toEqual({
+      ok: false,
+      message: "not allowed",
+    });
+    expect(t.requests).toEqual([]);
   });
 });

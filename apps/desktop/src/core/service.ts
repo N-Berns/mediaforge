@@ -37,6 +37,8 @@ export interface CoreServiceDeps {
   /** Lists the formats of one page. Never prompts; rejects when the page cannot be probed. */
   probe(url: string): Promise<ProbedMedia>;
   applyAutostart(enabled: boolean): Promise<void>;
+  /** Shows a file selected in the file manager, or with `select` off, opens a folder. */
+  openPath(path: string, options: { select: boolean }): Promise<void>;
   /** Called after every client or job change, so the idle monitor can re-check. */
   onActivity(): void;
   now(): number;
@@ -105,6 +107,8 @@ export class CoreService {
   readonly #lastProgress = new Map<string, { at: number; status: EngineJob["status"] }>();
   /** Format ids returned by `media.probe`, per page url, oldest first. */
   readonly #formats = new Map<string, Map<string, KnownFormat>>();
+  /** The subtitle tracks each probed page offered, as `manual:en` or `auto:en`. */
+  readonly #subtitles = new Map<string, Set<string>>();
   /** The last setup frame passed on, for throttling download progress per tool and phase. */
   #lastSetup:
     | { at: number; state: SetupStatus["state"]; tool?: string; phase?: string }
@@ -213,6 +217,8 @@ export class CoreService {
         return this.#setSettings(state, message);
       case "media.probe":
         return this.#probe(state, message);
+      case "folder.open":
+        return this.#openFolder(state, message);
       default: {
         // Compile-time: adding a message type without a case fails here. Runtime: say so.
         const unhandled: never = message;
@@ -273,6 +279,16 @@ export class CoreService {
   }
 
   #remember(url: string, media: ProbedMedia): void {
+    this.#subtitles.delete(url);
+    this.#subtitles.set(
+      url,
+      new Set((media.subtitles ?? []).map((t) => `${t.auto ? "auto" : "manual"}:${t.lang}`)),
+    );
+    while (this.#subtitles.size > MAX_PROBED_URLS) {
+      const oldest = this.#subtitles.keys().next().value;
+      if (oldest === undefined) break;
+      this.#subtitles.delete(oldest);
+    }
     this.#formats.delete(url);
     this.#formats.set(
       url,
@@ -288,6 +304,41 @@ export class CoreService {
       if (oldest === undefined) break;
       this.#formats.delete(oldest);
     }
+  }
+
+  async #openFolder(
+    state: ClientState,
+    message: Extract<ExtensionToHostMessage, { type: "folder.open" }>,
+  ): Promise<void> {
+    const { jobId } = message.payload;
+    let target: { path: string; select: boolean };
+    if (jobId === undefined) {
+      const settings = await this.#deps.settings.load();
+      // `||`, not `??`: an empty string means "no folder chosen", as in #start.
+      target = { path: settings.folder || defaultOutputDir(), select: false };
+    } else {
+      const job = this.#engine.get(jobId);
+      if (job?.status !== "completed" || !job.outputPath) {
+        this.#error(state, message.id, "unknown-job", "No such download, or it has no file yet.");
+        return;
+      }
+      target = { path: job.outputPath, select: true };
+    }
+    try {
+      await this.#deps.openPath(target.path, { select: target.select });
+    } catch (error) {
+      this.#error(
+        state,
+        message.id,
+        "open-failed",
+        truncate(
+          `Could not open the folder: ${error instanceof Error ? error.message : String(error)}`,
+          MAX_ERROR_TEXT,
+        ),
+      );
+      return;
+    }
+    this.#reply(state, message.id, "folder.opened", {});
   }
 
   async #hello(state: ClientState, id: string): Promise<void> {
@@ -335,7 +386,18 @@ export class CoreService {
     }
     let formatSelector: string | undefined;
     let profileId = request.profileId;
-    if (request.variantId !== undefined) {
+    if (request.subtitle) {
+      const { lang, auto } = request.subtitle;
+      if (!this.#subtitles.get(request.candidate.url)?.has(`${auto ? "auto" : "manual"}:${lang}`)) {
+        this.#error(
+          state,
+          message.id,
+          "unknown-subtitle",
+          "That subtitle was not offered for this link.",
+        );
+        return;
+      }
+    } else if (request.variantId !== undefined) {
       const known = this.#formats.get(request.candidate.url)?.get(request.variantId);
       if (!known) {
         this.#error(
@@ -372,7 +434,11 @@ export class CoreService {
       base = resolve(requestedDir);
     }
     const outputDir = settings.sortByType
-      ? withKindFolder(base || defaultOutputDir(), kindOfProfile(profile), true)
+      ? withKindFolder(
+          base || defaultOutputDir(),
+          request.subtitle ? "subtitles" : kindOfProfile(profile),
+          true,
+        )
       : base;
     const job = this.#engine.submit(
       { ...request, profileId, ...(outputDir && { outputDir }) },

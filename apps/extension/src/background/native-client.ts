@@ -20,6 +20,13 @@ export type ConnectionState =
   | { kind: "setting-up"; tool?: string; percent?: number }
   | { kind: "ready" };
 
+/** What the core said about itself in its last `hello.ack`. */
+export interface HostInfo {
+  hostVersion: string;
+  ytDlp: { available: boolean; version?: string | undefined };
+  ffmpeg: { available: boolean; version?: string | undefined };
+}
+
 export class NativeRequestError extends Error {
   override name = "NativeRequestError";
   readonly code: string;
@@ -43,6 +50,8 @@ type MessageType = ExtensionToHostMessage["type"];
 
 export interface NativeClient {
   state(): ConnectionState;
+  /** The core's last greeting; undefined before the first one. */
+  host?(): HostInfo | undefined;
   onState(listener: (state: ConnectionState) => void): () => void;
   /** Every valid frame from the core, including replies. */
   onPush(listener: (message: HostToExtensionMessage) => void): () => void;
@@ -73,6 +82,7 @@ export function createNativeClient(options: NativeClientOptions): NativeClient {
   const pending = new Map<string, Pending>();
 
   let state: ConnectionState = { kind: "connecting" };
+  let hostInfo: HostInfo | undefined;
   let port: NativePort | undefined;
   let stopped = true;
   let attempt = 0;
@@ -185,6 +195,8 @@ export function createNativeClient(options: NativeClientOptions): NativeClient {
       stableTimer = undefined;
       attempt = 0;
     }, STABLE_MS);
+    const { hostVersion, ytDlp, ffmpeg } = m.payload;
+    hostInfo = { hostVersion, ytDlp, ffmpeg };
     if (m.payload.setup === "ready") setState({ kind: "ready" });
     else if (m.payload.setup === "installing") setState({ kind: "setting-up" });
     else setState({ kind: "unavailable", message: "MediaForge could not finish its setup." });
@@ -253,6 +265,7 @@ export function createNativeClient(options: NativeClientOptions): NativeClient {
 
   return {
     state: () => state,
+    host: () => hostInfo,
     onState(listener) {
       stateListeners.add(listener);
       return () => void stateListeners.delete(listener);

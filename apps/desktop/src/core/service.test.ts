@@ -80,6 +80,7 @@ interface SetupOptions {
   autoStart?: boolean;
   probeTool?: CoreServiceDeps["probeTool"];
   probe?: CoreServiceDeps["probe"];
+  openPath?: CoreServiceDeps["openPath"];
   settings?: Partial<Settings>;
 }
 
@@ -99,6 +100,7 @@ function setup(options: SetupOptions = {}) {
   };
   const autostart = vi.fn(async () => {});
   const onActivity = vi.fn();
+  const openPath = vi.fn(options.openPath ?? (async () => {}));
   let clock = 0;
   const settings = memorySettingsStore(options.settings);
   const service = new CoreService({
@@ -112,6 +114,7 @@ function setup(options: SetupOptions = {}) {
     probeTool: options.probeTool ?? (async () => ({ available: true, version: "1" })),
     probe: options.probe ?? (async (url) => ({ url, formats: [] })),
     applyAutostart: autostart,
+    openPath,
     onActivity,
     now: () => clock,
     newId: () => `id-${++clock}`,
@@ -139,6 +142,7 @@ function setup(options: SetupOptions = {}) {
     update,
     emitSetup: (s: SetupStatus) => notifySetup(s),
     autostart,
+    openPath,
     onActivity,
     advance,
     settings,
@@ -236,6 +240,21 @@ describe("download.start", () => {
     await t.send("download.start", { candidate, profileId: "best", outputDir: "" });
     const request = t.fake.submitted[0] as { outputDir?: string };
     expect(request.outputDir).toBe(join(defaultOutputDir(), KIND_FOLDERS["video-audio"]));
+  });
+
+  it("sorts a subtitle file into its own folder", async () => {
+    const t = setup({
+      probe: async (url) => ({ url, formats: [], subtitles: [{ lang: "en", auto: false }] }),
+    });
+    await t.send("media.probe", { url: candidate.url });
+    await t.send("download.start", {
+      candidate,
+      profileId: "best",
+      subtitle: { lang: "en", auto: false, format: "srt" },
+    });
+    const request = t.fake.submitted[0] as { outputDir?: string };
+    expect(request.outputDir).toBe(join(defaultOutputDir(), KIND_FOLDERS.subtitles));
+    expect(KIND_FOLDERS.subtitles).toBe("Subtitles");
   });
 
   it("treats an empty outputDir as unset when not sorting by type", async () => {
@@ -754,5 +773,61 @@ describe("context", () => {
     expect(text).not.toContain("abc123def");
     expect(text).not.toContain("tok-987654");
     expect(t.sent.some((m) => m.type === "download.failed")).toBe(true);
+  });
+});
+
+describe("folder.open", () => {
+  it("opens the default download folder when none is set", async () => {
+    const t = setup();
+    await t.send("folder.open", {});
+    expect(t.openPath).toHaveBeenCalledWith(defaultOutputDir(), { select: false });
+    expect(t.sent[0]).toMatchObject({ id: "req", type: "folder.opened" });
+  });
+
+  it("opens the folder the user chose", async () => {
+    const folder = join(tmpdir(), "mf-media");
+    const t = setup({ settings: { folder } });
+    await t.send("folder.open", {});
+    expect(t.openPath).toHaveBeenCalledWith(folder, { select: false });
+  });
+
+  it("shows a finished job's file selected, from the host's own record", async () => {
+    const t = setup();
+    await t.send("download.start", { candidate, profileId: "best" });
+    const outputPath = join(tmpdir(), "clip.mp4");
+    t.update("job-1", { status: "completed", outputPath });
+    t.sent.length = 0;
+    await t.send("folder.open", { jobId: "job-1" });
+    expect(t.openPath).toHaveBeenCalledWith(outputPath, { select: true });
+    expect(t.sent[0]).toMatchObject({ type: "folder.opened" });
+  });
+
+  it("refuses a job that is unknown or has no file yet", async () => {
+    const t = setup();
+    await t.send("download.start", { candidate, profileId: "best" });
+    t.sent.length = 0;
+    await t.send("folder.open", { jobId: "job-1" });
+    await t.send("folder.open", { jobId: "nope" });
+    expect(t.openPath).not.toHaveBeenCalled();
+    expect(t.sent.map((m) => m.type === "error" && m.payload.code)).toEqual([
+      "unknown-job",
+      "unknown-job",
+    ]);
+  });
+
+  it("does not accept a path from the extension", async () => {
+    const t = setup();
+    await t.send("folder.open", { path: "C:Windows" });
+    expect(t.openPath).toHaveBeenCalledWith(defaultOutputDir(), { select: false });
+  });
+
+  it("reports a folder that could not be opened", async () => {
+    const t = setup({
+      openPath: async () => {
+        throw new Error("EACCES");
+      },
+    });
+    await t.send("folder.open", {});
+    expect(t.sent[0]).toMatchObject({ type: "error", payload: { code: "open-failed" } });
   });
 });

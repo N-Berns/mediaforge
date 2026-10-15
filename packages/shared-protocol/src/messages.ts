@@ -38,6 +38,11 @@ export const SettingsGetMessage = message("settings.get", z.object({}));
 export const SettingsSetMessage = message("settings.set", ExtensionSettingsSchema.partial());
 export const DownloadCancelMessage = message("download.cancel", jobRef);
 export const HostInfoMessage = message("host.info", z.object({}));
+/**
+ * Show downloads in the file manager: a finished job's file, or the download folder without a
+ * job. Never a path: the host finds it in its own records, so a request cannot open anything else.
+ */
+export const FolderOpenMessage = message("folder.open", z.object({ jobId: z.string().optional() }));
 
 // Host → extension
 export const HelloAckMessage = message(
@@ -87,6 +92,7 @@ export const ErrorMessage = message(
 
 export const MediaProbeMessage = message("media.probe", z.object({ url: z.url() }));
 export const MediaInfoMessage = message("media.info", ProbedMediaSchema);
+export const FolderOpenedMessage = message("folder.opened", z.object({}));
 
 export const ExtensionToHostMessage = z.discriminatedUnion("type", [
   HelloMessage,
@@ -99,6 +105,7 @@ export const ExtensionToHostMessage = z.discriminatedUnion("type", [
   SettingsGetMessage,
   SettingsSetMessage,
   MediaProbeMessage,
+  FolderOpenMessage,
 ]);
 export const HostToExtensionMessage = z.discriminatedUnion("type", [
   HelloAckMessage,
@@ -110,6 +117,7 @@ export const HostToExtensionMessage = z.discriminatedUnion("type", [
   SettingsValueMessage,
   SetupProgressMessage,
   MediaInfoMessage,
+  FolderOpenedMessage,
 ]);
 
 export type ExtensionToHostMessage = z.infer<typeof ExtensionToHostMessage>;

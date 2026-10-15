@@ -4,11 +4,15 @@ import type { OutputProfile } from "@mediaforge/shared-types";
 /** What a download contains: picture and sound, picture only, or sound only. */
 export type MediaKind = "video-audio" | "video" | "audio";
 
+/** Everything that gets its own folder: the media kinds, and subtitle files saved on their own. */
+export type FolderKind = MediaKind | "subtitles";
+
 /** Subfolder each kind is sorted into when "sort by type" is on. */
-export const KIND_FOLDERS: Record<MediaKind, string> = {
+export const KIND_FOLDERS: Record<FolderKind, string> = {
   "video-audio": "Video",
   video: "Video only",
   audio: "Audio",
+  subtitles: "Subtitles",
 };
 
 /** The kind a profile produces when the user did not pick a specific stream. */
@@ -16,5 +20,5 @@ export const kindOfProfile = (profile: Pick<OutputProfile, "kind">): MediaKind =
   profile.kind === "audio" ? "audio" : "video-audio";
 
 /** `dir` itself, or its subfolder for this kind when sorting is on. */
-export const withKindFolder = (dir: string, kind: MediaKind, sort: boolean): string =>
+export const withKindFolder = (dir: string, kind: FolderKind, sort: boolean): string =>
   sort ? join(dir, KIND_FOLDERS[kind]) : dir;

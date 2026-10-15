@@ -67,6 +67,17 @@ describe("job mirror", () => {
     expect(m.list()).toEqual([]);
   });
 
+  it("clears finished jobs and keeps them hidden", () => {
+    const mirror = createJobMirror();
+    mirror.apply(msg("download.progress", { jobId: "a", status: "downloading", progress: {} }));
+    mirror.apply(msg("download.completed", { jobId: "b", outputPath: "/x" }));
+    expect(mirror.clearFinished()).toBe(true);
+    expect(mirror.list().map((j) => j.id)).toEqual(["a"]);
+    mirror.apply(msg("download.completed", { jobId: "b", outputPath: "/x" }));
+    expect(mirror.list().map((j) => j.id)).toEqual(["a"]);
+    expect(mirror.clearFinished()).toBe(false);
+  });
+
   it("ignores unrelated messages", () => {
     expect(createJobMirror().apply(msg("setup.progress", { state: "ready" }))).toBe(false);
   });

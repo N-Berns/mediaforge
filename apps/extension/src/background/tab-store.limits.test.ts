@@ -51,6 +51,22 @@ describe("tab store limits and failures", () => {
     expect(await store.list(1)).toHaveLength(2);
   });
 
+  it("reports whether an add changed the list, and skips the write when it did not", async () => {
+    const area = memoryArea();
+    const store = createTabStore(area);
+    expect(await store.add(1, c("https://cdn.test/a.mp4"))).toBe(true);
+    const realSet = area.set;
+    let writes = 0;
+    area.set = async (items) => {
+      writes++;
+      await realSet(items);
+    };
+    expect(await store.add(1, c("https://cdn.test/a.mp4"))).toBe(false);
+    expect(writes).toBe(0);
+    expect(await store.add(1, c("https://cdn.test/b.mp4"))).toBe(true);
+    expect(writes).toBe(1);
+  });
+
   it("drops malformed stored entries on load", async () => {
     const area = memoryArea();
     area.data["candidates:4"] = [c("https://cdn.test/ok.mp4"), null, 5, { id: "x" }, { url: "y" }];

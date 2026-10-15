@@ -10,7 +10,8 @@ export interface SessionArea {
 
 export interface TabStore {
   list(tabId: number): Promise<MediaCandidate[]>;
-  add(tabId: number, candidate: MediaCandidate): Promise<void>;
+  /** Resolves with whether the tab's list changed; a repeat of a known response changes nothing. */
+  add(tabId: number, candidate: MediaCandidate): Promise<boolean>;
   clear(tabId: number): Promise<void>;
   find(tabId: number, id: string): Promise<MediaCandidate | undefined>;
 }
@@ -72,10 +73,14 @@ export function createTabStore(area: SessionArea): TabStore {
     find: (tabId, id) => queue(tabId, async () => (await load(tabId)).find((c) => c.id === id)),
     add: (tabId, candidate) =>
       queue(tabId, async () => {
-        const merged = capNewest(dedupeCandidates([...(await load(tabId)), candidate]));
+        const current = await load(tabId);
+        const merged = capNewest(dedupeCandidates([...current, candidate]));
+        // Pages repeat requests for the same media constantly; skip the write and the news.
+        if (JSON.stringify(merged) === JSON.stringify(current)) return false;
         // Persist first: if the write rejects, the in-memory view stays unchanged.
         await area.set({ [keyOf(tabId)]: merged });
         memory.set(tabId, merged);
+        return true;
       }),
     clear: (tabId) =>
       queue(tabId, async () => {

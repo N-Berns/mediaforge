@@ -1,8 +1,13 @@
 import { DEFAULT_PROFILE_ID } from "@mediaforge/media-profiles";
 import type { ExtensionSettings, ProbedMedia } from "@mediaforge/shared-protocol";
-import type { MediaCandidate } from "@mediaforge/shared-types";
+import type { MediaCandidate, SubtitleRequest } from "@mediaforge/shared-types";
 import type { JobMirrorApi, MirrorJob } from "./job-mirror.ts";
-import { type ConnectionState, type NativeClient, NativeRequestError } from "./native-client.ts";
+import {
+  type ConnectionState,
+  type HostInfo,
+  type NativeClient,
+  NativeRequestError,
+} from "./native-client.ts";
 import type { TabStore } from "./tab-store.ts";
 
 export type ProbeView =
@@ -14,6 +19,8 @@ export type ProbeView =
 
 export interface PopupState {
   connection: ConnectionState;
+  /** The core's version and tools, for diagnosis. */
+  host?: HostInfo;
   settings?: ExtensionSettings;
   candidates: MediaCandidate[];
   jobs: MirrorJob[];
@@ -22,10 +29,12 @@ export interface PopupState {
   picker?: ProbedMedia;
 }
 
+export type NothingReason = "unsupported" | "error" | "no-media" | "unavailable";
+
 export type DownloadResult =
   | { status: "started"; jobId: string }
   | { status: "needs-picker"; media: ProbedMedia }
-  | { status: "nothing" }
+  | { status: "nothing"; reason?: NothingReason; message?: string }
   | { status: "error"; message: string };
 
 export type Command =
@@ -36,20 +45,28 @@ export type Command =
       tabId: number;
       source: { type: "candidate"; id: string } | { type: "page"; url: string; title?: string };
       variantId?: string;
+      /** Save this subtitle track instead of the media. */
+      subtitle?: SubtitleRequest;
     }
   | { kind: "cancel"; jobId: string }
+  /** Show a finished job's file in the file manager, or the download folder without a job. */
+  | { kind: "openFolder"; jobId?: string }
+  /** The popup took the pending picker for this tab; it must not come back after Cancel. */
+  | { kind: "clearPicker"; tabId: number }
+  | { kind: "clearFinished" }
   | {
       kind: "setSetting";
       key: "extensionUi" | "keepRunning" | "askQuality";
       value: string | boolean;
     }
+  | { kind: "debug"; tabId: number }
   | { kind: "overlayConfig" }
   | { kind: "overlayDownload" };
 
 export interface Sender {
   /** The URL of the frame that sent the message, set by the browser. */
   url?: string;
-  tab?: { id?: number; url?: string; title?: string };
+  tab?: { id?: number; windowId?: number; url?: string; title?: string };
 }
 
 export interface ControllerDeps {
@@ -60,10 +77,18 @@ export interface ControllerDeps {
   getCookies(url: string, tabId: number): Promise<string>;
   userAgent: string;
   now(): number;
+  /** The detector's recent decisions for a tab, for the popup-only `debug` command. */
+  getDecisions?(tabId: number): unknown[];
+  /**
+   * Opens the toolbar popup. Called before anything is awaited, so the overlay click that caused
+   * it still counts as a user action. Resolves with whether the browser opened it.
+   */
+  openPopup?(windowId: number | undefined): Promise<boolean>;
 }
 
 const PROBE_TIMEOUT_MS = 45_000;
 const MAX_PROBES = 50;
+const MAX_REASON_MESSAGE = 120;
 /** The core does not push every settings change, so a cached copy is trusted this long. */
 const SETTINGS_FRESH_MS = 5_000;
 
@@ -83,6 +108,16 @@ function fallbackCandidate(candidates: MediaCandidate[]): MediaCandidate | undef
   return candidates.filter((c) => !isManifest(c)).sort((a, b) => b.detectedAt - a.detectedAt)[0];
 }
 
+/** Whether the page offers anything to choose: another format, or a subtitle track. */
+const hasChoices = (media: ProbedMedia): boolean =>
+  media.formats.length > 1 || (media.subtitles?.length ?? 0) > 0;
+
+/** The small label a job shows beside its title: the picked format, e.g. "1080p mp4". */
+function formatLabel(media: ProbedMedia, formatId: string): string | undefined {
+  const format = media.formats.find((f) => f.id === formatId);
+  return format ? [format.label, format.container].filter(Boolean).join(" ") : undefined;
+}
+
 const isWebUrl = (url: string): boolean => {
   try {
     const { protocol } = new URL(url);
@@ -93,7 +128,17 @@ const isWebUrl = (url: string): boolean => {
 };
 
 const OVERLAY_KINDS = new Set(["overlayConfig", "overlayDownload"]);
-const POPUP_KINDS = new Set(["getState", "probe", "download", "cancel", "setSetting"]);
+const POPUP_KINDS = new Set([
+  "getState",
+  "probe",
+  "download",
+  "cancel",
+  "openFolder",
+  "clearPicker",
+  "clearFinished",
+  "setSetting",
+  "debug",
+]);
 
 export function createController(deps: ControllerDeps) {
   const probes = new Map<string, ProbeView>();
@@ -211,7 +256,7 @@ export function createController(deps: ControllerDeps) {
   /** Sends `download.start`; rejects with the core's error. */
   const send = async (
     candidate: MediaCandidate,
-    options: { variantId?: string; tabId?: number },
+    options: { variantId?: string; tabId?: number; subtitle?: SubtitleRequest; label?: string },
   ): Promise<DownloadResult> => {
     const s = await loadSettings();
     const profileId = s?.quality ?? DEFAULT_PROFILE_ID;
@@ -235,6 +280,7 @@ export function createController(deps: ControllerDeps) {
       candidate,
       profileId,
       ...(options.variantId && { variantId: options.variantId }),
+      ...(options.subtitle && { subtitle: options.subtitle }),
       ...(context && { context }),
     });
     if (
@@ -247,6 +293,7 @@ export function createController(deps: ControllerDeps) {
     // A job can finish or fail before its first progress frame; it was still started.
     const jobId = reply.payload.jobId;
     deps.mirror.noteTitle(jobId, candidate.pageTitle ?? candidate.url);
+    if (options.label) deps.mirror.noteLabel(jobId, options.label);
     deps.mirror.apply(reply);
     if (reply.type === "download.failed") return { status: "error", message: reply.payload.error };
     return { status: "started", jobId };
@@ -254,7 +301,7 @@ export function createController(deps: ControllerDeps) {
 
   const start = (
     candidate: MediaCandidate,
-    options: { variantId?: string; tabId?: number },
+    options: { variantId?: string; tabId?: number; subtitle?: SubtitleRequest; label?: string },
   ): Promise<DownloadResult> =>
     send(candidate, options).catch((error: unknown) => ({
       status: "error",
@@ -265,17 +312,23 @@ export function createController(deps: ControllerDeps) {
     url: string,
     title: string | undefined,
     variantId: string | undefined,
+    subtitle?: SubtitleRequest,
   ): Promise<DownloadResult> => {
     const view = await probe(url);
     if (view.state !== "ready") return { status: "nothing" };
-    const s = await loadSettings();
-    if (s?.askQuality && !variantId && view.media.formats.length > 1) {
+    if (subtitle) {
+      const label = `${subtitle.lang} subtitles`;
+      return start(pageCandidate(url, title ?? view.media.title), { subtitle, label });
+    }
+    // The picker is the default: choosing is how formats, audio and subtitles are reached.
+    if (!variantId && hasChoices(view.media)) {
       return { status: "needs-picker", media: view.media };
     }
-    const candidate = pageCandidate(url, title ?? view.media.title);
-    if (!variantId) return start(candidate, {});
+    const base = title ?? view.media.title;
+    if (!variantId) return start(pageCandidate(url, base), {});
     try {
-      return await send(candidate, { variantId });
+      const label = formatLabel(view.media, variantId);
+      return await send(pageCandidate(url, base), { variantId, ...(label && { label }) });
     } catch (error) {
       if (!(error instanceof NativeRequestError && error.code === "unknown-variant")) {
         return { status: "error", message: errorMessage(error) };
@@ -294,7 +347,11 @@ export function createController(deps: ControllerDeps) {
     if (!fresh.media.formats.some((f) => f.id === variantId)) {
       return { status: "needs-picker", media: fresh.media };
     }
-    return start(pageCandidate(url, title ?? fresh.media.title), { variantId });
+    const freshLabel = formatLabel(fresh.media, variantId);
+    return start(pageCandidate(url, title ?? fresh.media.title), {
+      variantId,
+      ...(freshLabel && { label: freshLabel }),
+    });
   };
 
   const dispatch = async (command: Command, sender: Sender): Promise<unknown> => {
@@ -303,8 +360,10 @@ export function createController(deps: ControllerDeps) {
         if (command.pageUrl) noteTabUrl(command.tabId, command.pageUrl);
         const s = await loadSettings();
         const picker = pendingPickers.get(command.tabId);
+        const host = deps.client.host?.();
         const state: PopupState = {
           connection: deps.client.state(),
+          ...(host && { host }),
           ...(s && { settings: s }),
           candidates: await deps.store.list(command.tabId),
           jobs: deps.mirror.list(),
@@ -326,7 +385,12 @@ export function createController(deps: ControllerDeps) {
           result = await start(found, { tabId: command.tabId });
         } else {
           if (!isWebUrl(command.source.url)) return { status: "nothing" } satisfies DownloadResult;
-          result = await downloadPage(command.source.url, command.source.title, command.variantId);
+          result = await downloadPage(
+            command.source.url,
+            command.source.title,
+            command.variantId,
+            command.subtitle,
+          );
         }
         if (result.status === "started") pendingPickers.delete(command.tabId);
         return result;
@@ -339,6 +403,29 @@ export function createController(deps: ControllerDeps) {
         }
         return { ok: true };
       }
+      case "openFolder": {
+        try {
+          await deps.client.request(
+            "folder.open",
+            command.jobId === undefined ? {} : { jobId: command.jobId },
+          );
+          return { ok: true };
+        } catch (error) {
+          // A core older than this request rejects its type as an invalid message.
+          if (error instanceof NativeRequestError && error.code === "invalid-message") {
+            return { ok: false, message: "Update MediaForge to open folders from the browser." };
+          }
+          return { ok: false, message: errorMessage(error) };
+        }
+      }
+      case "clearPicker": {
+        pendingPickers.delete(command.tabId);
+        return { ok: true };
+      }
+      case "clearFinished": {
+        deps.mirror.clearFinished();
+        return { ok: true };
+      }
       case "setSetting": {
         try {
           const reply = await deps.client.request("settings.set", { [command.key]: command.value });
@@ -348,36 +435,55 @@ export function createController(deps: ControllerDeps) {
           return { ok: false, message: error instanceof Error ? error.message : String(error) };
         }
       }
+      case "debug":
+        return deps.getDecisions?.(command.tabId) ?? [];
       case "overlayConfig": {
         const s = await loadSettings();
         return { enabled: s?.extensionUi === "overlay" };
       }
       case "overlayDownload": {
-        const tab = sender.tab;
-        // The frame's own URL (set by the browser) is the page to download; embeds are separate pages.
-        const pageUrl = sender.url && isWebUrl(sender.url) ? sender.url : tab?.url;
-        if (!tab?.id || !pageUrl || !isWebUrl(pageUrl))
-          return { status: "nothing" } satisfies DownloadResult;
-        noteTabUrl(tab.id, pageUrl);
-        const view = await probe(pageUrl);
-        let result: DownloadResult;
-        if (view.state === "ready") {
-          result = await downloadPage(
-            pageUrl,
-            pageUrl === tab.url ? tab.title : undefined,
-            undefined,
-          );
-        } else {
-          const chosen = fallbackCandidate(await deps.store.list(tab.id));
-          if (!chosen) return { status: "nothing" } satisfies DownloadResult;
-          result = await start(chosen, { tabId: tab.id });
-        }
-        // The overlay cannot show a picker: the toolbar popup opens it for this tab.
-        if (result.status === "needs-picker") pendingPickers.set(tab.id, result.media);
-        else if (result.status === "started") pendingPickers.delete(tab.id);
-        return result;
+        // First, before any await: the click is still a user action, which opening needs.
+        const opening = deps.openPopup?.(sender.tab?.windowId).catch(() => false);
+        const result = await overlayDownload(sender);
+        return opening ? { ...result, popup: await opening } : result;
       }
     }
+  };
+
+  const overlayDownload = async (sender: Sender): Promise<DownloadResult> => {
+    const tab = sender.tab;
+    // The frame's own URL (set by the browser) is the page to download; embeds are separate pages.
+    const pageUrl = sender.url && isWebUrl(sender.url) ? sender.url : tab?.url;
+    if (!tab?.id || !pageUrl || !isWebUrl(pageUrl)) {
+      return { status: "nothing", reason: "no-media" } satisfies DownloadResult;
+    }
+    if (deps.client.state().kind !== "ready") {
+      return { status: "nothing", reason: "unavailable" } satisfies DownloadResult;
+    }
+    noteTabUrl(tab.id, pageUrl);
+    const view = await probe(pageUrl);
+    let result: DownloadResult;
+    if (view.state === "ready") {
+      result = await downloadPage(pageUrl, pageUrl === tab.url ? tab.title : undefined, undefined);
+    } else {
+      const chosen = fallbackCandidate(await deps.store.list(tab.id));
+      if (!chosen) {
+        if (view.state === "error") {
+          return {
+            status: "nothing",
+            reason: "error",
+            message: view.message.slice(0, MAX_REASON_MESSAGE),
+          } satisfies DownloadResult;
+        }
+        const reason = view.state === "unsupported" ? "unsupported" : "no-media";
+        return { status: "nothing", reason } satisfies DownloadResult;
+      }
+      result = await start(chosen, { tabId: tab.id });
+    }
+    // The overlay cannot show a picker: the toolbar popup opens it for this tab.
+    if (result.status === "needs-picker") pendingPickers.set(tab.id, result.media);
+    else if (result.status === "started") pendingPickers.delete(tab.id);
+    return result;
   };
 
   return {

@@ -2,6 +2,13 @@ import { FIREFOX_ADDON_ID } from "@mediaforge/shared-protocol";
 
 export type Target = "firefox" | "chromium";
 
+const ICONS = {
+  16: "icons/icon-16.png",
+  32: "icons/icon-32.png",
+  48: "icons/icon-48.png",
+  128: "icons/icon-128.png",
+};
+
 /** Build the manifest for one browser. The two differ only in how the background script runs. */
 export function buildManifest(target: Target, version: string): Record<string, unknown> {
   const base = {
@@ -11,7 +18,8 @@ export function buildManifest(target: Target, version: string): Record<string, u
     description: "Send the video and audio on a page to MediaForge on this computer.",
     permissions: ["webRequest", "nativeMessaging", "storage", "tabs", "cookies"],
     host_permissions: ["<all_urls>"],
-    action: { default_title: "MediaForge", default_popup: "popup.html" },
+    icons: ICONS,
+    action: { default_title: "MediaForge", default_popup: "popup.html", default_icon: ICONS },
     content_scripts: [
       {
         matches: ["<all_urls>"],

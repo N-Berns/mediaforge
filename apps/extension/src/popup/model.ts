@@ -11,11 +11,21 @@ export interface ItemModel {
 export interface JobRow {
   id: string;
   title: string;
+  /** The small label beside the title: a format or subtitle language. */
+  label?: string;
   status: string;
   percentText: string;
   active: boolean;
+  /** Finished with a file the core can show in the file manager. */
+  openable: boolean;
   error?: string;
 }
+
+/**
+ * A picture format or a sound-only one. Silent video counts as video: the download adds the best
+ * audio to it, so what the user gets always has sound.
+ */
+export type FormatKind = "video" | "audio";
 
 export interface PopupModel {
   banner?: {
@@ -30,9 +40,14 @@ export interface PopupModel {
   placeholder?: string;
   picker?: {
     title: string;
-    formats: Array<{ id: string; label: string; detail: string }>;
+    formats: Array<{ id: string; label: string; detail: string; kind: FormatKind }>;
+    /** False when the host predates subtitle support, so an empty list means nothing either way. */
+    subtitlesSupported: boolean;
+    subtitles: Array<{ key: string; lang: string; auto: boolean; label: string; detail: string }>;
   };
   jobs: JobRow[];
+  /** Set while connected: the core can open the download folder. */
+  openFolder?: true;
   toggles?: { overlay: boolean; keepRunning: boolean };
 }
 
@@ -52,7 +67,7 @@ function megabytes(bytes: number): string {
   return mb >= 1000 ? `${(mb / 1024).toFixed(1)} GB` : `${mb.toFixed(1)} MB`;
 }
 
-const MAX_JOBS = 20;
+const MAX_JOBS = 5;
 const MAX_PROBE_ERROR = 120;
 
 export const UNREACHABLE_TEXT = "Cannot reach the MediaForge extension. Reopen this popup.";
@@ -124,6 +139,9 @@ export function buildPopupModel(
       break;
   }
 
+  // Only "ready" and "setting-up" get this far: the core is connected and can open folders.
+  model.openFolder = true;
+
   if (state.probe.state === "error" && !model.banner) {
     const message = state.probe.message;
     const short =
@@ -157,6 +175,7 @@ export function buildPopupModel(
       formats: picker.formats.map((f) => ({
         id: f.id,
         label: f.label,
+        kind: f.hasVideo ? "video" : "audio",
         detail: [
           f.container,
           f.approxBytes ? megabytes(f.approxBytes) : "",
@@ -165,15 +184,25 @@ export function buildPopupModel(
           .filter(Boolean)
           .join(" · "),
       })),
+      subtitlesSupported: picker.subtitles !== undefined,
+      subtitles: (picker.subtitles ?? []).map((t) => ({
+        key: `${t.auto ? "auto" : "manual"}:${t.lang}`,
+        lang: t.lang,
+        auto: t.auto,
+        label: t.name ?? t.lang,
+        detail: [t.name ? t.lang : "", t.auto ? "Auto-generated" : ""].filter(Boolean).join(" · "),
+      })),
     };
   }
 
   model.jobs = state.jobs.slice(0, MAX_JOBS).map((j) => ({
     id: j.id,
     title: j.title ?? j.id,
+    ...(j.label && { label: j.label }),
     status: j.status,
     percentText: j.percent !== undefined ? `${Math.round(j.percent)}%` : "",
     active: ACTIVE.has(j.status),
+    openable: j.status === "completed" && Boolean(j.outputPath),
     ...(j.error && { error: j.error }),
   }));
 

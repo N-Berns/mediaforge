@@ -43,4 +43,13 @@ describe("buildManifest", () => {
     expect(m.content_scripts[0]?.js).toEqual(["overlay.js"]);
     expect(m.action.default_popup).toBe("popup.html");
   });
+
+  it("declares the extension and toolbar icons", () => {
+    const m = buildManifest("firefox", "0.3.0") as Manifest & {
+      icons: Record<string, string>;
+      action: { default_icon: Record<string, string> };
+    };
+    expect(m.icons["48"]).toBe("icons/icon-48.png");
+    expect(m.action.default_icon["16"]).toBe("icons/icon-16.png");
+  });
 });

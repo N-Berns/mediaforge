@@ -111,6 +111,26 @@ describe("buildPopupModel", () => {
     expect(m.picker?.formats[0]?.detail).toMatch(/5\.0 MB|5 MB/);
   });
 
+  it("groups picker formats by video and audio, and lists subtitles", () => {
+    const m = buildPopupModel(base, {
+      url: "https://e.test/",
+      formats: [
+        { id: "137", label: "1080p", container: "mp4", hasVideo: true, hasAudio: false },
+        { id: "18", label: "360p", container: "mp4", hasVideo: true, hasAudio: true },
+        { id: "140", label: "Audio", container: "m4a", hasVideo: false, hasAudio: true },
+      ],
+      subtitles: [
+        { lang: "en", auto: true },
+        { lang: "fr", auto: false, name: "French" },
+      ],
+    });
+    expect(m.picker?.formats.map((f) => f.kind)).toEqual(["video", "video", "audio"]);
+    expect(m.picker?.subtitles).toEqual([
+      { key: "auto:en", lang: "en", auto: true, label: "en", detail: "Auto-generated" },
+      { key: "manual:fr", lang: "fr", auto: false, label: "French", detail: "fr" },
+    ]);
+  });
+
   it("describes jobs and marks active ones", () => {
     const m = buildPopupModel({
       ...base,
@@ -121,6 +141,34 @@ describe("buildPopupModel", () => {
     });
     expect(m.jobs[0]).toMatchObject({ id: "a", percentText: "42%", active: true });
     expect(m.jobs[1]).toMatchObject({ id: "b", active: false, error: "boom" });
+  });
+
+  it("lets only finished jobs with a file show it in the folder", () => {
+    const m = buildPopupModel({
+      ...base,
+      jobs: [
+        { id: "a", status: "completed", outputPath: "C:Ma.mp4", updatedAt: 3 },
+        { id: "b", status: "completed", updatedAt: 2 },
+        { id: "c", status: "downloading", outputPath: "C:Mc.mp4", updatedAt: 1 },
+      ],
+    });
+    expect(m.jobs.map((j) => j.openable)).toEqual([true, false, false]);
+  });
+
+  it("offers the download folder only while connected", () => {
+    expect(buildPopupModel(base).openFolder).toBe(true);
+    expect(
+      buildPopupModel({ ...base, connection: { kind: "setting-up", percent: 5 } }).openFolder,
+    ).toBe(true);
+    for (const connection of [
+      { kind: "connecting" },
+      { kind: "not-installed" },
+      { kind: "incompatible" },
+      { kind: "unavailable", message: "x" },
+    ] as const) {
+      expect(buildPopupModel({ ...base, connection }).openFolder).toBeUndefined();
+    }
+    expect(buildPopupModel(undefined).openFolder).toBeUndefined();
   });
 
   it("exposes the two toggles from settings, and nothing before settings arrive", () => {
@@ -161,14 +209,14 @@ describe("buildPopupModel", () => {
     expect(m.picker?.formats[0]?.detail).toMatch(/2\.0 GB/);
   });
 
-  it("caps the jobs list at 20", () => {
+  it("caps the jobs list at 5", () => {
     const jobs = Array.from({ length: 30 }, (_, n) => ({
       id: `j${n}`,
       status: "done",
       updatedAt: n,
     }));
     const m = buildPopupModel({ ...base, jobs });
-    expect(m.jobs).toHaveLength(20);
+    expect(m.jobs).toHaveLength(5);
     expect(m.jobs[0]?.id).toBe("j0");
   });
 

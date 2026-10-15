@@ -1,5 +1,14 @@
 import type { MediaCandidate } from "./media.ts";
 
+/** A subtitle track to save on its own, instead of the media itself. */
+export interface SubtitleRequest {
+  /** Language code as listed by the probe, e.g. "en" or "pt-BR". */
+  lang: string;
+  /** True for a machine-generated track. */
+  auto: boolean;
+  format: "srt" | "vtt";
+}
+
 export interface DownloadRequest {
   candidate: MediaCandidate;
   /** Explicit variant choice; when omitted, the profile picks one. */
@@ -7,6 +16,8 @@ export interface DownloadRequest {
   profileId: string;
   outputDir?: string;
   filename?: string;
+  /** When set, only this subtitle track is saved. */
+  subtitle?: SubtitleRequest;
 }
 
 export type DownloadStatus =

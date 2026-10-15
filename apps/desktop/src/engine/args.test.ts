@@ -1,5 +1,12 @@
+import { getProfile } from "@mediaforge/media-profiles";
 import { describe, expect, it } from "vitest";
-import { contextArgs, contextError, contextSecrets, redactSecrets } from "./args.ts";
+import {
+  buildYtDlpArgs,
+  contextArgs,
+  contextError,
+  contextSecrets,
+  redactSecrets,
+} from "./args.ts";
 
 describe("request context", () => {
   it("builds yt-dlp flags without a shell", () => {
@@ -90,5 +97,42 @@ describe("request context", () => {
     ]) {
       expect(contextError({ headers: { [name]: "x" } })).toMatch(/not allowed/);
     }
+  });
+});
+
+describe("subtitle downloads", () => {
+  const candidate = {
+    id: "c",
+    pageUrl: "https://e.test/w",
+    url: "https://e.test/w",
+    kind: "video" as const,
+    streamType: "progressive" as const,
+    source: "dom" as const,
+    variants: [],
+    detectedAt: 0,
+  };
+  const args = (subtitle: { lang: string; auto: boolean; format: "srt" | "vtt" }) =>
+    buildYtDlpArgs({
+      request: { candidate, profileId: "best", subtitle },
+      profile: getProfile("best") as never,
+      workDir: "/w",
+      ffmpegPath: "ffmpeg",
+    });
+
+  it("saves only the subtitle, converted to the chosen format", () => {
+    const a = args({ lang: "pt-BR", auto: false, format: "srt" });
+    expect(a).toContain("--skip-download");
+    expect(a).toContain("--write-subs");
+    expect(a).not.toContain("-f");
+    expect(a.slice(a.indexOf("--sub-langs"), a.indexOf("--sub-langs") + 4)).toEqual([
+      "--sub-langs",
+      "pt\\-BR",
+      "--convert-subs",
+      "srt",
+    ]);
+  });
+
+  it("asks for auto-generated captions when marked auto", () => {
+    expect(args({ lang: "en", auto: true, format: "vtt" })).toContain("--write-auto-subs");
   });
 });

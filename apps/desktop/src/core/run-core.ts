@@ -9,6 +9,7 @@ import { DownloadEngine, type EngineJob } from "../engine/index.ts";
 import { type ProcessRunner, runProcess } from "../engine/process.ts";
 import { ExitCode } from "../exit-codes.ts";
 import { type FormatsDeps, fetchMediaInfo } from "../formats.ts";
+import { openFolder } from "../interactive/open-folder.ts";
 import { detectJsRuntimeArgs } from "../js-runtime.ts";
 import { DEFAULT_SETTINGS, defaultSettingsStore, type SettingsStore } from "../settings.ts";
 import { defaultToolRuntime, type ToolRuntime, tryResolve } from "../tool-runtime.ts";
@@ -44,12 +45,20 @@ export interface RunCoreDeps {
   /** How often to re-check idleness, so turning `keepRunning` off is noticed. */
   pollMs: number;
   applyAutostart: (enabled: boolean) => Promise<void>;
+  /** Shows a path in the file manager. Default: the real one, which creates a missing folder. */
+  openPath?: (path: string, options: { select: boolean }) => Promise<void>;
   /** Exit on SIGINT and SIGTERM. Off in tests. */
   handleSignals: boolean;
   /** Ends the run, as SIGTERM would, when aborted. */
   shutdown?: AbortSignal;
   /** Longest to wait for clients to close during shutdown. Default 2000 ms. */
   shutdownGraceMs?: number;
+}
+
+/** The download folder may not exist before the first download: create it, then open it. */
+async function openInFileManager(path: string, options: { select: boolean }): Promise<void> {
+  if (!options.select) await mkdir(path, { recursive: true });
+  await openFolder(path, options.select);
 }
 
 /** Run a step whose failure must never reach the caller. */
@@ -192,6 +201,7 @@ export async function runCore(deps: RunCoreDeps): Promise<number> {
           throw new Error("Probing is not available.");
         }),
       applyAutostart: syncAutostart,
+      openPath: deps.openPath ?? openInFileManager,
       onActivity: check,
       now: () => Date.now(),
       newId: () => randomUUID(),

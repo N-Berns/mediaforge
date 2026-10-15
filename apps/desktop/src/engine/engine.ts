@@ -283,7 +283,9 @@ export class DownloadEngine {
           workDir,
           ffmpegPath: ffmpeg.path,
           formatSelector: entry.formatSelector,
-          ffmpegProgressFile: progressFile,
+          // A subtitle job runs no merge or conversion worth a progress bar, and the work folder
+          // must hold only the subtitle file for it to be found.
+          ...(!job.request.subtitle && { ffmpegProgressFile: progressFile }),
           jsRuntimeArgs,
           context: entry.context,
         }),
@@ -300,8 +302,13 @@ export class DownloadEngine {
 
       if (controller.signal.aborted) {
         outcome = { status: "cancelled" };
-      } else if (exitCode === 0 && filePath) {
-        const finished = await this.#locateOutput(workDir, filePath);
+      } else if (exitCode === 0 && (filePath || job.request.subtitle)) {
+        // yt-dlp prints the (unwritten) video name for a subtitle job, so the file is whatever
+        // single file the work folder holds.
+        const finished = await this.#locateOutput(
+          workDir,
+          filePath ?? join(workDir, "subtitle.srt"),
+        );
         const { base, ext } = splitName(basename(finished));
         const finalPath = await uniquePath(outputDir, base, ext, this.#fs.exists);
         await this.#fs.rename(finished, finalPath);

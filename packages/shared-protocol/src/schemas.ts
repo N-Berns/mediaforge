@@ -41,6 +41,13 @@ export const DownloadRequestSchema = z.object({
   profileId: z.string(),
   outputDir: z.string().optional(),
   filename: z.string().optional(),
+  subtitle: z
+    .object({
+      lang: z.string().min(1).max(40),
+      auto: z.boolean(),
+      format: z.enum(["srt", "vtt"]),
+    })
+    .optional(),
 });
 
 export const DownloadProgressSchema = z.object({
@@ -104,6 +111,13 @@ export const ProbedFormatSchema = z.object({
   approxBytes: z.number().nonnegative().optional(),
 });
 
+/** A subtitle track a page offers. `auto` marks machine-generated ones. */
+export const ProbedSubtitleSchema = z.object({
+  lang: z.string(),
+  name: z.string().optional(),
+  auto: z.boolean(),
+});
+
 /** What the core learned about a page URL from yt-dlp. */
 export const ProbedMediaSchema = z.object({
   url: z.string(),
@@ -111,9 +125,12 @@ export const ProbedMediaSchema = z.object({
   thumbnail: z.string().optional(),
   durationSec: z.number().nonnegative().optional(),
   formats: z.array(ProbedFormatSchema),
+  /** Absent from older hosts, which cannot save subtitles either. */
+  subtitles: z.array(ProbedSubtitleSchema).optional(),
 });
 
 export type ProbedFormat = z.infer<typeof ProbedFormatSchema>;
+export type ProbedSubtitle = z.infer<typeof ProbedSubtitleSchema>;
 export type ProbedMedia = z.infer<typeof ProbedMediaSchema>;
 
 // Compile-time guarantee that the runtime schemas match the shared domain types.

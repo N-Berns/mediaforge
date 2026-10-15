@@ -192,6 +192,21 @@ function formatArgs(profile: OutputProfile, maxHeight: number | undefined): stri
   return args;
 }
 
+/** Escape a language code so yt-dlp's `--sub-langs` reads it literally. */
+const escapeLang = (lang: string): string => lang.replace(/[\\^$.*+?()[\]{}|-]/g, "\\$&");
+
+/** Save one subtitle track and nothing else. */
+function subtitleArgs(subtitle: NonNullable<DownloadRequest["subtitle"]>): string[] {
+  return [
+    "--skip-download",
+    subtitle.auto ? "--write-auto-subs" : "--write-subs",
+    "--sub-langs",
+    escapeLang(subtitle.lang),
+    "--convert-subs",
+    subtitle.format,
+  ];
+}
+
 /** Build the yt-dlp command line for one download. Never goes through a shell. */
 export function buildYtDlpArgs({
   request,
@@ -229,9 +244,11 @@ export function buildYtDlpArgs({
     workDir,
     "-o",
     `${name}.%(ext)s`,
-    ...(formatSelector
-      ? withSelector(formatArgs(profile, maxHeight), formatSelector)
-      : formatArgs(profile, maxHeight)),
+    ...(request.subtitle
+      ? subtitleArgs(request.subtitle)
+      : formatSelector
+        ? withSelector(formatArgs(profile, maxHeight), formatSelector)
+        : formatArgs(profile, maxHeight)),
     // End of options: a URL starting with "-" must never be read as a flag.
     "--",
     url,

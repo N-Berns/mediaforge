@@ -32,6 +32,24 @@ const info: MediaInfo = {
 };
 
 describe("toProbedMedia", () => {
+  it("lists real captions and drops translations, duplicates and live chat", () => {
+    const media = toProbedMedia("https://example.com/w", {
+      ...info,
+      subtitles: { fr: [{ ext: "vtt", url: "https://x/fr", name: "French" }], live_chat: [{}] },
+      automatic_captions: {
+        en: [{ ext: "vtt", url: "https://x/en" }],
+        fr: [{ ext: "vtt", url: "https://x/fr-auto" }],
+        "en-orig": [{ ext: "vtt", url: "https://x/en" }],
+        de: [{ ext: "vtt", url: "https://x/de?tlang=de" }],
+      },
+    });
+    expect(media.subtitles).toEqual([
+      { lang: "fr", auto: false, name: "French" },
+      { lang: "en", auto: true },
+    ]);
+    expect(toProbedMedia("https://example.com/w", info).subtitles).toEqual([]);
+  });
+
   it("lists usable formats best first and drops storyboards", () => {
     const media = toProbedMedia("https://example.com/w", info);
     expect(media.url).toBe("https://example.com/w");
