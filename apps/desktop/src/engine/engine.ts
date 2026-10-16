@@ -15,7 +15,7 @@ import {
   parsePostprocessLine,
   parseProgress,
 } from "./progress.ts";
-import { isPostStep, type PlannedStep, type Step, StepTracker } from "./steps.ts";
+import { isPostStep, type PlannedStep, StepTracker } from "./steps.ts";
 
 export const DEFAULT_MAX_CONCURRENT = 2;
 
@@ -25,10 +25,8 @@ const STDERR_TAIL = 20;
 export interface EngineJob extends DownloadJob {
   /** Exit code matching the failure, set when `status` is "failed". */
   errorKind?: ExitCode;
-  /** Download, merge and convert steps, in order. */
-  steps?: Step[];
-  /** 0 to 100 across all steps. */
-  overallPercent?: number;
+  /** Where this job's partial files live. Set when it first starts; core-only. */
+  workDir?: string;
 }
 
 /** How often to read ffmpeg's progress file while it merges or converts. */
@@ -75,6 +73,8 @@ interface Entry {
   controller: AbortController;
   settled: Promise<EngineJob>;
   settle: (job: EngineJob) => void;
+  /** Why the controller was aborted: a pause keeps the partial files, a cancel removes them. */
+  stopReason: "pause" | "cancel" | undefined;
   formatSelector: string | undefined;
   plan: PlannedStep[] | undefined;
   /** Never copied onto the job: it carries cookies and headers. */
@@ -91,6 +91,10 @@ export interface SubmitOptions {
 }
 
 const TERMINAL = new Set(["completed", "failed", "cancelled"]);
+/** Jobs that are queued or running. */
+const ACTIVE = new Set(["queued", "downloading", "processing"]);
+/** Jobs that keep their entry and partial files until resumed, cancelled or removed. */
+const DORMANT = new Set(["paused", "failed"]);
 
 export class DownloadEngine {
   readonly #entries = new Map<string, Entry>();
@@ -101,7 +105,7 @@ export class DownloadEngine {
   readonly #run: ProcessRunner;
   readonly #fs: EngineFs;
   readonly #outputDir: string;
-  readonly #maxConcurrent: number;
+  #maxConcurrent: number;
   readonly #onUpdate: ((job: EngineJob) => void) | undefined;
   readonly #jsRuntimeArgs: () => Promise<string[]>;
 
@@ -129,19 +133,18 @@ export class DownloadEngine {
       createdAt: now,
       updatedAt: now,
     };
-    let settle: (job: EngineJob) => void = () => {};
-    const settled = new Promise<EngineJob>((res) => {
-      settle = res;
-    });
-    this.#entries.set(job.id, {
+    const entry: Entry = {
       job,
       controller: new AbortController(),
-      settled,
-      settle,
+      settled: Promise.resolve(job),
+      settle: () => {},
+      stopReason: undefined,
       formatSelector: options.formatSelector,
       plan: options.plan,
       context: options.context,
-    });
+    };
+    this.#newSettle(entry);
+    this.#entries.set(job.id, entry);
     this.#queue.push(job.id);
     this.#onUpdate?.({ ...job });
     this.#pump();
@@ -162,18 +165,112 @@ export class DownloadEngine {
     return this.#entries.get(id)?.settled;
   }
 
-  /** Cancel a queued or running job. Returns false when it is unknown or already finished. */
+  /** Cancel a queued, running or paused job. False when it is unknown or already finished. */
   cancel(id: string): boolean {
     const entry = this.#entries.get(id);
     if (!entry || TERMINAL.has(entry.job.status)) return false;
+    if (entry.job.status === "paused") {
+      const workDir = this.#workDirOf(entry.job);
+      this.#finish(entry, { status: "cancelled" });
+      void this.#fs.rm(workDir).catch(() => {});
+      return true;
+    }
     const queued = this.#queue.indexOf(id);
     if (queued >= 0) {
       this.#queue.splice(queued, 1);
       this.#finish(entry, { status: "cancelled" });
     } else {
+      entry.stopReason = "cancel";
       entry.controller.abort();
     }
     return true;
+  }
+
+  /** Stop a queued or running job and keep its partial files, so `resume` can continue it. */
+  pause(id: string): boolean {
+    const entry = this.#entries.get(id);
+    // A stop already in flight (cancel or pause) is final; do not overwrite it.
+    if (!entry || !ACTIVE.has(entry.job.status) || entry.stopReason) return false;
+    const queued = this.#queue.indexOf(id);
+    if (queued >= 0) {
+      this.#queue.splice(queued, 1);
+      this.#update(entry, { status: "paused" });
+    } else {
+      entry.stopReason = "pause";
+      entry.controller.abort();
+    }
+    return true;
+  }
+
+  /** Queue a paused or failed job again under the same id; yt-dlp continues its partial files. */
+  resume(id: string): boolean {
+    const entry = this.#entries.get(id);
+    if (!entry || !DORMANT.has(entry.job.status)) return false;
+    // A failed job's settle already fired; the new try gets its own.
+    if (entry.job.status === "failed") this.#newSettle(entry);
+    entry.controller = new AbortController();
+    entry.stopReason = undefined;
+    const { error: _error, errorKind: _errorKind, ...rest } = entry.job;
+    entry.job = { ...rest, status: "queued", updatedAt: Date.now() };
+    this.#onUpdate?.({ ...entry.job });
+    this.#queue.push(id);
+    this.#pump();
+    return true;
+  }
+
+  /** Take back a paused or failed job from an earlier session, without starting it. */
+  restore(job: EngineJob, options: { formatSelector?: string; plan?: PlannedStep[] } = {}): void {
+    if (this.#entries.has(job.id) || !DORMANT.has(job.status)) return;
+    const entry: Entry = {
+      job: { ...job },
+      controller: new AbortController(),
+      settled: Promise.resolve(job),
+      settle: () => {},
+      stopReason: undefined,
+      formatSelector: options.formatSelector,
+      plan: options.plan,
+      // Cookies and headers are never stored, so a restored job runs without them.
+      context: undefined,
+    };
+    this.#newSettle(entry);
+    this.#entries.set(job.id, entry);
+  }
+
+  /**
+   * Forget a job. An active one is cancelled first and waited for; a paused or failed one loses
+   * its partial files. Unknown ids do nothing.
+   */
+  async remove(id: string): Promise<void> {
+    const entry = this.#entries.get(id);
+    if (!entry) return;
+    if (ACTIVE.has(entry.job.status)) {
+      this.cancel(id);
+      await entry.settled;
+    } else if (DORMANT.has(entry.job.status)) {
+      // Forget first, so a resume while the folder goes away finds nothing to run.
+      const workDir = this.#workDirOf(entry.job);
+      this.#entries.delete(id);
+      await this.#fs.rm(workDir).catch(() => {});
+      return;
+    }
+    this.#entries.delete(id);
+  }
+
+  #workDirOf(job: EngineJob): string {
+    return join(resolve(job.request.outputDir ?? this.#outputDir), `.mediaforge-${job.id}`);
+  }
+
+  /** A promise that resolves when the job next completes, fails or is cancelled. */
+  #newSettle(entry: Pick<Entry, "settled" | "settle">): void {
+    entry.settled = new Promise<EngineJob>((res) => {
+      entry.settle = res;
+    });
+  }
+
+  /** Change how many jobs run at once. Raising it starts queued jobs; lowering it stops none. */
+  setMaxConcurrent(n: number): void {
+    this.#maxConcurrent = Math.max(1, Math.floor(n));
+    this.#pump();
   }
 
   #pump(): void {
@@ -196,8 +293,8 @@ export class DownloadEngine {
 
   #finish(entry: Entry, patch: Partial<EngineJob>): void {
     this.#update(entry, patch);
-    // The secrets are no longer needed once the final state is out.
-    entry.context = undefined;
+    // The secrets are no longer needed once the job is over for good. A failed job may be retried.
+    if (entry.job.status !== "failed") entry.context = undefined;
     entry.settle({ ...entry.job });
   }
 
@@ -221,11 +318,11 @@ export class DownloadEngine {
     const { job, controller } = entry;
     const profile = getProfile(job.request.profileId) as OutputProfile;
     const outputDir = resolve(job.request.outputDir ?? this.#outputDir);
-    const workDir = join(outputDir, `.mediaforge-${job.id}`);
+    const workDir = this.#workDirOf(job);
     const secrets = contextSecrets(entry.context);
     let outcome: Partial<EngineJob>;
 
-    this.#update(entry, { status: "downloading" });
+    this.#update(entry, { status: "downloading", workDir });
     try {
       const ytDlp = await requireTool("yt-dlp", this.#resolve);
       const ffmpeg = await requireTool("ffmpeg", this.#resolve);
@@ -301,7 +398,7 @@ export class DownloadEngine {
       ).finally(() => clearInterval(poll));
 
       if (controller.signal.aborted) {
-        outcome = { status: "cancelled" };
+        outcome = { status: entry.stopReason === "pause" ? "paused" : "cancelled" };
       } else if (exitCode === 0 && (filePath || job.request.subtitle)) {
         // yt-dlp prints the (unwritten) video name for a subtitle job, so the file is whatever
         // single file the work folder holds.
@@ -324,7 +421,7 @@ export class DownloadEngine {
       }
     } catch (error) {
       outcome = controller.signal.aborted
-        ? { status: "cancelled" }
+        ? { status: entry.stopReason === "pause" ? "paused" : "cancelled" }
         : {
             status: "failed",
             error: redactSecrets(error instanceof Error ? error.message : String(error), secrets),
@@ -332,8 +429,15 @@ export class DownloadEngine {
           };
     }
 
-    // Always remove the working folder (partial files, leftovers) before reporting the result.
-    await this.#fs.rm(workDir).catch(() => {});
-    this.#finish(entry, outcome);
+    // Partial files stay for a paused job (resume continues them) and a failed one (retry does).
+    if (outcome.status !== "paused" && outcome.status !== "failed") {
+      await this.#fs.rm(workDir).catch(() => {});
+    }
+    if (outcome.status === "paused") {
+      entry.stopReason = undefined;
+      this.#update(entry, outcome);
+    } else {
+      this.#finish(entry, outcome);
+    }
   }
 }

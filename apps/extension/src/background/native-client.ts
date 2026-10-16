@@ -162,7 +162,11 @@ export function createNativeClient(options: NativeClientOptions): NativeClient {
     helloId = newId();
     send(
       "hello",
-      { extensionVersion: options.extensionVersion, browser: options.browser },
+      {
+        client: "extension",
+        extensionVersion: options.extensionVersion,
+        browser: options.browser,
+      },
       helloId,
     );
     helloTimer = setTimeout(() => {

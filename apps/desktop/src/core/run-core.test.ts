@@ -5,9 +5,11 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { PROTOCOL_VERSION } from "@mediaforge/shared-protocol";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { ExitCode } from "../exit-codes.ts";
 import { memorySettingsStore, type SettingsStore } from "../settings.ts";
 import { makeRuntime } from "../test-runtime.ts";
 import type { ToolRuntime } from "../tool-runtime.ts";
+import { memoryHistoryFs } from "./history.ts";
 import { type Connection, connectCore, listenCore, newToken, readToken, tokenPath } from "./ipc.ts";
 import {
   createPageProbe,
@@ -137,6 +139,8 @@ const hello = (id = "h") => ({
 const fakeEngine = (list: () => unknown[] = () => []) =>
   ({ list, submit: () => ({}), cancel: () => false, get: () => undefined }) as never;
 
+const HISTORY_FILE = "/h/history.json";
+
 /** Everything `runCore` needs, with a real (unique) pipe and a temp folder for its files. */
 async function setup(overrides: Partial<RunCoreDeps> = {}) {
   const dir = await mkdtemp(join(tmpdir(), "mf-core-"));
@@ -157,6 +161,8 @@ async function setup(overrides: Partial<RunCoreDeps> = {}) {
     applyAutostart: async () => {},
     handleSignals: false,
     shutdown: stop.signal,
+    historyFile: HISTORY_FILE,
+    historyFs: memoryHistoryFs(),
     ...overrides,
   };
   return { deps, log, stop, dir };
@@ -544,6 +550,63 @@ describe("runCore", () => {
       const core = await launch({ toolRuntime: rt, idleGraceMs: 50 });
       expect(await core.exit).toBe(0);
     });
+  });
+});
+
+describe("history", () => {
+  it("records running on start and a clean exit on shutdown", async () => {
+    const historyFs = memoryHistoryFs();
+    const core = await launch({ historyFs });
+    await vi.waitFor(() =>
+      expect(JSON.parse(historyFs.files.get(HISTORY_FILE) ?? "{}").cleanExit).toBe(false),
+    );
+    core.stop.abort();
+    await core.exit;
+    expect(JSON.parse(historyFs.files.get(HISTORY_FILE) as string).cleanExit).toBe(true);
+  });
+
+  it("never opens history when another core holds the pipe", async () => {
+    const first = await launch();
+    const historyFs = memoryHistoryFs();
+    const read = vi.spyOn(historyFs, "readFile");
+    const second = await setup({
+      pipe: first.deps.pipe,
+      tokenFile: first.deps.tokenFile,
+      historyFs,
+    });
+    await expect(runCore(second.deps)).resolves.toBe(ExitCode.Ok);
+    expect(read).not.toHaveBeenCalled();
+    first.stop.abort();
+    await first.exit;
+  });
+
+  it("answers a client that connects the moment the token appears, even with a slow history disk", async () => {
+    const base = memoryHistoryFs();
+    const historyFs = {
+      ...base,
+      writeFile: async (path: string, data: string) => {
+        await sleep(150);
+        await base.writeFile(path, data);
+      },
+    };
+    const core = await launch({ historyFs });
+    const client = await connect(core.deps.pipe, core.token);
+    client.conn.send(hello());
+    expect(await client.next()).toMatchObject({ type: "hello.ack" });
+  });
+
+  it("applies downloads-at-once on every poll", async () => {
+    const setMaxConcurrent = vi.fn();
+    const settings = memorySettingsStore({ concurrency: 1 });
+    const core = await launch({
+      settings,
+      pollMs: 10,
+      createEngine: () => ({ ...(fakeEngine() as object), setMaxConcurrent }) as never,
+    });
+    await settings.save({ ...(await settings.load()), concurrency: 4 });
+    await vi.waitFor(() => expect(setMaxConcurrent).toHaveBeenCalledWith(4));
+    core.stop.abort();
+    await core.exit;
   });
 });
 

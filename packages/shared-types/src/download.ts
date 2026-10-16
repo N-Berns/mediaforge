@@ -1,4 +1,5 @@
 import type { MediaCandidate } from "./media.ts";
+import type { Step } from "./steps.ts";
 
 /** A subtitle track to save on its own, instead of the media itself. */
 export interface SubtitleRequest {
@@ -24,9 +25,21 @@ export type DownloadStatus =
   | "queued"
   | "downloading"
   | "processing"
+  | "paused"
   | "completed"
   | "failed"
   | "cancelled";
+
+/** Where a download was started. */
+export type JobOrigin = "extension" | "manager" | "menu" | "cli";
+
+/** Says the last core session ended with downloads still running, which are now paused. */
+export interface Notice {
+  /** "unexpected": no clean exit (crash, kill, power loss). "restarted": clean exit, e.g. an update. */
+  reason: "unexpected" | "restarted";
+  pausedCount: number;
+  jobIds: string[];
+}
 
 export interface DownloadProgress {
   bytesDownloaded: number;
@@ -48,4 +61,17 @@ export interface DownloadJob {
   error?: string;
   createdAt: number;
   updatedAt: number;
+  origin?: JobOrigin;
+  /** When the job last started downloading. */
+  lastTryAt?: number;
+  /** Final size, or the expected size while running. */
+  sizeBytes?: number;
+  /** Average speed of the finished download, in bytes per second. */
+  avgSpeed?: number;
+  /** Download, merge and convert steps, in order. */
+  steps?: Step[];
+  /** 0 to 100 across all steps. */
+  overallPercent?: number;
+  /** The CLI exit code matching a failure. */
+  errorKind?: number;
 }

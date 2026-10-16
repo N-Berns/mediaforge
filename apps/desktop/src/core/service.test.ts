@@ -11,8 +11,11 @@ import type { EngineJob } from "../engine/index.ts";
 import { defaultOutputDir } from "../engine/paths.ts";
 import { KIND_FOLDERS } from "../kind-folder.ts";
 import { memorySettingsStore, type Settings } from "../settings.ts";
+import { HistoryStore, memoryHistoryFs } from "./history.ts";
+import type { ConnectionRole } from "./ipc.ts";
 import type { Provisioner, SetupStatus } from "./provisioner.ts";
 import { CoreService, type CoreServiceDeps } from "./service.ts";
+import type { TrashFn } from "./trash.ts";
 
 vi.mock("@mediaforge/shared-protocol", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@mediaforge/shared-protocol")>();
@@ -68,8 +71,21 @@ function fakeEngine(notify: (job: EngineJob) => void, autoStart: boolean) {
       return { ...job };
     },
     cancel: vi.fn((id: string) => jobs.has(id)),
+    pause: vi.fn(
+      (id: string) =>
+        jobs.has(id) &&
+        ["queued", "downloading", "processing"].includes(jobs.get(id)?.status ?? ""),
+    ),
+    resume: vi.fn((id: string) => ["paused", "failed"].includes(jobs.get(id)?.status ?? "")),
+    restore: vi.fn((job: EngineJob, _options?: object) => {
+      jobs.set(job.id, { ...job });
+    }),
+    remove: vi.fn(async (id: string) => {
+      jobs.delete(id);
+    }),
     list: () => [...jobs.values()],
     get: (id: string) => jobs.get(id),
+    setMaxConcurrent: vi.fn(),
   };
   return { engine, jobs, submitted, submitOptions };
 }
@@ -82,9 +98,13 @@ interface SetupOptions {
   probe?: CoreServiceDeps["probe"];
   openPath?: CoreServiceDeps["openPath"];
   settings?: Partial<Settings>;
+  role?: ConnectionRole;
+  /** Raw history.json content to start from. */
+  historyFile?: string;
+  trash?: TrashFn;
 }
 
-function setup(options: SetupOptions = {}) {
+async function setup(options: SetupOptions = {}) {
   let push: (job: EngineJob) => void = () => {};
   const fake = fakeEngine((job) => push(job), options.autoStart ?? false);
   let notifySetup: (status: SetupStatus) => void = () => {};
@@ -103,6 +123,14 @@ function setup(options: SetupOptions = {}) {
   const openPath = vi.fn(options.openPath ?? (async () => {}));
   let clock = 0;
   const settings = memorySettingsStore(options.settings);
+  const historyFs = memoryHistoryFs(
+    options.historyFile ? { "/h/history.json": options.historyFile } : {},
+  );
+  const history = await HistoryStore.open({
+    path: "/h/history.json",
+    fs: historyFs,
+    debounceMs: 0,
+  });
   const service = new CoreService({
     createEngine: (onUpdate) => {
       push = onUpdate;
@@ -118,9 +146,11 @@ function setup(options: SetupOptions = {}) {
     onActivity,
     now: () => clock,
     newId: () => `id-${++clock}`,
+    history,
+    trash: options.trash ?? (async () => ({ failed: [] })),
   });
   const sent: HostToExtensionMessage[] = [];
-  const handle = service.attach({ send: (m) => sent.push(m) });
+  const handle = service.attach({ send: (m) => sent.push(m) }, options.role);
   const send = (type: string, payload: unknown = {}, id = "req") =>
     handle.handle({ v: PROTOCOL_VERSION, id, type, payload });
   const advance = (ms: number) => {
@@ -146,6 +176,8 @@ function setup(options: SetupOptions = {}) {
     onActivity,
     advance,
     settings,
+    history,
+    historyFs,
   };
 }
 
@@ -154,7 +186,7 @@ const progressFrames = (messages: HostToExtensionMessage[]) =>
 
 describe("hello", () => {
   it("answers with versions, tool availability, setup state and keepRunning", async () => {
-    const t = setup();
+    const t = await setup();
     await t.send("hello", { extensionVersion: "1", browser: "chrome" });
     expect(t.sent[0]).toMatchObject({
       id: "req",
@@ -169,7 +201,7 @@ describe("hello", () => {
   });
 
   it("reports a tool as unavailable when its probe rejects, and still answers", async () => {
-    const t = setup({
+    const t = await setup({
       probeTool: async (tool) => {
         if (tool === "ffmpeg") throw new Error("spawn EPERM");
         return { available: true, version: "1" };
@@ -186,7 +218,7 @@ describe("hello", () => {
 
 describe("validation", () => {
   it("answers invalid messages with an error that names the request", async () => {
-    const t = setup();
+    const t = await setup();
     await t.handle.handle({ v: PROTOCOL_VERSION, id: "x", type: "nope", payload: {} });
     expect(t.sent[0]).toMatchObject({
       type: "error",
@@ -195,7 +227,7 @@ describe("validation", () => {
   });
 
   it("limits the length of the invalid-message text", async () => {
-    const t = setup();
+    const t = await setup();
     // Every variant is missing four required fields, so the joined issues run to many KiB.
     const broken = { ...candidate, variants: Array.from({ length: 500 }, () => ({})) };
     await t.send("download.start", { candidate: broken, profileId: "best" }, "big");
@@ -206,7 +238,7 @@ describe("validation", () => {
   });
 
   it("answers a message type it has no handler for with an unsupported error", async () => {
-    const t = setup();
+    const t = await setup();
     await t.handle.handle({ v: PROTOCOL_VERSION, id: "f", type: "test.future", payload: {} });
     expect(t.sent).toHaveLength(1);
     expect(t.sent[0]).toMatchObject({
@@ -218,7 +250,7 @@ describe("validation", () => {
 
 describe("download.start", () => {
   it("queues the job, applies the type folder, and replies queued", async () => {
-    const t = setup();
+    const t = await setup();
     await t.send("download.start", { candidate, profileId: "best" }, "r1");
     expect(t.sent[0]).toMatchObject({
       id: "r1",
@@ -230,20 +262,20 @@ describe("download.start", () => {
   });
 
   it("rejects an unknown profile", async () => {
-    const t = setup();
+    const t = await setup();
     await t.send("download.start", { candidate, profileId: "nope" });
     expect(t.sent[0]).toMatchObject({ type: "error", payload: { code: "unknown-profile" } });
   });
 
   it("treats an empty outputDir as the default folder when sorting by type", async () => {
-    const t = setup();
+    const t = await setup();
     await t.send("download.start", { candidate, profileId: "best", outputDir: "" });
     const request = t.fake.submitted[0] as { outputDir?: string };
     expect(request.outputDir).toBe(join(defaultOutputDir(), KIND_FOLDERS["video-audio"]));
   });
 
   it("sorts a subtitle file into its own folder", async () => {
-    const t = setup({
+    const t = await setup({
       probe: async (url) => ({ url, formats: [], subtitles: [{ lang: "en", auto: false }] }),
     });
     await t.send("media.probe", { url: candidate.url });
@@ -258,11 +290,11 @@ describe("download.start", () => {
   });
 
   it("treats an empty outputDir as unset when not sorting by type", async () => {
-    const plain = setup({ settings: { sortByType: false } });
+    const plain = await setup({ settings: { sortByType: false } });
     await plain.send("download.start", { candidate, profileId: "best", outputDir: "" });
     expect(plain.fake.submitted[0]).not.toHaveProperty("outputDir");
 
-    const saved = setup({ settings: { sortByType: false, folder: "D:\\Saved" } });
+    const saved = await setup({ settings: { sortByType: false, folder: "D:\\Saved" } });
     await saved.send("download.start", { candidate, profileId: "best", outputDir: "" });
     expect(saved.fake.submitted[0]).toMatchObject({ outputDir: "D:\\Saved" });
   });
@@ -271,14 +303,14 @@ describe("download.start", () => {
     const saved = resolve(tmpdir(), "mf-saved-folder");
 
     it("accepts a full outputDir inside the default folder", async () => {
-      const t = setup({ settings: { sortByType: false } });
+      const t = await setup({ settings: { sortByType: false } });
       const dir = join(defaultOutputDir(), "Clips");
       await t.send("download.start", { candidate, profileId: "best", outputDir: dir });
       expect(t.fake.submitted[0]).toMatchObject({ outputDir: dir });
     });
 
     it("accepts a full outputDir inside the saved folder, and the saved folder itself", async () => {
-      const t = setup({ settings: { sortByType: false, folder: saved } });
+      const t = await setup({ settings: { sortByType: false, folder: saved } });
       const inside = join(saved, "Music");
       await t.send("download.start", { candidate, profileId: "best", outputDir: inside });
       await t.send("download.start", { candidate, profileId: "best", outputDir: saved });
@@ -286,7 +318,7 @@ describe("download.start", () => {
     });
 
     it("submits the normalized folder", async () => {
-      const t = setup({ settings: { sortByType: false, folder: saved } });
+      const t = await setup({ settings: { sortByType: false, folder: saved } });
       const dir = `${join(saved, "a")}${sep}..${sep}b`;
       await t.send("download.start", { candidate, profileId: "best", outputDir: dir });
       expect(t.fake.submitted[0]).toMatchObject({ outputDir: join(saved, "b") });
@@ -297,7 +329,7 @@ describe("download.start", () => {
       ["a parent escape", `${saved}${sep}..${sep}elsewhere`],
       ["a relative path", "Music"],
     ])("rejects an outputDir %s and submits nothing", async (_label, outputDir) => {
-      const t = setup({ settings: { folder: saved } });
+      const t = await setup({ settings: { folder: saved } });
       await t.send("download.start", { candidate, profileId: "best", outputDir }, "r1");
       expect(t.sent).toMatchObject([
         { type: "error", payload: { code: "invalid-output-dir", replyTo: "r1" } },
@@ -306,7 +338,7 @@ describe("download.start", () => {
     });
 
     it("rejects an outputDir outside the default folder when none is saved", async () => {
-      const t = setup();
+      const t = await setup();
       const outputDir = resolve(defaultOutputDir(), "..", "Elsewhere");
       await t.send("download.start", { candidate, profileId: "best", outputDir });
       expect(t.sent[0]).toMatchObject({ payload: { code: "invalid-output-dir" } });
@@ -314,7 +346,7 @@ describe("download.start", () => {
     });
 
     it("accepts a plain file name", async () => {
-      const t = setup();
+      const t = await setup();
       await t.send("download.start", { candidate, profileId: "best", filename: "My clip" });
       expect(t.fake.submitted[0]).toMatchObject({ filename: "My clip" });
     });
@@ -322,7 +354,7 @@ describe("download.start", () => {
     it.each(["..\\evil", "../evil", "a/b", "C:evil", "..", "a\u0000b", "x".repeat(201)])(
       "rejects the file name %j and submits nothing",
       async (filename) => {
-        const t = setup();
+        const t = await setup();
         await t.send("download.start", { candidate, profileId: "best", filename }, "r2");
         expect(t.sent).toMatchObject([
           { type: "error", payload: { code: "invalid-filename", replyTo: "r2" } },
@@ -333,7 +365,7 @@ describe("download.start", () => {
   });
 
   it("reports a job the engine already started inside submit as downloading", async () => {
-    const t = setup({ autoStart: true });
+    const t = await setup({ autoStart: true });
     await t.send("download.start", { candidate, profileId: "best" }, "r1");
     expect(t.sent).toHaveLength(1);
     expect(t.sent[0]).toMatchObject({
@@ -346,7 +378,7 @@ describe("download.start", () => {
 
 describe("job updates", () => {
   it("sends terminal states to the owner and throttles progress", async () => {
-    const t = setup();
+    const t = await setup();
     await t.send("download.start", { candidate, profileId: "best" });
     t.sent.length = 0;
     const base = t.fake.jobs.get("job-1") as EngineJob;
@@ -370,7 +402,7 @@ describe("job updates", () => {
   });
 
   it("delivers queued to downloading inside the window opened by the queued update", async () => {
-    const t = setup();
+    const t = await setup();
     await t.send("download.start", { candidate, profileId: "best" });
     t.sent.length = 0;
     // No time has passed since the engine reported the job as queued from inside submit.
@@ -381,7 +413,7 @@ describe("job updates", () => {
   });
 
   it("delivers downloading to processing right after a sent progress frame", async () => {
-    const t = setup();
+    const t = await setup();
     await t.send("download.start", { candidate, profileId: "best" });
     t.sent.length = 0;
     t.update("job-1", { status: "downloading", progress: { bytesDownloaded: 10 } });
@@ -396,7 +428,7 @@ describe("job updates", () => {
   });
 
   it("shows subscribers a job's queued and downloading states in order", async () => {
-    const t = setup({ autoStart: true });
+    const t = await setup({ autoStart: true });
     const watcher: HostToExtensionMessage[] = [];
     const watcherHandle = t.service.attach({ send: (m) => watcher.push(m) });
     await watcherHandle.handle({
@@ -410,7 +442,7 @@ describe("job updates", () => {
   });
 
   it("reports a cancelled job as failed with cancelled true", async () => {
-    const t = setup();
+    const t = await setup();
     await t.send("download.start", { candidate, profileId: "best" });
     t.push({ ...(t.fake.jobs.get("job-1") as EngineJob), status: "cancelled" });
     expect(t.sent.at(-1)).toMatchObject({
@@ -420,7 +452,7 @@ describe("job updates", () => {
   });
 
   it("keeps the job running and visible after the client detaches", async () => {
-    const t = setup();
+    const t = await setup();
     await t.send("download.start", { candidate, profileId: "best" });
     t.handle.detach();
     expect(t.fake.engine.cancel).not.toHaveBeenCalled();
@@ -443,8 +475,17 @@ describe("job updates", () => {
     expect(t.service.isIdle).toBe(true);
   });
 
+  it("does not count a paused job as active", async () => {
+    const t = await setup();
+    await t.send("download.start", { candidate, profileId: "best" });
+    t.handle.detach();
+    expect(t.service.isIdle).toBe(false);
+    t.update("job-1", { status: "paused" });
+    expect(t.service.isIdle).toBe(true);
+  });
+
   it("is idle only once every client has detached and every job is terminal", async () => {
-    const t = setup();
+    const t = await setup();
     expect(t.service.isIdle).toBe(false);
     const calls = t.onActivity.mock.calls.length;
     t.handle.detach();
@@ -453,7 +494,7 @@ describe("job updates", () => {
   });
 
   it("keeps updating other clients when one client's send throws", async () => {
-    const t = setup();
+    const t = await setup();
     const broken = t.service.attach({
       send: () => {
         throw new Error("Message is 2000000 bytes; limit is 1048576");
@@ -477,7 +518,7 @@ describe("job updates", () => {
   });
 
   it("does not reject when the client cannot receive the reply", async () => {
-    const t = setup();
+    const t = await setup();
     const broken = t.service.attach({
       send: () => {
         throw new Error("transport closed");
@@ -494,7 +535,7 @@ describe("job updates", () => {
 
 describe("setup progress", () => {
   it("sends nothing to a client before its first request", async () => {
-    const t = setup();
+    const t = await setup();
     const quiet: HostToExtensionMessage[] = [];
     const quietHandle = t.service.attach({ send: (m) => quiet.push(m) });
     expect(quiet).toEqual([]);
@@ -511,7 +552,7 @@ describe("setup progress", () => {
   });
 
   it("sends at most one frame per tool and phase every 250 ms, and every change at once", async () => {
-    const t = setup();
+    const t = await setup();
     await t.send("settings.get");
     t.sent.length = 0;
     const percents = () =>
@@ -552,7 +593,7 @@ describe("setup progress", () => {
 
 describe("jobs and settings", () => {
   it("lists jobs as a snapshot without engine-only fields", async () => {
-    const t = setup();
+    const t = await setup();
     await t.send("download.start", { candidate, profileId: "best" });
     t.sent.length = 0;
     await t.send("jobs.list");
@@ -562,7 +603,7 @@ describe("jobs and settings", () => {
   });
 
   it("trims the snapshot to fit the host message cap and keeps the newest jobs", async () => {
-    const t = setup();
+    const t = await setup();
     const heavy: MediaCandidate = {
       ...candidate,
       variants: Array.from({ length: 60 }, (_, i) => ({
@@ -576,14 +617,18 @@ describe("jobs and settings", () => {
     const total = 30;
     // Inserted newest first, so the snapshot must order by creation time, not insertion.
     for (let i = total; i >= 1; i--) {
-      t.fake.jobs.set(`heavy-${i}`, {
-        id: `heavy-${i}`,
-        request: { candidate: heavy, profileId: "best" },
-        status: "completed",
-        progress: { bytesDownloaded: 0 },
-        createdAt: i,
-        updatedAt: i,
-      });
+      t.history.upsert(
+        {
+          id: `heavy-${i}`,
+          request: { candidate: heavy, profileId: "best" },
+          status: "completed",
+          progress: { bytesDownloaded: 0 },
+          createdAt: i,
+          updatedAt: i,
+          files: [],
+        },
+        { save: false },
+      );
     }
     await t.send("jobs.list");
     const snapshot = t.sent[0] as Extract<HostToExtensionMessage, { type: "jobs.snapshot" }>;
@@ -602,13 +647,13 @@ describe("jobs and settings", () => {
     expect(ids).toEqual(expected);
 
     // Not over-trimmed: the next older job would not have fit.
-    const older = t.fake.jobs.get(`heavy-${total - ids.length}`) as EngineJob;
+    const older = t.history.get(`heavy-${total - ids.length}`) as EngineJob;
     const withOlder = { ...snapshot, payload: { jobs: [older, ...snapshot.payload.jobs] } };
     expect(new TextEncoder().encode(JSON.stringify(withOlder)).byteLength).toBeGreaterThan(900_000);
   });
 
   it("subscribers see jobs they did not start", async () => {
-    const t = setup();
+    const t = await setup();
     const other: HostToExtensionMessage[] = [];
     const otherHandle = t.service.attach({ send: (m) => other.push(m) });
     await otherHandle.handle({ v: PROTOCOL_VERSION, id: "s", type: "jobs.subscribe", payload: {} });
@@ -618,7 +663,7 @@ describe("jobs and settings", () => {
   });
 
   it("persists settings.set, returns the merged value, and syncs autostart", async () => {
-    const t = setup();
+    const t = await setup();
     await t.send("settings.set", { keepRunning: true, extensionUi: "popup" });
     expect(t.sent[0]).toMatchObject({
       type: "settings.value",
@@ -631,7 +676,7 @@ describe("jobs and settings", () => {
   });
 
   it("saves a full folder path", async () => {
-    const t = setup();
+    const t = await setup();
     const folder = resolve(tmpdir(), "mf-new-folder");
     await t.send("settings.set", { folder });
     expect(t.sent[0]).toMatchObject({ type: "settings.value", payload: { folder } });
@@ -642,7 +687,7 @@ describe("jobs and settings", () => {
     ["a relative folder", "Videos"],
     ["a dot folder name", `${resolve(tmpdir())}${sep}..${sep}x`],
   ])("rejects %s, and saves nothing", async (_label, folder) => {
-    const t = setup({ settings: { folder: resolve(tmpdir(), "kept"), keepRunning: false } });
+    const t = await setup({ settings: { folder: resolve(tmpdir(), "kept"), keepRunning: false } });
     const before = await t.settings.load();
     await t.send("settings.set", { folder, keepRunning: true }, "s1");
     expect(t.sent).toMatchObject([
@@ -653,7 +698,7 @@ describe("jobs and settings", () => {
   });
 
   it("clears the folder when it is set to an empty string", async () => {
-    const t = setup({ settings: { folder: resolve(tmpdir(), "kept") } });
+    const t = await setup({ settings: { folder: resolve(tmpdir(), "kept") } });
     await t.send("settings.set", { folder: "" });
     expect(t.sent[0]).toMatchObject({ type: "settings.value" });
     expect(t.sent[0]).not.toHaveProperty("payload.folder");
@@ -661,7 +706,7 @@ describe("jobs and settings", () => {
   });
 
   it("cancel reports an unknown job", async () => {
-    const t = setup();
+    const t = await setup();
     await t.send("download.cancel", { jobId: "ghost" });
     expect(t.sent[0]).toMatchObject({ type: "error", payload: { code: "unknown-job" } });
   });
@@ -678,14 +723,14 @@ describe("media.probe and variantId", () => {
   };
 
   it("replies media.info", async () => {
-    const t = setup({ probe: async () => media });
+    const t = await setup({ probe: async () => media });
     await t.send("media.probe", { url: media.url }, "p1");
     expect(t.sent[0]).toMatchObject({ id: "p1", type: "media.info", payload: { title: "Clip" } });
   });
 
   it("maps an unsupported probe to unsupported-site and a non-http url to invalid-url", async () => {
     const { UnsupportedSiteError } = await import("./probe.ts");
-    const t = setup({
+    const t = await setup({
       probe: async () => {
         throw new UnsupportedSiteError("nope");
       },
@@ -698,7 +743,7 @@ describe("media.probe and variantId", () => {
   });
 
   it("downloads a probed variant with the resolved selector", async () => {
-    const t = setup({ probe: async () => media });
+    const t = await setup({ probe: async () => media });
     await t.send("media.probe", { url: media.url });
     t.sent.length = 0;
     await t.send("download.start", {
@@ -709,8 +754,19 @@ describe("media.probe and variantId", () => {
     expect(t.fake.submitOptions[0]).toMatchObject({ formatSelector: "137+ba/137" });
   });
 
+  it("keeps the probed selector when a terminal sends a variantId without a selector", async () => {
+    const t = await setup({ role: "terminal", probe: async () => media });
+    await t.send("media.probe", { url: media.url });
+    await t.send("download.start", {
+      candidate: { ...candidate, url: media.url, pageUrl: media.url },
+      profileId: "best",
+      variantId: "137",
+    });
+    expect(t.fake.submitOptions[0]).toMatchObject({ formatSelector: "137+ba/137" });
+  });
+
   it("switches an audio-only pick to the audio profile", async () => {
-    const t = setup({ probe: async () => media });
+    const t = await setup({ probe: async () => media });
     await t.send("media.probe", { url: media.url });
     await t.send("download.start", {
       candidate: { ...candidate, url: media.url, pageUrl: media.url },
@@ -721,7 +777,7 @@ describe("media.probe and variantId", () => {
   });
 
   it("rejects a variantId the core never returned", async () => {
-    const t = setup({ probe: async () => media });
+    const t = await setup({ probe: async () => media });
     await t.send("download.start", {
       candidate: { ...candidate, url: media.url, pageUrl: media.url },
       profileId: "best",
@@ -734,7 +790,7 @@ describe("media.probe and variantId", () => {
 
 describe("context", () => {
   it("passes a valid context to the engine, never into the job", async () => {
-    const t = setup();
+    const t = await setup();
     await t.send("download.start", {
       candidate,
       profileId: "best",
@@ -750,7 +806,7 @@ describe("context", () => {
   });
 
   it("rejects a context with a line break", async () => {
-    const t = setup();
+    const t = await setup();
     await t.send("download.start", {
       candidate,
       profileId: "best",
@@ -761,7 +817,7 @@ describe("context", () => {
   });
 
   it("never adds the context to progress or failure frames", async () => {
-    const t = setup({ autoStart: true });
+    const t = await setup({ autoStart: true });
     await t.send("download.start", {
       candidate,
       profileId: "best",
@@ -778,7 +834,7 @@ describe("context", () => {
 
 describe("folder.open", () => {
   it("opens the default download folder when none is set", async () => {
-    const t = setup();
+    const t = await setup();
     await t.send("folder.open", {});
     expect(t.openPath).toHaveBeenCalledWith(defaultOutputDir(), { select: false });
     expect(t.sent[0]).toMatchObject({ id: "req", type: "folder.opened" });
@@ -786,13 +842,13 @@ describe("folder.open", () => {
 
   it("opens the folder the user chose", async () => {
     const folder = join(tmpdir(), "mf-media");
-    const t = setup({ settings: { folder } });
+    const t = await setup({ settings: { folder } });
     await t.send("folder.open", {});
     expect(t.openPath).toHaveBeenCalledWith(folder, { select: false });
   });
 
   it("shows a finished job's file selected, from the host's own record", async () => {
-    const t = setup();
+    const t = await setup();
     await t.send("download.start", { candidate, profileId: "best" });
     const outputPath = join(tmpdir(), "clip.mp4");
     t.update("job-1", { status: "completed", outputPath });
@@ -803,7 +859,7 @@ describe("folder.open", () => {
   });
 
   it("refuses a job that is unknown or has no file yet", async () => {
-    const t = setup();
+    const t = await setup();
     await t.send("download.start", { candidate, profileId: "best" });
     t.sent.length = 0;
     await t.send("folder.open", { jobId: "job-1" });
@@ -816,18 +872,442 @@ describe("folder.open", () => {
   });
 
   it("does not accept a path from the extension", async () => {
-    const t = setup();
+    const t = await setup();
     await t.send("folder.open", { path: "C:Windows" });
     expect(t.openPath).toHaveBeenCalledWith(defaultOutputDir(), { select: false });
   });
 
   it("reports a folder that could not be opened", async () => {
-    const t = setup({
+    const t = await setup({
       openPath: async () => {
         throw new Error("EACCES");
       },
     });
     await t.send("folder.open", {});
     expect(t.sent[0]).toMatchObject({ type: "error", payload: { code: "open-failed" } });
+  });
+});
+
+const startPayload = (extra: object = {}) => ({ candidate, profileId: "best", ...extra });
+
+describe("history", () => {
+  it("records a started job with its origin and saves status changes", async () => {
+    const t = await setup({ role: "terminal" });
+    await t.send("download.start", startPayload({ origin: "menu", outputDir: resolve("/dl") }));
+    t.advance(1000);
+    t.update("job-1", { status: "downloading" });
+    expect(t.history.get("job-1")).toMatchObject({ origin: "menu", lastTryAt: expect.any(Number) });
+  });
+
+  it("forces origin extension for relay connections", async () => {
+    const t = await setup();
+    await t.send("download.start", startPayload({ origin: "cli" }));
+    expect(t.history.get("job-1")?.origin).toBe("extension");
+  });
+
+  it("records the file and average speed of a finished job", async () => {
+    const t = await setup({ role: "terminal" });
+    await t.send("download.start", startPayload());
+    t.update("job-1", { status: "downloading" });
+    t.update("job-1", { progress: { bytesDownloaded: 500, totalBytes: 1000 } });
+    t.advance(2000);
+    t.update("job-1", { status: "completed", outputPath: "/dl/a.mp4", updatedAt: 0 });
+    const row = t.history.get("job-1");
+    expect(row).toMatchObject({ files: ["/dl/a.mp4"], sizeBytes: 1000 });
+    expect(row?.avgSpeed).toBeGreaterThan(0);
+  });
+
+  it("lists jobs from earlier sessions in the snapshot", async () => {
+    const old = {
+      id: "old",
+      request: { candidate, profileId: "best" },
+      status: "completed",
+      progress: { bytesDownloaded: 0 },
+      createdAt: 1,
+      updatedAt: 1,
+      files: [],
+    };
+    const t = await setup({
+      historyFile: JSON.stringify({ version: 1, cleanExit: true, jobs: [old] }),
+    });
+    await t.send("jobs.list");
+    const snap = t.sent.find((m) => m.type === "jobs.snapshot");
+    expect(snap?.type === "jobs.snapshot" && snap.payload.jobs.map((j) => j.id)).toEqual(["old"]);
+  });
+
+  it("sends the session notice in hello.ack", async () => {
+    const running = {
+      id: "r",
+      request: { candidate, profileId: "best" },
+      status: "downloading",
+      progress: { bytesDownloaded: 0 },
+      createdAt: 1,
+      updatedAt: 1,
+      files: [],
+    };
+    const t = await setup({
+      historyFile: JSON.stringify({ version: 1, cleanExit: false, jobs: [running] }),
+    });
+    await t.send("hello", { client: "extension" });
+    expect(t.sent[0]).toMatchObject({
+      type: "hello.ack",
+      payload: { notice: { reason: "unexpected", pausedCount: 1, jobIds: ["r"] } },
+    });
+  });
+});
+
+describe("roles", () => {
+  it("refuses a format selector or plan from the relay", async () => {
+    const t = await setup();
+    await t.send("download.start", startPayload({ formatSelector: "137" }));
+    expect(t.sent[0]).toMatchObject({ type: "error", payload: { code: "forbidden" } });
+    await t.send("download.start", startPayload({ plan: [{ kind: "download" }] }), "r2");
+    expect(t.sent[1]).toMatchObject({ type: "error", payload: { code: "forbidden" } });
+    expect(t.fake.submitted).toHaveLength(0);
+  });
+
+  it("passes a terminal's selector, plan and folder through unchanged", async () => {
+    const t = await setup({ role: "terminal", settings: { sortByType: true } });
+    const dir = resolve("/anywhere/Video");
+    await t.send(
+      "download.start",
+      startPayload({ formatSelector: "137+ba/137", plan: [{ kind: "video" }], outputDir: dir }),
+    );
+    expect(t.fake.submitted[0]).toMatchObject({ outputDir: dir });
+    expect(t.fake.submitOptions[0]).toMatchObject({
+      formatSelector: "137+ba/137",
+      plan: [{ kind: "video" }],
+    });
+  });
+
+  it("normalizes a terminal's folder", async () => {
+    const t = await setup({ role: "terminal" });
+    await t.send(
+      "download.start",
+      startPayload({ outputDir: join(resolve("/anywhere"), "x", "..", "Video") }),
+    );
+    expect(t.fake.submitted[0]).toMatchObject({ outputDir: resolve("/anywhere/Video") });
+  });
+
+  it("refuses a relative folder from a terminal", async () => {
+    const t = await setup({ role: "terminal" });
+    await t.send("download.start", startPayload({ outputDir: "relative/dir" }));
+    expect(t.sent[0]).toMatchObject({ type: "error", payload: { code: "invalid-output-dir" } });
+  });
+
+  it("refuses settings.reload from the relay and applies it for a terminal", async () => {
+    const relay = await setup({ settings: { concurrency: 3 } });
+    await relay.send("settings.reload");
+    expect(relay.sent[0]).toMatchObject({ type: "error", payload: { code: "forbidden" } });
+
+    const term = await setup({ role: "terminal", settings: { concurrency: 3 } });
+    await term.send("settings.reload");
+    expect(term.fake.engine.setMaxConcurrent).toHaveBeenCalledWith(3);
+    expect(term.sent[0]?.type).toBe("settings.value");
+  });
+});
+
+describe("push extras", () => {
+  it("carries steps on progress and errorKind on failure", async () => {
+    const t = await setup({ role: "terminal" });
+    await t.send("download.start", startPayload());
+    t.update("job-1", {
+      status: "downloading",
+      steps: [{ kind: "download", state: "active", percent: 5 }],
+      overallPercent: 5,
+    });
+    expect(progressFrames(t.sent).at(-1)).toMatchObject({
+      payload: { steps: [{ kind: "download" }], overallPercent: 5 },
+    });
+    t.update("job-1", { status: "failed", error: "nope", errorKind: 6 });
+    expect(t.sent.at(-1)).toMatchObject({ type: "download.failed", payload: { errorKind: 6 } });
+  });
+});
+
+describe("shutdown", () => {
+  it("records a clean exit", async () => {
+    const t = await setup();
+    await t.history.markRunning();
+    await t.service.shutdown();
+    expect(JSON.parse(t.historyFs.files.get("/h/history.json") as string).cleanExit).toBe(true);
+  });
+});
+
+const row = (id: string, status: string, extra: object = {}) => ({
+  id,
+  request: { candidate, profileId: "best" },
+  status,
+  progress: { bytesDownloaded: 0 },
+  createdAt: 1,
+  updatedAt: 1,
+  files: [],
+  ...extra,
+});
+const historyOf = (rows: object[], extra: object = {}) =>
+  JSON.stringify({ version: 1, cleanExit: true, jobs: rows, ...extra });
+const resultOf = (sent: HostToExtensionMessage[]) =>
+  sent.find((m) => m.type === "jobs.result")?.payload;
+
+describe("job control", () => {
+  it("hands paused and failed rows back to the engine on start, with their format", async () => {
+    const t = await setup({
+      historyFile: historyOf([
+        row("p", "paused", { formatSelector: "137+ba/137", plan: [{ kind: "video" }] }),
+        row("f", "failed"),
+        row("c", "completed"),
+      ]),
+    });
+    const restored = t.fake.engine.restore.mock.calls.map(([job, options]) => [job.id, options]);
+    expect(restored).toEqual([
+      ["p", { formatSelector: "137+ba/137", plan: [{ kind: "video" }] }],
+      ["f", {}],
+    ]);
+    // Core-only fields never reach the engine's job or the protocol.
+    expect(t.fake.engine.restore.mock.calls[0]?.[0]).not.toHaveProperty("files");
+  });
+
+  it("remembers the format a terminal chose, so a resume can use it", async () => {
+    const t = await setup({ role: "terminal" });
+    await t.send(
+      "download.start",
+      startPayload({
+        formatSelector: "137+ba/137",
+        plan: [{ kind: "video" }],
+        outputDir: resolve("/dl"),
+      }),
+    );
+    expect(t.history.get("job-1")).toMatchObject({
+      formatSelector: "137+ba/137",
+      plan: [{ kind: "video" }],
+    });
+  });
+
+  it("pauses a batch and reports unknown and refused ids once each", async () => {
+    const t = await setup({ role: "terminal" });
+    await t.send("download.start", startPayload());
+    t.update("job-1", { status: "downloading" });
+    await t.send("download.start", startPayload(), "r2");
+    t.update("job-2", { status: "completed", outputPath: "/dl/a.mp4" });
+    t.sent.length = 0;
+
+    await t.send("download.pause", { jobIds: ["job-1", "job-1", "job-2", "nope"] });
+
+    expect(t.fake.engine.pause).toHaveBeenCalledTimes(2);
+    expect(resultOf(t.sent)).toEqual({
+      failed: [
+        { jobId: "job-2", message: "Only queued or running downloads can be paused." },
+        { jobId: "nope", message: "No such download." },
+      ],
+    });
+  });
+
+  it("pushes download.paused when a job pauses", async () => {
+    const t = await setup({ role: "terminal" });
+    await t.send("download.start", startPayload());
+    t.update("job-1", { status: "downloading", progress: { bytesDownloaded: 5, percent: 50 } });
+    t.update("job-1", { status: "paused" });
+    expect(t.sent.at(-1)).toMatchObject({
+      type: "download.paused",
+      payload: { jobId: "job-1", progress: { percent: 50 } },
+    });
+  });
+
+  it("resumes paused and failed jobs and refuses the rest", async () => {
+    const t = await setup({ historyFile: historyOf([row("p", "paused"), row("c", "completed")]) });
+    await t.send("download.resume", { jobIds: ["p", "c"] });
+    expect(t.fake.engine.resume).toHaveBeenCalledWith("p");
+    expect(resultOf(t.sent)).toEqual({
+      failed: [{ jobId: "c", message: "Only paused or failed downloads can be resumed." }],
+    });
+  });
+
+  it("removes rows, keeps their files, and pushes a fresh snapshot to subscribers", async () => {
+    const t = await setup({
+      historyFile: historyOf([row("a", "completed", { files: ["/dl/a.mp4"] }), row("b", "paused")]),
+    });
+    await t.send("jobs.subscribe");
+    t.sent.length = 0;
+    await t.send("jobs.remove", { jobIds: ["a", "b", "nope"] });
+    expect(t.fake.engine.remove).toHaveBeenCalledWith("a");
+    expect(t.fake.engine.remove).toHaveBeenCalledWith("b");
+    expect(t.history.jobs()).toEqual([]);
+    expect(resultOf(t.sent)).toEqual({ failed: [{ jobId: "nope", message: "No such download." }] });
+    const snap = t.sent.find((m) => m.type === "jobs.snapshot");
+    expect(snap?.type === "jobs.snapshot" && snap.payload.jobs).toEqual([]);
+  });
+
+  it("removes several jobs together, so a long cancel does not stack", async () => {
+    const t = await setup({ historyFile: historyOf([row("a", "paused"), row("b", "paused")]) });
+    const releases: (() => void)[] = [];
+    t.fake.engine.remove.mockImplementation(
+      (_id: string) =>
+        new Promise<void>((resolve) => {
+          releases.push(resolve);
+        }),
+    );
+    const sending = t.send("jobs.remove", { jobIds: ["a", "b"] });
+    await vi.waitFor(() => expect(t.fake.engine.remove).toHaveBeenCalledTimes(2));
+    expect(releases).toHaveLength(2);
+    for (const release of releases) release();
+    await sending;
+    expect(t.history.jobs()).toEqual([]);
+    expect(resultOf(t.sent)).toEqual({ failed: [] });
+  });
+
+  it("clears completed rows only", async () => {
+    const t = await setup({
+      historyFile: historyOf([row("a", "completed"), row("b", "failed"), row("c", "cancelled")]),
+    });
+    await t.send("jobs.clearFinished");
+    expect(
+      t.history
+        .jobs()
+        .map((j) => j.id)
+        .sort(),
+    ).toEqual(["b", "c"]);
+    expect(resultOf(t.sent)).toEqual({ failed: [] });
+  });
+
+  it("dismisses the notice for everyone", async () => {
+    const notice = { reason: "unexpected", pausedCount: 1, jobIds: ["p"] };
+    const t = await setup({ historyFile: historyOf([row("p", "paused")], { notice }) });
+    await t.send("notice.dismiss");
+    expect(t.history.notice()).toBeUndefined();
+    expect(t.sent.at(-1)).toMatchObject({ type: "notice", payload: {} });
+  });
+
+  it("clears the notice by itself once none of its jobs is paused", async () => {
+    const notice = { reason: "unexpected", pausedCount: 1, jobIds: ["p"] };
+    const t = await setup({ historyFile: historyOf([row("p", "paused")], { notice }) });
+    await t.send("jobs.subscribe");
+    t.update("p", { status: "queued" });
+    expect(t.history.notice()).toBeUndefined();
+    expect(t.sent.some((m) => m.type === "notice")).toBe(true);
+  });
+
+  it("cancels a paused job", async () => {
+    const t = await setup({ historyFile: historyOf([row("p", "paused")]) });
+    await t.send("download.cancel", { jobId: "p" });
+    expect(t.fake.engine.cancel).toHaveBeenCalledWith("p");
+  });
+});
+
+describe("trash", () => {
+  it("refuses the relay", async () => {
+    const t = await setup({
+      historyFile: historyOf([row("a", "completed", { files: ["/dl/a.mp4"] })]),
+    });
+    await t.send("jobs.trash", { jobIds: ["a"] });
+    expect(t.sent[0]).toMatchObject({ type: "error", payload: { code: "forbidden" } });
+    expect(t.history.get("a")).toBeDefined();
+  });
+
+  it("moves only the recorded files of each job, in one call, and drops the rows", async () => {
+    const calls: string[][] = [];
+    const t = await setup({
+      role: "terminal",
+      trash: async (paths) => {
+        calls.push(paths);
+        return { failed: [] };
+      },
+      historyFile: historyOf([
+        row("a", "completed", { files: ["/dl/a.mp4"], outputPath: "/dl/a.mp4" }),
+        row("b", "paused", { files: [], workDir: "/dl/.mediaforge-b" }),
+      ]),
+    });
+    await t.send("jobs.trash", { jobIds: ["a", "b", "nope"] });
+    expect(calls).toEqual([["/dl/a.mp4"]]);
+    expect(t.fake.engine.remove).toHaveBeenCalledWith("b");
+    expect(t.history.jobs()).toEqual([]);
+    expect(resultOf(t.sent)).toEqual({
+      failed: [{ jobId: "nope", message: "No such download." }],
+    });
+  });
+
+  it("stops several jobs together before trashing them", async () => {
+    const t = await setup({
+      role: "terminal",
+      trash: async () => ({ failed: [] }),
+      historyFile: historyOf([row("a", "paused"), row("b", "paused")]),
+    });
+    const releases: (() => void)[] = [];
+    t.fake.engine.remove.mockImplementation(
+      (_id: string) =>
+        new Promise<void>((resolve) => {
+          releases.push(resolve);
+        }),
+    );
+    const sending = t.send("jobs.trash", { jobIds: ["a", "b"] });
+    await vi.waitFor(() => expect(t.fake.engine.remove).toHaveBeenCalledTimes(2));
+    for (const release of releases) release();
+    await sending;
+    expect(t.history.jobs()).toEqual([]);
+    expect(resultOf(t.sent)).toEqual({ failed: [] });
+  });
+
+  it("keeps the row of a job whose file could not be moved", async () => {
+    const t = await setup({
+      role: "terminal",
+      trash: async () => ({ failed: [{ path: "/dl/a.mp4", message: "The file is in use." }] }),
+      historyFile: historyOf([
+        row("a", "completed", { files: ["/dl/a.mp4"] }),
+        row("b", "completed", { files: ["/dl/b.mp4"] }),
+      ]),
+    });
+    await t.send("jobs.trash", { jobIds: ["a", "b"] });
+    expect(t.history.jobs().map((j) => j.id)).toEqual(["a"]);
+    expect(resultOf(t.sent)).toEqual({
+      failed: [
+        { jobId: "a", message: "Could not move /dl/a.mp4 to the trash: The file is in use." },
+      ],
+    });
+  });
+
+  it("keeps a too-large file's row and says it would be deleted permanently", async () => {
+    const options: unknown[] = [];
+    const t = await setup({
+      role: "terminal",
+      trash: async (_paths, opts) => {
+        options.push(opts);
+        return {
+          failed: [
+            {
+              path: "/dl/big.mp4",
+              message: "The file is larger than this drive's Recycle Bin.",
+              code: "too-large",
+            },
+          ],
+        };
+      },
+      historyFile: historyOf([row("a", "completed", { files: ["/dl/big.mp4"] })]),
+    });
+    await t.send("jobs.trash", { jobIds: ["a"] });
+    expect(options).toEqual([{ permanent: false }]);
+    expect(t.history.jobs().map((j) => j.id)).toEqual(["a"]);
+    expect(resultOf(t.sent)).toEqual({
+      failed: [
+        {
+          jobId: "a",
+          message: "/dl/big.mp4 is too large for the Recycle Bin; it would be deleted permanently.",
+          code: "too-large",
+        },
+      ],
+    });
+  });
+
+  it("passes permanent to the trash on a confirmed resend and drops the row", async () => {
+    const options: unknown[] = [];
+    const t = await setup({
+      role: "terminal",
+      trash: async (_paths, opts) => {
+        options.push(opts);
+        return { failed: [] };
+      },
+      historyFile: historyOf([row("a", "completed", { files: ["/dl/big.mp4"] })]),
+    });
+    await t.send("jobs.trash", { jobIds: ["a"], permanent: true });
+    expect(options).toEqual([{ permanent: true }]);
+    expect(t.history.jobs()).toEqual([]);
+    expect(resultOf(t.sent)).toEqual({ failed: [] });
   });
 });

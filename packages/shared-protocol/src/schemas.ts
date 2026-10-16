@@ -2,8 +2,12 @@ import type {
   DownloadJob,
   DownloadProgress,
   DownloadRequest,
+  JobOrigin,
   MediaCandidate,
   MediaVariant,
+  Notice,
+  PlannedStep,
+  Step,
 } from "@mediaforge/shared-types";
 import { z } from "zod";
 
@@ -62,10 +66,31 @@ export const DownloadStatusSchema = z.enum([
   "queued",
   "downloading",
   "processing",
+  "paused",
   "completed",
   "failed",
   "cancelled",
 ]);
+
+export const JobOriginSchema = z.enum(["extension", "manager", "menu", "cli"]);
+
+const StepKindSchema = z.enum(["download", "video", "audio", "merge", "convert"]);
+
+export const StepSchema = z.object({
+  kind: StepKindSchema,
+  state: z.enum(["pending", "active", "done"]),
+  percent: z.number().min(0).max(100).optional(),
+  progress: DownloadProgressSchema.optional(),
+  expectedBytes: z.number().nonnegative().optional(),
+});
+
+export const PlannedStepSchema = z.object({
+  kind: StepKindSchema,
+  bytes: z.number().nonnegative().optional(),
+});
+
+/** A job has a handful of steps; the cap keeps a hostile frame small. */
+export const MAX_STEPS = 16;
 
 export const DownloadJobSchema = z.object({
   id: z.string(),
@@ -76,6 +101,19 @@ export const DownloadJobSchema = z.object({
   error: z.string().optional(),
   createdAt: z.number(),
   updatedAt: z.number(),
+  origin: JobOriginSchema.optional(),
+  lastTryAt: z.number().optional(),
+  sizeBytes: z.number().nonnegative().optional(),
+  avgSpeed: z.number().nonnegative().optional(),
+  steps: z.array(StepSchema).max(MAX_STEPS).optional(),
+  overallPercent: z.number().min(0).max(100).optional(),
+  errorKind: z.number().int().optional(),
+});
+
+export const NoticeSchema = z.object({
+  reason: z.enum(["unexpected", "restarted"]),
+  pausedCount: z.number().int().nonnegative(),
+  jobIds: z.array(z.string()),
 });
 
 /** What a sniffed stream needs to be fetched the way the browser fetched it. */
@@ -143,4 +181,8 @@ export type _SchemaChecks = [
   Assert<Equals<z.infer<typeof DownloadRequestSchema>, DownloadRequest>>,
   Assert<Equals<z.infer<typeof DownloadProgressSchema>, DownloadProgress>>,
   Assert<Equals<z.infer<typeof DownloadJobSchema>, DownloadJob>>,
+  Assert<Equals<z.infer<typeof JobOriginSchema>, JobOrigin>>,
+  Assert<Equals<z.infer<typeof NoticeSchema>, Notice>>,
+  Assert<Equals<z.infer<typeof StepSchema>, Step>>,
+  Assert<Equals<z.infer<typeof PlannedStepSchema>, PlannedStep>>,
 ];

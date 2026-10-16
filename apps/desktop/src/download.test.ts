@@ -1,5 +1,9 @@
+import { resolve } from "node:path";
 import type { Tool } from "@mediaforge/binary-resolver";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import { CoreRequestError } from "./core/client.ts";
+import { CoreUnavailableError } from "./core/connect.ts";
+import { inProcessCore } from "./core/in-process.ts";
 import { type DownloadDeps, runDownload } from "./download.ts";
 import type { EngineJob } from "./engine/index.ts";
 import { DownloadEngine, type EngineFs } from "./engine/index.ts";
@@ -40,16 +44,18 @@ function setup(
       interrupt = h;
       return () => {};
     },
-    createEngine: (onUpdate) =>
-      new DownloadEngine({
-        resolve: found,
-        fs,
-        onUpdate,
-        run: (cmd, args, h, s) => {
-          seenArgs.push(args);
-          return run(cmd, args, h, s);
-        },
-      }),
+    core: inProcessCore({
+      createEngine: (onUpdate) =>
+        new DownloadEngine({
+          resolve: found,
+          fs,
+          onUpdate,
+          run: (cmd, args, h, s) => {
+            seenArgs.push(args);
+            return run(cmd, args, h, s);
+          },
+        }),
+    }).connect,
   };
   let out = "";
   let err = "";
@@ -235,6 +241,131 @@ describe("runDownload", () => {
     t.interrupt();
     expect(await result).toBe(ExitCode.Cancelled);
     expect(t.err()).toContain("Cancelled.");
+  });
+});
+
+describe("Ctrl+C before the core answers", () => {
+  it("starts nothing and exits 130", async () => {
+    const t = setup(succeed);
+    const connect = t.deps.core;
+    let release!: () => void;
+    const gate = new Promise<void>((r) => {
+      release = r;
+    });
+    t.deps.core = async () => {
+      await gate;
+      return connect();
+    };
+    const result = runDownload(["https://example.com/v"], t.io, t.deps);
+    await new Promise((r) => setTimeout(r, 10));
+    t.interrupt();
+    release();
+    expect(await result).toBe(ExitCode.Cancelled);
+    expect(t.err()).toContain("Cancelled.");
+    expect(t.seenArgs).toEqual([]);
+  });
+});
+
+describe("runDownload through the core", () => {
+  it("fails fast with a clear message when the core cannot be reached", async () => {
+    const t = setup(succeed);
+    t.deps.core = async () => {
+      throw new CoreUnavailableError();
+    };
+    await expect(runDownload(["https://example.com/v"], t.io, t.deps)).rejects.toMatchObject({
+      exitCode: ExitCode.Failure,
+      message: expect.stringMatching(/background service/),
+    });
+  });
+
+  it("exits with a failure when the core goes away mid-download", async () => {
+    const hang: ProcessRunner = () => new Promise(() => {});
+    const t = setup(hang);
+    const connect = t.deps.core;
+    t.deps.core = async () => {
+      const client = await connect();
+      setTimeout(() => client.close(), 20);
+      return client;
+    };
+    const error = await runDownload(["https://example.com/v"], t.io, t.deps).catch((e) => e);
+    expect(error).toMatchObject({
+      exitCode: ExitCode.Failure,
+      message: expect.stringMatching(/Lost the connection/),
+    });
+    expect(error.message).toContain("may still be running");
+    expect(error.message).not.toContain("paused");
+  });
+
+  it("exits as cancelled when the download is paused from elsewhere", async () => {
+    const hang: ProcessRunner = (_c, _a, _h, signal) =>
+      new Promise((resolve) => {
+        if (signal.aborted) resolve({ exitCode: 1 });
+        else signal.addEventListener("abort", () => resolve({ exitCode: 1 }));
+      });
+    const t = setup(hang);
+    const connect = t.deps.core;
+    const pauses: Promise<unknown>[] = [];
+    t.deps.core = async () => {
+      const client = await connect();
+      return {
+        ...client,
+        request: async (type, payload) => {
+          const reply = await client.request(type, payload);
+          if (reply.type === "download.progress") {
+            const { jobId } = reply.payload;
+            // The pause can land before the engine holds the job; retry until the core accepts it.
+            const pause = connect().then((other) =>
+              vi.waitFor(async () => {
+                const paused = await other.request("download.pause", { jobIds: [jobId] });
+                expect(paused).toMatchObject({ payload: { failed: [] } });
+              }),
+            );
+            pause.catch(() => {});
+            pauses.push(pause);
+          }
+          return reply;
+        },
+      };
+    };
+    await expect(runDownload(["https://example.com/v"], t.io, t.deps)).resolves.toBe(
+      ExitCode.Cancelled,
+    );
+    await Promise.all(pauses);
+    expect(t.err()).toMatch(/Paused\. It can be resumed later from MediaForge\./);
+  });
+
+  it("maps a request the core refuses as invalid to a usage error", async () => {
+    const t = setup(succeed);
+    await expect(
+      runDownload(["--filename", "a/b", "https://example.com/v"], t.io, t.deps),
+    ).rejects.toMatchObject({ exitCode: ExitCode.Usage });
+    expect(t.seenArgs).toEqual([]);
+  });
+
+  it.each(["timeout", "forbidden", "invalid-message"])(
+    "treats a %s answer from the core as a failure, not a usage error",
+    async (code) => {
+      const t = setup(succeed);
+      const connect = t.deps.core;
+      t.deps.core = async () => {
+        const client = await connect();
+        client.request = async () => {
+          throw new CoreRequestError(code, "The core said no.");
+        };
+        return client;
+      };
+      await expect(runDownload(["https://example.com/v"], t.io, t.deps)).rejects.toMatchObject({
+        exitCode: ExitCode.Failure,
+        message: expect.stringMatching(/background service/),
+      });
+    },
+  );
+
+  it("sends an absolute folder and the cli origin", async () => {
+    const t = setup(succeed);
+    await runDownload(["-o", "relative/out", "https://example.com/v"], t.io, t.deps);
+    const args = t.seenArgs[0] as string[];
+    expect(args[args.indexOf("--paths") + 1]).toContain(resolve("relative/out"));
   });
 });
 

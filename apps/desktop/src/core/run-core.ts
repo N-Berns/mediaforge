@@ -15,11 +15,13 @@ import { DEFAULT_SETTINGS, defaultSettingsStore, type SettingsStore } from "../s
 import { defaultToolRuntime, type ToolRuntime, tryResolve } from "../tool-runtime.ts";
 import { VERSION } from "../version.ts";
 import { applyAutostart, coreSpawnCommand } from "./autostart.ts";
+import { defaultHistoryFs, type HistoryFs, HistoryStore, historyPath } from "./history.ts";
 import { IdleMonitor } from "./idle.ts";
 import { type Connection, listenCore, newToken, pipePath, tokenPath, writeToken } from "./ipc.ts";
 import { createProbeLimiter, toProbedMedia } from "./probe.ts";
 import { type Provisioner, startProvisioning } from "./provisioner.ts";
 import { type ClientHandle, CoreService } from "./service.ts";
+import { createTrash, type TrashFn } from "./trash.ts";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -27,6 +29,8 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 const DEFAULT_SHUTDOWN_GRACE_MS = 2000;
 
 export interface RunCoreDeps {
+  /** Default: the platform's Recycle Bin or Trash. */
+  trash?: TrashFn;
   pipe: string;
   tokenFile: string;
   stampFile: string;
@@ -49,6 +53,10 @@ export interface RunCoreDeps {
   openPath?: (path: string, options: { select: boolean }) => Promise<void>;
   /** Exit on SIGINT and SIGTERM. Off in tests. */
   handleSignals: boolean;
+  /** Where the download history lives. */
+  historyFile: string;
+  /** Default: the real file system. */
+  historyFs?: HistoryFs;
   /** Ends the run, as SIGTERM would, when aborted. */
   shutdown?: AbortSignal;
   /** Longest to wait for clients to close during shutdown. Default 2000 ms. */
@@ -123,14 +131,14 @@ export async function runCore(deps: RunCoreDeps): Promise<number> {
     server = await listenCore({
       path: deps.pipe,
       token,
-      onConnection: (conn) => {
+      onConnection: (conn, role) => {
         if (!service || finished) {
           quietly(() => conn.close());
           return;
         }
         let handle: ClientHandle | undefined;
         try {
-          handle = service.attach({ send: (message) => conn.send(message) });
+          handle = service.attach({ send: (message) => conn.send(message) }, role);
           const attached = handle;
           connections.add(conn);
           // Both handlers are set up here, synchronously, `onMessage` first: the transport
@@ -165,6 +173,13 @@ export async function runCore(deps: RunCoreDeps): Promise<number> {
   server.on("error", () => {});
 
   try {
+    // Opened once the pipe is ours (a second instance never touches the file) and before the token
+    // exists, so no await sits between publishing the token and creating the service.
+    const history = await HistoryStore.open({
+      path: deps.historyFile,
+      fs: deps.historyFs ?? defaultHistoryFs(),
+    });
+    await history.markRunning();
     // Written only after the pipe is ours, so a second instance can never overwrite a live token.
     await writeToken(deps.tokenFile, token);
     // Started only now too: a second instance must not download tools beside the live core.
@@ -187,6 +202,8 @@ export async function runCore(deps: RunCoreDeps): Promise<number> {
     service = new CoreService({
       createEngine: (onUpdate) => deps.createEngine(onUpdate, setup, { maxConcurrent }),
       settings: deps.settings,
+      history,
+      trash: deps.trash ?? createTrash(),
       provisioner: setup,
       version: deps.version,
       probeTool: async (tool) => {
@@ -257,8 +274,9 @@ export async function runCore(deps: RunCoreDeps): Promise<number> {
         for (const socket of sockets) socket.destroy();
         settle();
       }, graceMs);
+      const flushed = live.shutdown().catch(() => {});
       for (const conn of [...connections]) quietly(() => conn.close());
-      server.close(settle);
+      server.close(() => void flushed.then(settle));
     };
 
     monitor = new IdleMonitor({
@@ -298,6 +316,7 @@ export async function runCore(deps: RunCoreDeps): Promise<number> {
     const poll = setInterval(() => {
       check();
       refresh();
+      live.applySettings().catch(() => {});
     }, deps.pollMs);
 
     if (deps.handleSignals) {
@@ -463,6 +482,7 @@ export function runDefaultCore(): Promise<number> {
         pollMs: 30_000,
         applyAutostart: (enabled) => applyAutostart(enabled),
         handleSignals: true,
+        historyFile: historyPath(env),
       }),
   });
 }

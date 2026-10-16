@@ -2,6 +2,7 @@ import { stat } from "node:fs/promises";
 import { render } from "ink";
 import { defaultBinDir } from "../binaries.ts";
 import { applyAutostart } from "../core/autostart.ts";
+import { defaultCoreConnector } from "../core/connect.ts";
 import { inspectTools } from "../doctor.ts";
 import { defaultDownloadDeps } from "../download.ts";
 import { defaultOutputDir } from "../engine/index.ts";
@@ -24,7 +25,7 @@ export function realDeps(): AppDeps {
   // The startup notice and the About page share one check, kept once it works.
   let check: ReturnType<typeof checkForUpdate> | undefined;
   return {
-    download: defaultDownloadDeps(),
+    download: { ...defaultDownloadDeps(), core: defaultCoreConnector("menu") },
     fetchInfo: (url) => fetchMediaInfo(url),
     inspectTools: () => inspectTools(),
     installTool: (tool, onProgress) => defaultToolRuntime().install(tool, onProgress),
@@ -51,6 +52,18 @@ export function realDeps(): AppDeps {
     target: `${process.platform}-${process.arch}`,
     defaultOutputDir: defaultOutputDir(),
     applyAutostart: (enabled) => applyAutostart(enabled),
+    notifyCore: async () => {
+      try {
+        const client = await defaultCoreConnector("menu", { autostart: false })();
+        try {
+          await client.request("settings.reload", {});
+        } finally {
+          client.close();
+        }
+      } catch {
+        // No core running: it reads the settings when it starts.
+      }
+    },
     binDir: defaultBinDir(),
     version: VERSION,
   };

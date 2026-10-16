@@ -234,7 +234,7 @@ export function runDefaultRelay(): Promise<number> {
       const token = await readToken(tokenPath(env));
       if (!token) throw new Error("No core token yet.");
       // One attempt must stay short: the retry loop owns the overall deadline.
-      return connectCore({ path, token, timeoutMs: 1000 });
+      return connectCore({ path, token, timeoutMs: 1000, role: "relay" });
     },
     spawnCore: () => {
       const { command, args } = coreSpawnCommand(process.execPath, process.argv[1]);

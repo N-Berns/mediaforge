@@ -1,6 +1,8 @@
+import { resolve } from "node:path";
 import { type Tool, ToolInstallError } from "@mediaforge/binary-resolver";
 import { render } from "ink-testing-library";
 import { describe, expect, it, vi } from "vitest";
+import { inProcessCore } from "../core/in-process.ts";
 import type { DownloadDeps } from "../download.ts";
 import { DownloadEngine, type EngineFs } from "../engine/index.ts";
 import type { ProcessRunner } from "../engine/process.ts";
@@ -12,6 +14,7 @@ import { App } from "./App.tsx";
 import type { AppDeps } from "./deps.ts";
 import type { FolderFs } from "./folder-browser.ts";
 import { memoryFolderFs } from "./folder-fs.ts";
+import { ICONS } from "./theme.ts";
 
 const KEY = {
   enter: "\r",
@@ -23,6 +26,8 @@ const KEY = {
 };
 
 const URL = "https://example.com/watch?v=abc";
+/** Settings that skip the folder and quality questions, so a link goes straight to downloading. */
+const SKIP_QUESTIONS = { askQuality: false, askFolder: false, quality: "mp4-720p" } as const;
 const found = async (tool: Tool) => ({ tool, path: `/bin/${tool}`, source: "path" as const });
 const fs: EngineFs = {
   mkdir: async () => {},
@@ -70,25 +75,26 @@ function setup(options: Options = {}) {
   const opened: string[] = [];
   const store = memorySettingsStore(options.settings);
   const runner = options.runner ?? succeed;
-  const engineOptions: ({ maxConcurrent?: number } | undefined)[] = [];
+  const notified: number[] = [];
+  const core = inProcessCore({
+    settings: store,
+    createEngine: (onUpdate) =>
+      new DownloadEngine({
+        resolve: found,
+        fs,
+        onUpdate,
+        run: (c, a, h, s) => {
+          seenArgs.push(a);
+          return runner(c, a, h, s);
+        },
+      }),
+  });
   const download: DownloadDeps = {
     env: {},
     isTTY: true,
     settings: store,
     onInterrupt: () => () => {},
-    createEngine: (onUpdate, engineOpts) => {
-      engineOptions.push(engineOpts);
-      return new DownloadEngine({
-        resolve: found,
-        fs,
-        onUpdate,
-        ...engineOpts,
-        run: (c, a, h, s) => {
-          seenArgs.push(a);
-          return runner(c, a, h, s);
-        },
-      });
-    },
+    core: core.connect,
   };
   const missing = new Set<Tool>(options.missing ?? []);
   const installed: Tool[] = [];
@@ -153,9 +159,13 @@ function setup(options: Options = {}) {
     binDir: "/app/bin",
     version: "9.9.9",
     applyAutostart: async (enabled) => void autostart.push(enabled),
+    notifyCore: async () => {
+      notified.push(Date.now());
+      await (await core.service).applySettings();
+    },
   };
   const app = render(<App deps={deps} />);
-  return { app, deps, store, seenArgs, opened, engineOptions, installed, updated, autostart };
+  return { app, deps, store, seenArgs, opened, notified, core, installed, updated, autostart };
 }
 
 type TestApp = ReturnType<typeof setup>["app"];
@@ -196,6 +206,28 @@ async function press(app: TestApp, ...keys: string[]) {
     app.stdin.write(key);
     await tick(30);
   }
+}
+
+/** Home, then the clipboard link, straight into downloading (needs SKIP_QUESTIONS). */
+async function startDownload(t: ReturnType<typeof setup>) {
+  await waitFor(t.app, "What would you like to do?");
+  await press(t.app, KEY.enter);
+  await waitFor(t.app, URL);
+  await press(t.app, KEY.enter);
+}
+
+/** Make the core connector wait until the test releases it. */
+function gateCore(t: ReturnType<typeof setup>) {
+  const connect = t.deps.download.core;
+  let release: () => void = () => {};
+  const open = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  t.deps.download.core = async () => {
+    await open;
+    return connect();
+  };
+  return { release };
 }
 
 describe("home", () => {
@@ -553,6 +585,18 @@ describe("download flow", () => {
     t.app.unmount();
   });
 
+  it("sends a full path to the core when the environment folder is relative", async () => {
+    const t = setup({ settings: { ...SKIP_QUESTIONS, sortByType: false } });
+    t.deps.download.env = { MEDIAFORGE_OUTPUT_DIR: "relative/out" };
+    await startDownload(t);
+    await waitFor(t.app, "Download complete");
+    const args = t.seenArgs[0] as string[];
+    expect((args[args.indexOf("--paths") + 1] as string).replaceAll("\\", "/")).toContain(
+      resolve("relative/out").replaceAll("\\", "/"),
+    );
+    t.app.unmount();
+  });
+
   it("explains a failed lookup and can continue without details", async () => {
     const t = setup({
       info: async () => {
@@ -709,10 +753,116 @@ describe("settings", () => {
     t.app.unmount();
   });
 
+  it("tells the core when downloads-at-once changes", async () => {
+    const t = await openSettings();
+    await moveTo(t.app, "Downloads at once");
+    await press(t.app, KEY.enter);
+    await waitFor(t.app, "How many links download at the same time?");
+    await moveTo(t.app, "3 at a time");
+    await press(t.app, KEY.enter);
+    await waitFor(t.app, "Saved");
+    await vi.waitFor(() => expect(t.notified).toHaveLength(1));
+    t.app.unmount();
+  });
+
+  it("does not tell the core about other settings", async () => {
+    const t = await openSettings();
+    await moveTo(t.app, "Sort into folders by type");
+    await press(t.app, KEY.enter);
+    await waitFor(t.app, "Saved");
+    expect(t.notified).toEqual([]);
+    t.app.unmount();
+  });
+
   it("goes back to the home screen with Esc", async () => {
     const t = await openSettings();
     await press(t.app, KEY.esc);
     await waitFor(t.app, "What would you like to do?");
+    t.app.unmount();
+  });
+});
+
+describe("downloads through the core", () => {
+  it("keeps a download running in the core after the app quits", async () => {
+    let release: () => void = () => {};
+    const t = setup({
+      settings: SKIP_QUESTIONS,
+      runner: (_c, args, h) =>
+        new Promise((resolve) => {
+          release = () => {
+            h.onStdoutLine(`MFFILE ${args[args.indexOf("--paths") + 1]}/Clip.mp4`);
+            resolve({ exitCode: 0 });
+          };
+        }),
+    });
+    await startDownload(t);
+    await waitFor(t.app, "Downloading");
+    t.app.unmount();
+    release();
+    await vi.waitFor(async () => {
+      const client = await t.core.connect();
+      const list = await client.request("jobs.list", {});
+      client.close();
+      expect(list.type === "jobs.snapshot" && list.payload.jobs[0]?.status).toBe("completed");
+    });
+  });
+
+  it("cancels a download when Esc comes before the core answers", async () => {
+    const ran = vi.fn();
+    const t = setup({
+      settings: SKIP_QUESTIONS,
+      runner: (...args) => {
+        ran();
+        return succeed(...args);
+      },
+    });
+    const gate = gateCore(t);
+    await startDownload(t);
+    await waitFor(t.app, "Cancel download");
+    await press(t.app, KEY.esc);
+    gate.release();
+    await waitFor(t.app, "Download cancelled");
+    expect(ran).not.toHaveBeenCalled();
+    t.app.unmount();
+  });
+
+  it("shows a failure when the core goes away during a download", async () => {
+    const t = setup({ settings: SKIP_QUESTIONS, runner: () => new Promise(() => {}) });
+    const connect = t.deps.download.core;
+    t.deps.download.core = async () => {
+      const client = await connect();
+      setTimeout(() => client.close(), 20);
+      return client;
+    };
+    await startDownload(t);
+    await waitFor(t.app, "Download failed");
+    expect(t.app.lastFrame()).toMatch(/Lost the connection/);
+    t.app.unmount();
+  });
+
+  it("goes back with a notice when the download is paused from elsewhere", async () => {
+    const ran = vi.fn();
+    const t = setup({
+      settings: SKIP_QUESTIONS,
+      runner: (_c, _a, _h, signal) =>
+        new Promise((resolve) => {
+          ran();
+          if (signal.aborted) resolve({ exitCode: 1 });
+          else signal.addEventListener("abort", () => resolve({ exitCode: 1 }));
+        }),
+    });
+    await startDownload(t);
+    await vi.waitFor(() => expect(ran).toHaveBeenCalled());
+    const other = await t.core.connect();
+    await vi.waitFor(async () => {
+      const list = await other.request("jobs.list", {});
+      const id = list.type === "jobs.snapshot" ? list.payload.jobs[0]?.id : undefined;
+      expect(id).toBeDefined();
+      const reply = await other.request("download.pause", { jobIds: [id as string] });
+      expect(reply).toMatchObject({ payload: { failed: [] } });
+    });
+    await waitFor(t.app, `${ICONS.paused} Download paused`);
+    other.close();
     t.app.unmount();
   });
 });
@@ -1035,8 +1185,6 @@ describe("missing tools", () => {
 describe("stale extractor", () => {
   const STALE =
     "ERROR: [generic] Unable to extract title; please report this issue on https://github.com/yt-dlp/yt-dlp/issues . Confirm you are on the latest version using yt-dlp -U";
-  const SKIP_QUESTIONS = { askQuality: false, askFolder: false, quality: "mp4-720p" } as const;
-
   it("offers to update yt-dlp, and retries the download after the update", async () => {
     let calls = 0;
     const t = setup({
@@ -1450,7 +1598,7 @@ describe("bulk download", () => {
     await press(app, KEY.enter);
   }
 
-  it("downloads links from different sites with one choice, using the saved number at once", async () => {
+  it("downloads links from different sites with one choice", async () => {
     const t = await toReview({ settings: { concurrency: 3 } });
     const review = t.app.lastFrame() ?? "";
     expect(review).toContain("Tube Video");
@@ -1459,7 +1607,6 @@ describe("bulk download", () => {
     await startDownloads(t.app);
     await waitFor(t.app, "All 2 downloads complete");
     expect(t.seenArgs).toHaveLength(2);
-    expect(t.engineOptions).toContainEqual({ maxConcurrent: 3 });
     t.app.unmount();
   });
 
@@ -1633,6 +1780,24 @@ describe("bulk download", () => {
     await tick(150);
     await press(t.app, KEY.esc);
     await waitFor(t.app, "1 of 2 saved, 1 not saved");
+    t.app.unmount();
+  });
+
+  it("cancels every link when Esc comes before the core answers", async () => {
+    const ran = vi.fn();
+    const t = await toReview({
+      runner: (...args) => {
+        ran();
+        return succeed(...args);
+      },
+    });
+    const gate = gateCore(t);
+    await startDownloads(t.app);
+    await waitFor(t.app, "Overall");
+    await press(t.app, KEY.esc);
+    gate.release();
+    await waitFor(t.app, "Downloads cancelled");
+    expect(ran).not.toHaveBeenCalled();
     t.app.unmount();
   });
 

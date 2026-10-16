@@ -2,6 +2,8 @@ import { Text } from "ink";
 import { render } from "ink-testing-library";
 import { describe, expect, it } from "vitest";
 import { type AppDeps, DepsContext } from "../deps.ts";
+import { type NoticeApi, NoticeContext } from "../notice.tsx";
+import { ICONS } from "../theme.ts";
 import { Frame, type Hint } from "./Frame.tsx";
 
 const deps = { version: "9.9.9" } as AppDeps;
@@ -37,5 +39,30 @@ describe("Frame key hints", () => {
   it("shows Ctrl+C once when the screen already lists it", async () => {
     const text = await frame({ hints: [["Ctrl+C", "Quit"]] });
     expect(text.match(/Ctrl\+C/g)).toHaveLength(1);
+  });
+});
+
+describe("Frame notice", () => {
+  it("shows a paused notice with the paused icon", async () => {
+    const notices: NoticeApi = {
+      notice: { id: 1, kind: "paused", text: "Downloads paused" },
+      notify: () => {},
+      seen: () => {},
+      clear: () => {},
+    };
+    const app = render(
+      <DepsContext.Provider value={deps}>
+        <NoticeContext.Provider value={notices}>
+          <Frame crumbs={["Home"]} icon="*" title="Title" hints={[]}>
+            <Text>body</Text>
+          </Frame>
+        </NoticeContext.Provider>
+      </DepsContext.Provider>,
+    );
+    await tick();
+    const text = app.lastFrame() ?? "";
+    app.unmount();
+    expect(text).toContain(`${ICONS.paused} Downloads paused`);
+    expect(text).not.toContain(`${ICONS.warn} Downloads paused`);
   });
 });

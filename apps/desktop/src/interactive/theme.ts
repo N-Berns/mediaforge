@@ -3,6 +3,8 @@ export const COLORS = {
   ok: "green",
   error: "red",
   warn: "yellow",
+  /** Paused downloads, kept apart from cancelled ones (which use warn). */
+  paused: "blue",
   muted: "gray",
 } as const;
 
@@ -33,6 +35,8 @@ export const ICONS = {
   ok: "√",
   error: "×",
   warn: "▲",
+  /** U+2551, in WGL4 (U+2016 is not). */
+  paused: "║",
   info: "○",
   on: "●",
   off: "○",

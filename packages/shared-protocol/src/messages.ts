@@ -4,9 +4,14 @@ import {
   DownloadProgressSchema,
   DownloadRequestSchema,
   ExtensionSettingsSchema,
+  JobOriginSchema,
+  MAX_STEPS,
+  NoticeSchema,
+  PlannedStepSchema,
   ProbedMediaSchema,
   RequestContextSchema,
   SetupStateSchema,
+  StepSchema,
 } from "./schemas.ts";
 import { PROTOCOL_VERSION } from "./version.ts";
 
@@ -22,15 +27,34 @@ const message = <T extends string, P extends z.ZodType>(type: T, payload: P) =>
 
 const jobRef = z.object({ jobId: z.string() });
 
+/** Upper bound on ids in one batch request; the manager can tick every row it lists. */
+export const MAX_BATCH = 1000;
+
+const jobIds = z.object({ jobIds: z.array(z.string()).min(1).max(MAX_BATCH) });
+
 // Extension → host
 export const HelloMessage = message(
   "hello",
-  z.object({ extensionVersion: z.string(), browser: z.enum(["chrome", "firefox", "edge"]) }),
+  z.object({
+    /** Who is talking. The core trusts the connection's handshake role, not this field. */
+    client: JobOriginSchema.default("extension"),
+    extensionVersion: z.string().optional(),
+    browser: z.enum(["chrome", "firefox", "edge"]).optional(),
+  }),
 );
 export const DownloadStartMessage = message(
   "download.start",
-  DownloadRequestSchema.extend({ context: RequestContextSchema.optional() }),
+  DownloadRequestSchema.extend({
+    context: RequestContextSchema.optional(),
+    origin: JobOriginSchema.optional(),
+    /** Terminal connections only: an exact yt-dlp format selector. */
+    formatSelector: z.string().min(1).max(200).optional(),
+    /** Terminal connections only: the steps expected for the chosen format. */
+    plan: z.array(PlannedStepSchema).max(MAX_STEPS).optional(),
+  }),
 );
+/** Terminal connections only: re-read the settings file and apply "downloads at once". */
+export const SettingsReloadMessage = message("settings.reload", z.object({}));
 export const JobsListMessage = message("jobs.list", z.object({}));
 export const JobsSubscribeMessage = message("jobs.subscribe", z.object({}));
 export const JobsUnsubscribeMessage = message("jobs.unsubscribe", z.object({}));
@@ -43,6 +67,24 @@ export const HostInfoMessage = message("host.info", z.object({}));
  * job. Never a path: the host finds it in its own records, so a request cannot open anything else.
  */
 export const FolderOpenMessage = message("folder.open", z.object({ jobId: z.string().optional() }));
+/** Stop queued or running jobs and keep their partial files. */
+export const DownloadPauseMessage = message("download.pause", jobIds);
+/** Queue paused or failed jobs again under the same ids. */
+export const DownloadResumeMessage = message("download.resume", jobIds);
+/** Cancel active jobs, then drop the rows. Finished files stay on disk. */
+export const JobsRemoveMessage = message("jobs.remove", jobIds);
+/** Terminal connections only: cancel, move each job's recorded files to the trash, drop the rows. */
+export const JobsTrashMessage = message(
+  "jobs.trash",
+  jobIds.extend({
+    /** Set after the user confirmed: files too large for the Recycle Bin are deleted for good. */
+    permanent: z.boolean().optional(),
+  }),
+);
+/** Drop every completed row. */
+export const JobsClearFinishedMessage = message("jobs.clearFinished", z.object({}));
+/** Clear the session notice for every client. */
+export const NoticeDismissMessage = message("notice.dismiss", z.object({}));
 
 // Host → extension
 export const HelloAckMessage = message(
@@ -53,6 +95,7 @@ export const HelloAckMessage = message(
     ffmpeg: z.object({ available: z.boolean(), version: z.string().optional() }),
     setup: SetupStateSchema,
     keepRunning: z.boolean(),
+    notice: NoticeSchema.optional(),
   }),
 );
 export const JobsSnapshotMessage = message(
@@ -75,6 +118,8 @@ export const DownloadProgressMessage = message(
   jobRef.extend({
     status: z.enum(["queued", "downloading", "processing"]),
     progress: DownloadProgressSchema,
+    steps: z.array(StepSchema).max(MAX_STEPS).optional(),
+    overallPercent: z.number().min(0).max(100).optional(),
   }),
 );
 export const DownloadCompletedMessage = message(
@@ -83,7 +128,12 @@ export const DownloadCompletedMessage = message(
 );
 export const DownloadFailedMessage = message(
   "download.failed",
-  jobRef.extend({ error: z.string(), cancelled: z.boolean().optional() }),
+  jobRef.extend({
+    error: z.string(),
+    cancelled: z.boolean().optional(),
+    /** The CLI exit code matching the failure. */
+    errorKind: z.number().int().optional(),
+  }),
 );
 export const ErrorMessage = message(
   "error",
@@ -93,6 +143,27 @@ export const ErrorMessage = message(
 export const MediaProbeMessage = message("media.probe", z.object({ url: z.url() }));
 export const MediaInfoMessage = message("media.info", ProbedMediaSchema);
 export const FolderOpenedMessage = message("folder.opened", z.object({}));
+/** The one reply to a batch request: the ids it could not act on, and why. */
+export const JobsResultMessage = message(
+  "jobs.result",
+  z.object({
+    failed: z.array(
+      z.object({
+        jobId: z.string(),
+        message: z.string(),
+        /** Why, for failures a client acts on: "too-large" asks the user to confirm `permanent`. */
+        code: z.string().optional(),
+      }),
+    ),
+  }),
+);
+/** A user paused this job; its partial files are kept. */
+export const DownloadPausedMessage = message(
+  "download.paused",
+  jobRef.extend({ progress: DownloadProgressSchema.optional() }),
+);
+/** The session notice changed: dismissed, or none of its paused jobs remain. */
+export const NoticeMessage = message("notice", z.object({ notice: NoticeSchema.optional() }));
 
 export const ExtensionToHostMessage = z.discriminatedUnion("type", [
   HelloMessage,
@@ -104,8 +175,15 @@ export const ExtensionToHostMessage = z.discriminatedUnion("type", [
   JobsUnsubscribeMessage,
   SettingsGetMessage,
   SettingsSetMessage,
+  SettingsReloadMessage,
   MediaProbeMessage,
   FolderOpenMessage,
+  DownloadPauseMessage,
+  DownloadResumeMessage,
+  JobsRemoveMessage,
+  JobsTrashMessage,
+  JobsClearFinishedMessage,
+  NoticeDismissMessage,
 ]);
 export const HostToExtensionMessage = z.discriminatedUnion("type", [
   HelloAckMessage,
@@ -118,6 +196,9 @@ export const HostToExtensionMessage = z.discriminatedUnion("type", [
   SetupProgressMessage,
   MediaInfoMessage,
   FolderOpenedMessage,
+  JobsResultMessage,
+  DownloadPausedMessage,
+  NoticeMessage,
 ]);
 
 export type ExtensionToHostMessage = z.infer<typeof ExtensionToHostMessage>;

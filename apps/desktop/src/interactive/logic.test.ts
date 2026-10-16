@@ -1,4 +1,4 @@
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import { run } from "../cli.ts";
 import type { EngineJob } from "../engine/index.ts";
@@ -212,7 +212,7 @@ describe("flow", () => {
       url: draft.url,
       title: "T",
       profileId: "best",
-      outputDir: "/o",
+      outputDir: resolve("/o"),
       formatSelector: "18",
     });
   });
@@ -222,10 +222,15 @@ describe("type folders", () => {
   const draft = { url: "https://e.com/v", profileId: "best", outputDir: "/o" };
 
   it("sorts into a subfolder per kind, following the profile when no kind was picked", () => {
-    expect(toPlan(draft, true).outputDir).toBe(join("/o", "Video"));
-    expect(toPlan({ ...draft, kind: "video" }, true).outputDir).toBe(join("/o", "Video only"));
-    expect(toPlan({ ...draft, profileId: "audio-m4a" }, true).outputDir).toBe(join("/o", "Audio"));
-    expect(toPlan({ ...draft, kind: "audio" }, false).outputDir).toBe("/o");
+    expect(toPlan(draft, true).outputDir).toBe(join(resolve("/o"), "Video"));
+    expect(toPlan({ ...draft, kind: "video" }, true).outputDir).toBe(
+      join(resolve("/o"), "Video only"),
+    );
+    expect(toPlan({ ...draft, profileId: "audio-m4a" }, true).outputDir).toBe(
+      join(resolve("/o"), "Audio"),
+    );
+    expect(toPlan({ ...draft, kind: "audio" }, false).outputDir).toBe(resolve("/o"));
+    expect(toPlan({ ...draft, outputDir: "rel/out" }, false).outputDir).toBe(resolve("rel/out"));
   });
 
   it("names the subfolder only while sorting is on", () => {

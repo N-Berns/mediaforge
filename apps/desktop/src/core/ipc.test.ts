@@ -745,3 +745,62 @@ describe("listenCore and connectCore", () => {
     });
   });
 });
+
+describe("connection role", () => {
+  const serve = async (token: string, roles: string[]) => {
+    const path = testPath();
+    const server = await listenCore({
+      path,
+      token,
+      onConnection: (_conn, role) => roles.push(role),
+    });
+    servers.push(server);
+    return path;
+  };
+
+  it("reports the role the client declared", async () => {
+    const token = newToken();
+    const roles: string[] = [];
+    const path = await serve(token, roles);
+    await connect({ path, token, role: "terminal" });
+    await connect({ path, token, role: "relay" });
+    await vi.waitFor(() => expect(roles).toEqual(["terminal", "relay"]));
+  });
+
+  /** Hand-build step 4 so the frame carries exactly `extra`, which `connectCore` never omits. */
+  const roleFromFrame = async (extra: Record<string, unknown>) => {
+    const token = newToken();
+    const roles: string[] = [];
+    const path = await serve(token, roles);
+    const client = await rawConnect(path);
+    const { nonceC, nonce: nonceS } = await sayHello(client);
+    client.send({ proof: hmac(token, `client|${nonceS}|${nonceC}`), ...extra });
+    await vi.waitFor(() => expect(roles).toHaveLength(1));
+    return roles[0];
+  };
+
+  it("treats a client that declares no role as a relay", async () => {
+    expect(await roleFromFrame({})).toBe("relay");
+  });
+
+  it("reads a hand-built terminal role", async () => {
+    expect(await roleFromFrame({ role: "terminal" })).toBe("terminal");
+  });
+
+  it.each([
+    ["true", true],
+    ["null", null],
+    ["an array", ["terminal"]],
+    ["a case variant", "Terminal"],
+  ])("treats a role of %s as a relay", async (_name, role) => {
+    expect(await roleFromFrame({ role })).toBe("relay");
+  });
+
+  it("treats an unknown role as a relay", async () => {
+    const token = newToken();
+    const roles: string[] = [];
+    const path = await serve(token, roles);
+    await connect({ path, token, role: "admin" as never });
+    await vi.waitFor(() => expect(roles).toEqual(["relay"]));
+  });
+});

@@ -265,11 +265,13 @@ export function App({ deps }: { deps: AppDeps }) {
             plan={screen.plan}
             onDone={(job) => {
               // The result page reports success and failure itself, so its notice shows only once
-              // the user leaves it. A cancelled download has no page: say so on the one before.
+              // the user leaves it. A cancelled or paused download has no page: say so on the one
+              // before.
               if (job.status === "cancelled") notices.notify("warn", "Download cancelled");
+              else if (job.status === "paused") notices.notify("paused", "Download paused");
               else if (job.status === "completed") notices.notify("ok", "Download complete");
               else notices.notify("error", "Download failed");
-              if (job.status === "cancelled") nav.back();
+              if (job.status === "cancelled" || job.status === "paused") nav.back();
               else nav.replace({ name: "result", plan: screen.plan, draft: screen.draft, job });
             }}
           />

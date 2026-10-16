@@ -204,12 +204,14 @@ export function BatchFlow({ urls, onLinks, onHome, onQuit, onDownloading }: Batc
         <BatchDownloadScreen
           key={stage.run}
           plans={stage.plans}
-          concurrency={settings.concurrency}
           onDone={(jobs) => {
             // Cancelled before anything finished: nothing to report, go back a page and say so.
             // If some links were saved, show what happened to each.
-            if (jobs.length > 0 && jobs.every((j) => j.status === "cancelled")) {
-              notices.notify("warn", "Downloads cancelled");
+            const stopped = (j: EngineJob) => j.status === "cancelled" || j.status === "paused";
+            if (jobs.length > 0 && jobs.every(stopped)) {
+              if (jobs.some((j) => j.status === "paused")) {
+                notices.notify("paused", "Downloads paused");
+              } else notices.notify("warn", "Downloads cancelled");
               nav.back();
               return;
             }

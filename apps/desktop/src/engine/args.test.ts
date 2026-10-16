@@ -135,4 +135,8 @@ describe("subtitle downloads", () => {
   it("asks for auto-generated captions when marked auto", () => {
     expect(args({ lang: "en", auto: true, format: "vtt" })).toContain("--write-auto-subs");
   });
+
+  it("always continues partial files", () => {
+    expect(args({ lang: "en", auto: false, format: "srt" })).toContain("--continue");
+  });
 });

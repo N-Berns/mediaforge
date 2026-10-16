@@ -17,6 +17,10 @@ export interface MirrorJob {
 export type JobMirrorApi = ReturnType<typeof createJobMirror>;
 
 const TERMINAL = new Set(["completed", "failed", "cancelled"]);
+/** What "Clear finished" hides: a paused job is not running, but late frames must still reach it. */
+const CLEARABLE = new Set([...TERMINAL, "paused"]);
+/** A job that is queued or running; a cleared row comes back when its job is one again. */
+const RUNNING = new Set(["queued", "downloading", "processing"]);
 
 /** Fields a viewer can see; `updatedAt` alone never counts as a change. */
 const VISIBLE = ["title", "label", "status", "percent", "speed", "outputPath", "error"] as const;
@@ -34,7 +38,11 @@ export function createJobMirror() {
 
   /** Applies a patch and reports whether the visible row changed. */
   const merge = (id: string, patch: Partial<MirrorJob>): boolean => {
-    if (cleared.has(id)) return false;
+    if (cleared.has(id)) {
+      // Cleared while paused, then resumed: show it again.
+      if (!patch.status || !RUNNING.has(patch.status)) return false;
+      cleared.delete(id);
+    }
     const previous = jobs.get(id);
     const title = patch.title ?? titles.get(id) ?? previous?.title;
     const label = labels.get(id) ?? previous?.label;
@@ -69,7 +77,7 @@ export function createJobMirror() {
     clearFinished(): boolean {
       let removed = false;
       for (const [id, job] of jobs) {
-        if (!TERMINAL.has(job.status)) continue;
+        if (!CLEARABLE.has(job.status)) continue;
         cleared.add(id);
         jobs.delete(id);
         removed = true;
@@ -81,7 +89,10 @@ export function createJobMirror() {
         case "jobs.snapshot": {
           const next = new Map<string, MirrorJob>();
           for (const job of message.payload.jobs) {
-            if (cleared.has(job.id)) continue;
+            if (cleared.has(job.id)) {
+              if (!RUNNING.has(job.status)) continue;
+              cleared.delete(job.id);
+            }
             const title = job.request.candidate.pageTitle ?? job.request.candidate.url;
             next.set(job.id, {
               id: job.id,
@@ -108,7 +119,10 @@ export function createJobMirror() {
           const { jobId, status, progress } = message.payload;
           // A late frame must not pull a finished job back to "downloading".
           const current = jobs.get(jobId);
-          if (current && TERMINAL.has(current.status)) return false;
+          // A resume of a failed job reopens it with a queued frame.
+          if (current && TERMINAL.has(current.status)) {
+            if (!(current.status === "failed" && status === "queued")) return false;
+          }
           return merge(jobId, {
             status,
             ...(progress.percent !== undefined && { percent: progress.percent }),
@@ -127,6 +141,14 @@ export function createJobMirror() {
             error: message.payload.error,
             ...(message.payload.cancelled && { cancelled: true }),
           });
+        case "download.paused": {
+          const { jobId, progress } = message.payload;
+          return merge(jobId, {
+            status: "paused",
+            ...(progress?.percent !== undefined && { percent: progress.percent }),
+            speed: undefined,
+          });
+        }
         default:
           return false;
       }

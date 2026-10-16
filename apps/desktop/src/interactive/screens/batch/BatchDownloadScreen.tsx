@@ -1,6 +1,7 @@
 import { getProfile } from "@mediaforge/media-profiles";
 import { Box, Text, useInput } from "ink";
 import { useContext, useEffect, useRef, useState } from "react";
+import { startJob } from "../../../core/job-watch.ts";
 import { candidateFor } from "../../../download.ts";
 import type { EngineJob } from "../../../engine/index.ts";
 import { batchPercent, countJobs } from "../../batch.ts";
@@ -18,8 +19,6 @@ import { stageLabel } from "../DownloadScreen.tsx";
 
 export interface BatchDownloadScreenProps {
   plans: Plan[];
-  /** How many links download at the same time. */
-  concurrency: number;
   /** Called once every link has finished, failed or been cancelled; jobs are in plan order. */
   onDone: (jobs: EngineJob[]) => void;
 }
@@ -30,6 +29,7 @@ export function rowStatus(job: EngineJob | undefined): string {
   if (job.status === "completed") return "saved";
   if (job.status === "failed") return "failed";
   if (job.status === "cancelled") return "cancelled";
+  if (job.status === "paused") return "paused";
   return stageLabel(job)
     .replace("Downloading", "downloading")
     .replace("Merging video and audio", "merging")
@@ -37,19 +37,38 @@ export function rowStatus(job: EngineJob | undefined): string {
     .replace("Finishing", "finishing");
 }
 
-function rowLook(job: EngineJob | undefined): { icon: string; color: string } {
+export function rowLook(job: EngineJob | undefined): { icon: string; color: string } {
   if (!job || job.status === "queued") return { icon: ICONS.off, color: COLORS.muted };
   if (job.status === "completed") return { icon: ICONS.ok, color: COLORS.ok };
   if (job.status === "failed") return { icon: ICONS.error, color: COLORS.error };
+  if (job.status === "paused") return { icon: ICONS.paused, color: COLORS.paused };
   if (job.status === "cancelled") return { icon: ICONS.warn, color: COLORS.warn };
   const active = job.steps?.find((s) => s.state === "active");
   return { icon: ICONS.pointer, color: active ? STEP_COLORS[active.kind] : COLORS.accent };
 }
 
+/** A job that never reached a result because the core could not be reached or went away. */
+function lostJob(plan: Plan, error: unknown, status: "failed" | "cancelled" = "failed"): EngineJob {
+  const profile = getProfile(plan.profileId);
+  const now = Date.now();
+  return {
+    id: "",
+    request: {
+      candidate: candidateFor(plan.url, profile?.kind ?? "video"),
+      profileId: plan.profileId,
+    },
+    status,
+    progress: { bytesDownloaded: 0 },
+    ...(error !== undefined && { error: error instanceof Error ? error.message : String(error) }),
+    createdAt: now,
+    updatedAt: now,
+  };
+}
+
 const NAME_WIDTH = 12;
 const STATUS_WIDTH = 20;
 
-export function BatchDownloadScreen({ plans, concurrency, onDone }: BatchDownloadScreenProps) {
+export function BatchDownloadScreen({ plans, onDone }: BatchDownloadScreenProps) {
   const deps = useDeps();
   const { columns, rows } = useTerminalSize();
   const [jobs, setJobs] = useState<(EngineJob | undefined)[]>(() => plans.map(() => undefined));
@@ -65,46 +84,61 @@ export function BatchDownloadScreen({ plans, concurrency, onDone }: BatchDownloa
 
   useEffect(() => {
     let live = true;
-    const index = new Map<string, number>();
-    const engine = deps.download.createEngine(
-      (update) => {
-        const at = index.get(update.id);
-        if (!live || at === undefined) return;
-        setJobs((all) => all.map((job, i) => (i === at ? update : job)));
-      },
-      { maxConcurrent: concurrency },
-    );
-    const ids: string[] = [];
-    for (const [at, plan] of plans.entries()) {
-      const profile = getProfile(plan.profileId);
-      if (!profile) continue;
-      // The engine reports a job before submit returns, so register the id on the first update.
-      const job = engine.submit(
-        {
-          candidate: candidateFor(plan.url, profile.kind),
-          profileId: profile.id,
-          outputDir: plan.outputDir,
-        },
-        {
-          ...(plan.formatSelector && { formatSelector: plan.formatSelector }),
-          ...(plan.steps && { plan: plan.steps }),
-        },
-      );
-      index.set(job.id, at);
-      ids.push(job.id);
-      setJobs((all) => all.map((j, i) => (i === at ? (engine.get(job.id) ?? job) : j)));
-    }
+    let close = () => {};
+    const watchers: { cancel: () => Promise<void> }[] = [];
+    let cancelled = false;
     cancelAll.current = () => {
-      for (const id of ids) engine.cancel(id);
+      cancelled = true;
+      for (const w of watchers) void w.cancel();
     };
-    void Promise.all(ids.map((id) => engine.whenSettled(id))).then((finals) => {
-      if (live) done.current(finals.filter((j): j is EngineJob => j !== undefined));
-    });
+    void (async () => {
+      let client: Awaited<ReturnType<typeof deps.download.core>>;
+      try {
+        client = await deps.download.core();
+      } catch (error) {
+        if (live) done.current(plans.map((plan) => lostJob(plan, error)));
+        return;
+      }
+      close = () => client.close();
+      if (!live) return close();
+      const settled: Promise<EngineJob>[] = [];
+      for (const [at, plan] of plans.entries()) {
+        const profile = getProfile(plan.profileId);
+        if (!profile) continue;
+        if (cancelled) {
+          settled.push(Promise.resolve(lostJob(plan, undefined, "cancelled")));
+          continue;
+        }
+        try {
+          const watched = await startJob(
+            client,
+            {
+              candidate: candidateFor(plan.url, profile.kind),
+              profileId: profile.id,
+              outputDir: plan.outputDir,
+              origin: "menu",
+              ...(plan.formatSelector && { formatSelector: plan.formatSelector }),
+              ...(plan.steps && { plan: plan.steps }),
+            },
+            (update) => {
+              if (live) setJobs((all) => all.map((job, i) => (i === at ? update : job)));
+            },
+          );
+          watchers.push(watched);
+          if (cancelled) void watched.cancel();
+          settled.push(watched.settled.catch((error) => lostJob(plan, error)));
+        } catch (error) {
+          settled.push(Promise.resolve(lostJob(plan, error)));
+        }
+      }
+      const finals = await Promise.all(settled);
+      if (live) done.current(finals);
+    })();
     return () => {
       live = false;
-      cancelAll.current();
+      close();
     };
-  }, [deps, plans, concurrency]);
+  }, [deps, plans]);
 
   useInput((input, key) => {
     if (key.escape || (key.ctrl && input === "c")) cancelAll.current();
@@ -137,7 +171,7 @@ export function BatchDownloadScreen({ plans, concurrency, onDone }: BatchDownloa
     <Frame
       crumbs={["Home", "Download", "Downloading"]}
       icon={ICONS.download}
-      title={`Downloading ${plans.length} links, ${concurrency} at a time`}
+      title={`Downloading ${plans.length} links`}
       hints={[["Esc", "Cancel all"]]}
       ctrlC="Cancel"
     >

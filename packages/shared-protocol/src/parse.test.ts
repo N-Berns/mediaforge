@@ -1,6 +1,7 @@
 import type { MediaCandidate } from "@mediaforge/shared-types";
 import { describe, expect, it } from "vitest";
 import { FIREFOX_ADDON_ID, NATIVE_HOST_NAME } from "./host.ts";
+import { MAX_BATCH } from "./messages.ts";
 import { parseExtensionMessage, parseHostMessage } from "./parse.ts";
 import { PROTOCOL_VERSION } from "./version.ts";
 
@@ -101,12 +102,8 @@ describe("parseHostMessage", () => {
   });
 });
 
-describe("protocol v2", () => {
+describe("protocol messages", () => {
   const v = PROTOCOL_VERSION;
-
-  it("is version 2", () => {
-    expect(PROTOCOL_VERSION).toBe(2);
-  });
 
   it("accepts the new extension messages", () => {
     for (const type of ["jobs.list", "jobs.subscribe", "jobs.unsubscribe", "settings.get"]) {
@@ -263,5 +260,166 @@ describe("media probe", () => {
   it("exposes the fixed host and add-on identifiers", () => {
     expect(NATIVE_HOST_NAME).toBe("com.mediaforge.host");
     expect(FIREFOX_ADDON_ID).toBe("mediaforge@n-berns");
+  });
+});
+
+describe("protocol v3", () => {
+  const env = (type: string, payload: unknown) => ({ v: PROTOCOL_VERSION, id: "1", type, payload });
+
+  it("is version 3", () => {
+    expect(PROTOCOL_VERSION).toBe(3);
+  });
+
+  it("defaults hello.client to extension and accepts a terminal hello", () => {
+    const ext = parseExtensionMessage(env("hello", { extensionVersion: "1", browser: "firefox" }));
+    expect(ext.ok && ext.value.type === "hello" && ext.value.payload.client).toBe("extension");
+    const cli = parseExtensionMessage(env("hello", { client: "cli" }));
+    expect(cli.ok).toBe(true);
+  });
+
+  it("accepts download.start with origin, formatSelector and plan", () => {
+    const parsed = parseExtensionMessage(
+      env("download.start", {
+        candidate: {
+          id: "u",
+          pageUrl: "https://e.com/v",
+          url: "https://e.com/v",
+          kind: "video",
+          streamType: "progressive",
+          source: "dom",
+          variants: [],
+          detectedAt: 0,
+        },
+        profileId: "best",
+        origin: "menu",
+        formatSelector: "137+ba/137",
+        plan: [{ kind: "video", bytes: 10 }, { kind: "audio" }, { kind: "merge" }],
+      }),
+    );
+    expect(parsed.ok).toBe(true);
+  });
+
+  it("accepts settings.reload", () => {
+    expect(parseExtensionMessage(env("settings.reload", {})).ok).toBe(true);
+  });
+
+  it("accepts a paused job in a snapshot and a notice in hello.ack", () => {
+    const job = {
+      id: "j",
+      request: {
+        candidate: {
+          id: "u",
+          pageUrl: "https://e.com/v",
+          url: "https://e.com/v",
+          kind: "video",
+          streamType: "progressive",
+          source: "dom",
+          variants: [],
+          detectedAt: 0,
+        },
+        profileId: "best",
+      },
+      status: "paused",
+      progress: { bytesDownloaded: 5, percent: 50 },
+      createdAt: 1,
+      updatedAt: 2,
+      origin: "cli",
+      lastTryAt: 1,
+      errorKind: 4,
+    };
+    expect(parseHostMessage(env("jobs.snapshot", { jobs: [job] })).ok).toBe(true);
+    const ack = parseHostMessage(
+      env("hello.ack", {
+        hostVersion: "1",
+        ytDlp: { available: true },
+        ffmpeg: { available: true },
+        setup: "ready",
+        keepRunning: false,
+        notice: { reason: "unexpected", pausedCount: 1, jobIds: ["j"] },
+      }),
+    );
+    expect(ack.ok).toBe(true);
+  });
+
+  it("carries steps on progress and errorKind on failure", () => {
+    expect(
+      parseHostMessage(
+        env("download.progress", {
+          jobId: "j",
+          status: "downloading",
+          progress: { bytesDownloaded: 1 },
+          steps: [{ kind: "download", state: "active", percent: 10 }],
+          overallPercent: 10,
+        }),
+      ).ok,
+    ).toBe(true);
+    expect(
+      parseHostMessage(env("download.failed", { jobId: "j", error: "x", errorKind: 6 })).ok,
+    ).toBe(true);
+  });
+});
+
+describe("job control", () => {
+  const env = (type: string, payload: unknown) => ({ v: PROTOCOL_VERSION, id: "1", type, payload });
+
+  it.each(["download.pause", "download.resume", "jobs.remove", "jobs.trash"])(
+    "accepts %s with job ids and refuses an empty or oversized list",
+    (type) => {
+      expect(parseExtensionMessage(env(type, { jobIds: ["a", "b"] })).ok).toBe(true);
+      expect(parseExtensionMessage(env(type, { jobIds: [] })).ok).toBe(false);
+      const many = Array.from({ length: MAX_BATCH + 1 }, (_, i) => `j${i}`);
+      expect(parseExtensionMessage(env(type, { jobIds: many })).ok).toBe(false);
+    },
+  );
+
+  it("accepts jobs.trash with permanent and refuses a non-boolean one", () => {
+    expect(parseExtensionMessage(env("jobs.trash", { jobIds: ["a"], permanent: true })).ok).toBe(
+      true,
+    );
+    expect(parseExtensionMessage(env("jobs.trash", { jobIds: ["a"], permanent: false })).ok).toBe(
+      true,
+    );
+    expect(parseExtensionMessage(env("jobs.trash", { jobIds: ["a"], permanent: "yes" })).ok).toBe(
+      false,
+    );
+  });
+
+  it("parses a batch reply failure with a code", () => {
+    const reply = parseHostMessage(
+      env("jobs.result", {
+        failed: [{ jobId: "a", message: "too large", code: "too-large" }],
+      }),
+    );
+    expect(reply.ok && reply.value.payload).toEqual({
+      failed: [{ jobId: "a", message: "too large", code: "too-large" }],
+    });
+  });
+
+  it.each(["jobs.clearFinished", "notice.dismiss"])("accepts %s with an empty payload", (type) => {
+    expect(parseExtensionMessage(env(type, {})).ok).toBe(true);
+  });
+
+  it("parses the batch reply, the paused push and the notice push", () => {
+    expect(
+      parseHostMessage(
+        env("jobs.result", { failed: [{ jobId: "a", message: "No such download." }] }),
+      ).ok,
+    ).toBe(true);
+    expect(
+      parseHostMessage(
+        env("download.paused", { jobId: "a", progress: { bytesDownloaded: 5, percent: 50 } }),
+      ).ok,
+    ).toBe(true);
+    expect(parseHostMessage(env("download.paused", { jobId: "a" })).ok).toBe(true);
+    expect(parseHostMessage(env("notice", {})).ok).toBe(true);
+    expect(
+      parseHostMessage(
+        env("notice", { notice: { reason: "restarted", pausedCount: 1, jobIds: ["a"] } }),
+      ).ok,
+    ).toBe(true);
+  });
+
+  it("keeps protocol version 3", () => {
+    expect(PROTOCOL_VERSION).toBe(3);
   });
 });

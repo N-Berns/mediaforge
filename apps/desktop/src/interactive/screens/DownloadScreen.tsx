@@ -1,6 +1,7 @@
 import { getProfile } from "@mediaforge/media-profiles";
 import { Box, Text, useInput } from "ink";
 import { useContext, useEffect, useRef, useState } from "react";
+import { startJob } from "../../core/job-watch.ts";
 import { candidateFor } from "../../download.ts";
 import type { EngineJob, Step, StepKind } from "../../engine/index.ts";
 import { Card } from "../components/Card.tsx";
@@ -105,25 +106,64 @@ export function DownloadScreen({ plan, onDone }: DownloadScreenProps) {
     const profile = getProfile(plan.profileId);
     if (!profile) return;
     let live = true;
-    const engine = deps.download.createEngine((update) => {
-      if (live) setJob(update);
-    });
-    const { id } = engine.submit(
-      {
-        candidate: candidateFor(plan.url, profile.kind),
-        profileId: profile.id,
-        outputDir: plan.outputDir,
+    let close = () => {};
+    let cancelled = false;
+    // Esc before the core answers must still stop the download.
+    control.current = {
+      cancel: () => {
+        cancelled = true;
       },
-      {
-        ...(plan.formatSelector && { formatSelector: plan.formatSelector }),
-        ...(plan.steps && { plan: plan.steps }),
-      },
-    );
-    control.current = { cancel: () => void engine.cancel(id) };
-    void engine.whenSettled(id)?.then((final) => live && onDone(final));
+    };
+    const finish = (status: "failed" | "cancelled", error?: unknown) => {
+      if (!live) return;
+      const now = Date.now();
+      onDone({
+        id: "",
+        request: { candidate: candidateFor(plan.url, profile.kind), profileId: profile.id },
+        status,
+        progress: { bytesDownloaded: 0 },
+        ...(error !== undefined && {
+          error: error instanceof Error ? error.message : String(error),
+        }),
+        createdAt: now,
+        updatedAt: now,
+      });
+    };
+    const fail = (error: unknown) => finish("failed", error);
+    void (async () => {
+      try {
+        const client = await deps.download.core();
+        close = () => client.close();
+        if (!live) return close();
+        if (cancelled) {
+          close();
+          return finish("cancelled");
+        }
+        const watched = await startJob(
+          client,
+          {
+            candidate: candidateFor(plan.url, profile.kind),
+            profileId: profile.id,
+            outputDir: plan.outputDir,
+            origin: "menu",
+            ...(plan.formatSelector && { formatSelector: plan.formatSelector }),
+            ...(plan.steps && { plan: plan.steps }),
+          },
+          (update) => {
+            if (live) setJob(update);
+          },
+        );
+        control.current = { cancel: () => void watched.cancel() };
+        if (cancelled) void watched.cancel();
+        watched.settled.then((final) => live && onDone(final), fail);
+      } catch (error) {
+        fail(error);
+      }
+    })();
     return () => {
+      // Leaving the screen does not stop the download: it keeps running in the core.
       live = false;
-      engine.cancel(id);
+      close();
     };
   }, []);
 

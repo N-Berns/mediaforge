@@ -103,3 +103,40 @@ Running `mediaforge` with no arguments in a terminal opens a full-screen app. Th
 - [x] Manage a Deno download so YouTube works without a separate JavaScript runtime (pinned in `tools.lock.json` via `pnpm pin:deno`; `mediaforge setup` fetches it; optional for `doctor` and downloads; yt-dlp gets `--js-runtimes deno:<path>`; `update` leaves it alone)
 - [x] Self-update of MediaForge: check at startup (notice on Home) and on About with an "Update to ..." button, plus `mediaforge self-update`; stable releases only, SHA-256 checked, restart afterwards
 - [ ] winget and Scoop packages (Homebrew dropped with macOS)
+
+## Downloads in the core (downloads manager phase 1)
+
+- [ ] `mediaforge download <url>` with no core running starts one, downloads, prints the path, exits 0.
+- [ ] Ctrl+C during `mediaforge download` prints "Cancelled." and exits with the cancelled code.
+- [ ] A menu download keeps going after quitting the menu with Ctrl+C on the home screen; the file appears.
+- [ ] `history.json` sits beside `config.json` and lists the CLI, menu and extension downloads with their origin.
+- [ ] Kill the core in Task Manager (Windows) or with `kill -9` (Linux) during a download. Start the browser popup: the job shows as paused, and `history.json` has a notice with reason "unexpected".
+- [ ] Replace `history.json` with `{broken`. Start the core: `history.json.bak` holds the broken text and a new list starts.
+- [ ] Change "Downloads at once" in Settings while three downloads are queued: the new limit applies without restarting the core.
+- [ ] An older extension against this exe shows the "update" state rather than errors.
+- [ ] Press Esc on the menu download screen before the background service has answered: the download is cancelled and never starts.
+- [ ] `mediaforge download <url>` with the background service unreachable fails within about 10 seconds with "Could not start or reach the MediaForge background service." and exit code 1.
+
+## Job control (downloads manager phase 2)
+
+Phase 2 has no buttons yet: send the requests with a small script through `CoreClient` (terminal role), or wait for the manager in phase 3.
+
+- [ ] Pause a large real download: yt-dlp stops, `.mediaforge-<id>` keeps its `.part` file, the row is paused.
+- [ ] Resume it: the same id continues from the partial file (the byte count does not restart at 0).
+- [ ] Kill the core during a download, start it again, resume the paused job: it continues in the same folder with the same format.
+- [ ] A failed download (pull the network cable) keeps its partial file; resume retries and continues.
+- [ ] Cancel a paused job: its `.mediaforge-<id>` folder is gone.
+- [ ] Remove a completed job: the row goes, the file stays.
+- [ ] Trash a completed job on Windows: the file is in the Recycle Bin and restores to its folder.
+- [ ] Trash a file that is open in a video player on Windows: the job is reported as failed, the row stays, no dialog appears.
+- [ ] Trash a file on a USB stick or network drive on Windows: refused with "no Recycle Bin"; the file stays.
+- [ ] Trash a completed job on Linux: the file is in the desktop's Trash and restores to its folder.
+- [ ] Trash a file on another mount on Linux: it lands in that mount's `.Trash-<uid>` and the file manager's Trash shows it.
+- [ ] Dismiss the notice: `history.json` has no `notice`, and a new popup or terminal does not see it.
+- [ ] Resume every job a notice named: the notice clears by itself.
+- [ ] Pause a `mediaforge download` job from another client: the CLI prints the paused hint and exits 130.
+- [ ] Trash a file larger than the drive's Recycle Bin size on Windows, without confirmation: refused with code `too-large` and "too large for the Recycle Bin; it would be deleted permanently"; the file and its row stay.
+- [ ] Send `jobs.trash` again for that job with `permanent: true`: the file is deleted for good (not in the Recycle Bin) and the row is dropped.
+- [ ] With "Don't move files to the Recycle Bin" set for a drive on Windows, trash a file there: refused; the file stays.
+- [ ] Trash a file reached through a junction that points to another drive or a network share on Windows: checked against the real drive (refused for a share); never deleted for good.
+- [ ] Resume a paused download that needed browser cookies after restarting the core: it runs without them (it may fail on login-only sites; start it again from the browser).

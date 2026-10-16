@@ -226,6 +226,8 @@ export function buildYtDlpArgs({
 
   return [
     "--no-playlist",
+    // Resume partial files left by a paused or failed try (yt-dlp's default, stated so it holds).
+    "--continue",
     ...(jsRuntimeArgs ?? []),
     "--newline",
     "--progress",

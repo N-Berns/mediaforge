@@ -1,6 +1,6 @@
 import { BinaryNotFoundError, type Tool } from "@mediaforge/binary-resolver";
 import type { MediaCandidate } from "@mediaforge/shared-types";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { ExitCode } from "../exit-codes.ts";
 import { DownloadEngine, type EngineFs, type EngineJob } from "./engine.ts";
 import type { LineHandlers, ProcessRunner } from "./process.ts";
@@ -32,7 +32,7 @@ function fakeFs(existing: string[] = []) {
     list: async () => [],
     readText: async () => "",
   };
-  return { fs, calls };
+  return { fs, calls, removed: calls.rm };
 }
 
 type Script = (h: LineHandlers, signal: AbortSignal, args: string[]) => Promise<number | null>;
@@ -109,7 +109,7 @@ describe("DownloadEngine", () => {
     expect(job?.outputPath).toMatch(/Title \(1\)\.mp4$/);
   });
 
-  it("fails with a mapped exit code and cleans up", async () => {
+  it("fails with a mapped exit code and keeps the work folder", async () => {
     const { fs, calls } = fakeFs();
     const engine = new DownloadEngine({
       resolve: found,
@@ -122,7 +122,7 @@ describe("DownloadEngine", () => {
     const job = await engine.whenSettled(engine.submit(request()).id);
     expect(job).toMatchObject({ status: "failed", errorKind: ExitCode.UnsupportedSite });
     expect(job?.error).toBe("Unsupported URL: https://example.com/v");
-    expect(calls.rm).toHaveLength(1);
+    expect(calls.rm).toHaveLength(0);
     expect(calls.rename).toHaveLength(0);
   });
 
@@ -279,5 +279,274 @@ describe("DownloadEngine", () => {
     const [ja, jb] = await Promise.all([engine.whenSettled(a.id), engine.whenSettled(b.id)]);
     expect(ja?.error).toBe("denied [redacted]");
     expect(jb?.error).toBe("denied [redacted]");
+  });
+});
+
+describe("setMaxConcurrent", () => {
+  it("starts more queued jobs when raised, and never stops running ones when lowered", async () => {
+    const releases: (() => void)[] = [];
+    const engine = new DownloadEngine({
+      resolve: found,
+      fs: fakeFs().fs,
+      maxConcurrent: 1,
+      run: () =>
+        new Promise((resolve) => {
+          releases.push(() => resolve({ exitCode: 1 }));
+        }),
+    });
+    const ids = [1, 2, 3].map(() => engine.submit(request()).id);
+    await vi.waitFor(() => expect(releases).toHaveLength(1));
+
+    engine.setMaxConcurrent(3);
+    await vi.waitFor(() => expect(releases).toHaveLength(3));
+
+    engine.setMaxConcurrent(1);
+    expect(ids.map((id) => engine.get(id)?.status)).toEqual([
+      "downloading",
+      "downloading",
+      "downloading",
+    ]);
+    for (const release of releases) release();
+    await Promise.all(ids.map((id) => engine.whenSettled(id)));
+  });
+
+  it("treats values below 1 as 1", async () => {
+    const releases: (() => void)[] = [];
+    const engine = new DownloadEngine({
+      resolve: found,
+      fs: fakeFs().fs,
+      maxConcurrent: 2,
+      run: () =>
+        new Promise((resolve) => {
+          releases.push(() => resolve({ exitCode: 1 }));
+        }),
+    });
+    engine.setMaxConcurrent(0);
+    const ids = [1, 2].map(() => engine.submit(request()).id);
+    await vi.waitFor(() => expect(releases).toHaveLength(1));
+    // Give a second job time to start if the limit were 0 or 2; it must stay queued.
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(releases).toHaveLength(1);
+
+    releases[0]?.();
+    await vi.waitFor(() => expect(releases).toHaveLength(2));
+    releases[1]?.();
+    await Promise.all(ids.map((id) => engine.whenSettled(id)));
+  });
+});
+
+describe("pause and resume", () => {
+  /** A runner that waits for `finish(code)` or an abort, and records every call's args. */
+  function gatedRunner() {
+    const calls: { args: string[]; finish: (exitCode: number) => void }[] = [];
+    const run: ProcessRunner = (_cmd, args, handlers, signal) =>
+      new Promise((resolve) => {
+        const finish = (exitCode: number) => resolve({ exitCode });
+        calls.push({ args, finish });
+        if (signal.aborted) return finish(1);
+        signal.addEventListener("abort", () => finish(1));
+        handlers.onStdoutLine("MFPROGRESS 50 100 NA 10 5");
+      });
+    return { run, calls };
+  }
+
+  it("pauses a running job, keeps its work folder, and resumes it under the same id", async () => {
+    const { fs, removed } = fakeFs();
+    const { run, calls } = gatedRunner();
+    const engine = new DownloadEngine({ resolve: found, fs, run });
+    const { id } = engine.submit(request());
+    await vi.waitFor(() => expect(calls).toHaveLength(1));
+
+    expect(engine.pause(id)).toBe(true);
+    await vi.waitFor(() => expect(engine.get(id)?.status).toBe("paused"));
+    expect(engine.get(id)?.progress.percent).toBe(50);
+    expect(removed).toEqual([]);
+    expect(engine.get(id)?.workDir?.endsWith(`.mediaforge-${id}`)).toBe(true);
+
+    expect(engine.resume(id)).toBe(true);
+    expect(engine.get(id)?.status).not.toBe("paused");
+    await vi.waitFor(() => expect(calls).toHaveLength(2));
+    expect(calls[1]?.args).toContain("--continue");
+    expect(calls[1]?.args[calls[1].args.indexOf("--paths") + 1]).toBe(engine.get(id)?.workDir);
+    engine.cancel(id);
+    await engine.whenSettled(id);
+  });
+
+  it("does not let a pause override a cancel that is still stopping the process", async () => {
+    const { fs } = fakeFs();
+    const { run, calls } = gatedRunner();
+    const engine = new DownloadEngine({ resolve: found, fs, run });
+    const { id } = engine.submit(request());
+    await vi.waitFor(() => expect(calls).toHaveLength(1));
+    expect(engine.cancel(id)).toBe(true);
+    expect(engine.pause(id)).toBe(false);
+    expect((await engine.whenSettled(id))?.status).toBe("cancelled");
+  });
+
+  it("remove of a running job resolves even when pause is called right after", async () => {
+    const { fs } = fakeFs();
+    const { run, calls } = gatedRunner();
+    const engine = new DownloadEngine({ resolve: found, fs, run });
+    const { id } = engine.submit(request());
+    await vi.waitFor(() => expect(calls).toHaveLength(1));
+    const removal = engine.remove(id);
+    expect(engine.pause(id)).toBe(false);
+    await removal;
+    expect(engine.get(id)).toBeUndefined();
+  });
+
+  it("pauses a queued job without running it", () => {
+    const { fs } = fakeFs();
+    const { run } = gatedRunner();
+    const engine = new DownloadEngine({ resolve: found, fs, run, maxConcurrent: 1 });
+    engine.submit(request());
+    const second = engine.submit(request()).id;
+    expect(engine.pause(second)).toBe(true);
+    expect(engine.get(second)?.status).toBe("paused");
+    expect(engine.pause(second)).toBe(false);
+  });
+
+  it("does not turn a download that already finished into a paused one", async () => {
+    const { fs } = fakeFs();
+    const engine = new DownloadEngine({
+      resolve: found,
+      fs,
+      run: async (_c, args, h) => {
+        h.onStdoutLine(`MFFILE ${args[args.indexOf("--paths") + 1]}/Clip.mp4`);
+        return { exitCode: 0 };
+      },
+    });
+    const { id } = engine.submit(request());
+    const final = await engine.whenSettled(id);
+    expect(final?.status).toBe("completed");
+    expect(engine.pause(id)).toBe(false);
+  });
+
+  it("keeps a failed job's work folder and retries it with a fresh settle", async () => {
+    const { fs, removed } = fakeFs();
+    let attempt = 0;
+    const engine = new DownloadEngine({
+      resolve: found,
+      fs,
+      run: async (_c, args, h) => {
+        attempt += 1;
+        if (attempt === 1) {
+          h.onStderrLine("ERROR: Unable to download: HTTP Error 503");
+          return { exitCode: 1 };
+        }
+        h.onStdoutLine(`MFFILE ${args[args.indexOf("--paths") + 1]}/Clip.mp4`);
+        return { exitCode: 0 };
+      },
+    });
+    const { id } = engine.submit(request());
+    expect((await engine.whenSettled(id))?.status).toBe("failed");
+    expect(removed).toEqual([]);
+
+    expect(engine.resume(id)).toBe(true);
+    expect(engine.get(id)?.error).toBeUndefined();
+    expect((await engine.whenSettled(id))?.status).toBe("completed");
+  });
+
+  it("cancelling a paused job removes its partial files", async () => {
+    const { fs, removed } = fakeFs();
+    const { run, calls } = gatedRunner();
+    const engine = new DownloadEngine({ resolve: found, fs, run });
+    const { id } = engine.submit(request());
+    await vi.waitFor(() => expect(calls).toHaveLength(1));
+    engine.pause(id);
+    await vi.waitFor(() => expect(engine.get(id)?.status).toBe("paused"));
+    const workDir = engine.get(id)?.workDir;
+
+    expect(engine.cancel(id)).toBe(true);
+    expect((await engine.whenSettled(id))?.status).toBe("cancelled");
+    await vi.waitFor(() => expect(removed).toContain(workDir));
+  });
+
+  it("remove of a paused job cannot be resumed while its folder is going away", async () => {
+    const { fs } = fakeFs();
+    let release: () => void = () => {};
+    const rmGate = new Promise<void>((r) => {
+      release = r;
+    });
+    const { run, calls } = gatedRunner();
+    const engine = new DownloadEngine({ resolve: found, fs: { ...fs, rm: () => rmGate }, run });
+    const { id } = engine.submit(request());
+    await vi.waitFor(() => expect(calls).toHaveLength(1));
+    engine.pause(id);
+    await vi.waitFor(() => expect(engine.get(id)?.status).toBe("paused"));
+
+    const removal = engine.remove(id);
+    expect(engine.resume(id)).toBe(false);
+    release();
+    await removal;
+    expect(engine.get(id)).toBeUndefined();
+    expect(calls).toHaveLength(1);
+  });
+
+  it("restores a paused job from an earlier session and resumes it with its format", async () => {
+    const { fs } = fakeFs();
+    const { run, calls } = gatedRunner();
+    const engine = new DownloadEngine({ resolve: found, fs, run });
+    const now = Date.now();
+    engine.restore(
+      {
+        id: "old",
+        request: request(),
+        status: "paused",
+        progress: { bytesDownloaded: 5, percent: 40 },
+        createdAt: now,
+        updatedAt: now,
+      },
+      { formatSelector: "137+ba/137" },
+    );
+    expect(engine.get("old")?.status).toBe("paused");
+    expect(calls).toHaveLength(0);
+
+    expect(engine.resume("old")).toBe(true);
+    await vi.waitFor(() => expect(calls).toHaveLength(1));
+    expect(calls[0]?.args.join(" ")).toContain("137+ba/137");
+    expect(calls[0]?.args[calls[0].args.indexOf("--paths") + 1]).toMatch(/\.mediaforge-old$/);
+    engine.cancel("old");
+    await engine.whenSettled("old");
+  });
+
+  it("ignores restore for running statuses and for known ids", () => {
+    const engine = new DownloadEngine({ resolve: found, fs: fakeFs().fs });
+    const now = Date.now();
+    const base = {
+      request: request(),
+      progress: { bytesDownloaded: 0 },
+      createdAt: now,
+      updatedAt: now,
+    };
+    engine.restore({ ...base, id: "q", status: "queued" });
+    expect(engine.get("q")).toBeUndefined();
+    engine.restore({ ...base, id: "p", status: "paused" });
+    engine.restore({ ...base, id: "p", status: "failed" });
+    expect(engine.get("p")?.status).toBe("paused");
+  });
+
+  it("removes jobs: cancels active ones, deletes dormant partials, forgets them", async () => {
+    const { fs, removed } = fakeFs();
+    const { run, calls } = gatedRunner();
+    const engine = new DownloadEngine({ resolve: found, fs, run });
+    const running = engine.submit(request()).id;
+    await vi.waitFor(() => expect(calls).toHaveLength(1));
+    await engine.remove(running);
+    expect(engine.get(running)).toBeUndefined();
+
+    const now = Date.now();
+    engine.restore({
+      id: "gone",
+      request: request(),
+      status: "failed",
+      progress: { bytesDownloaded: 0 },
+      createdAt: now,
+      updatedAt: now,
+    });
+    await engine.remove("gone");
+    expect(engine.get("gone")).toBeUndefined();
+    expect(removed.some((p) => p.endsWith(".mediaforge-gone"))).toBe(true);
+    await expect(engine.remove("unknown")).resolves.toBeUndefined();
   });
 });

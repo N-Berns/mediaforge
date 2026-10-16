@@ -244,13 +244,26 @@ export function wrapSocket(socket: net.Socket, options: WrapOptions = {}): Conne
  *   1. client -> core  { hello: nonceC }
  *   2. core -> client  { proof: HMAC(token, "core|" + nonceC), nonce: nonceS }
  *   3. the client checks the core's proof, and drops the core without another word if it is wrong
- *   4. client -> core  { proof: HMAC(token, "client|" + nonceS + "|" + nonceC) }
+ *   4. client -> core  { proof: HMAC(token, "client|" + nonceS + "|" + nonceC), role }
  *   5. core -> client  { ok: true }, once it has checked the client's proof
  *
  * Nonces are 32 random bytes in lower-case hex, and nonceS is fresh per connection, so a captured
  * step-4 proof is useless on another connection. The "core|" and "client|" prefixes keep a proof
  * the core hands out at step 2 from ever being a valid step-4 proof.
+ * `role` is "relay" or "terminal"; anything else, or none, counts as "relay".
  */
+
+/**
+ * Who is on the other end. The relay carries frames from the browser, so it gets the extension's
+ * limits; a terminal is the user's own program. The client states it in step 4, below the protocol,
+ * so nothing a page or extension sends can change it.
+ */
+export type ConnectionRole = "relay" | "terminal";
+
+const roleOf = (value: unknown): ConnectionRole =>
+  typeof value === "object" && value !== null && (value as { role?: unknown }).role === "terminal"
+    ? "terminal"
+    : "relay";
 
 const NONCE_BYTES = 32;
 /** A nonce or an HMAC-SHA256 in lower-case hex; both are 32 bytes. */
@@ -280,8 +293,8 @@ function proofMatches(given: string | undefined, expected: string): boolean {
 export interface ListenOptions {
   path: string;
   token: string;
-  /** Called once per authenticated client. */
-  onConnection: (conn: Connection) => void;
+  /** Called once per authenticated client, with the role it stated in the handshake. */
+  onConnection: (conn: Connection, role: ConnectionRole) => void;
 }
 
 /**
@@ -296,16 +309,19 @@ export interface ListenOptions {
 export function listenCore({ path, token, onConnection }: ListenOptions): Promise<net.Server> {
   if (token === "") return Promise.reject(new Error("The core token must not be empty."));
 
-  const authenticate = async (socket: net.Socket): Promise<boolean> => {
+  const authenticate = async (socket: net.Socket): Promise<ConnectionRole | undefined> => {
     const hello = await readFrame(socket, HANDSHAKE_MAX_BYTES);
     const nonceC = hexField(hello.message, "hello");
-    if (nonceC === undefined) return false;
+    if (nonceC === undefined) return undefined;
     const nonceS = newNonce();
     socket.write(
       encodeMessage({ proof: coreProof(token, nonceC), nonce: nonceS }, HANDSHAKE_MAX_BYTES),
     );
     const reply = await readFrame(socket, HANDSHAKE_MAX_BYTES);
-    return proofMatches(hexField(reply.message, "proof"), clientProof(token, nonceS, nonceC));
+    if (!proofMatches(hexField(reply.message, "proof"), clientProof(token, nonceS, nonceC))) {
+      return undefined;
+    }
+    return roleOf(reply.message);
   };
 
   return new Promise((resolve, reject) => {
@@ -313,15 +329,15 @@ export function listenCore({ path, token, onConnection }: ListenOptions): Promis
       socket.on("error", () => socket.destroy());
       const timer = setTimeout(() => socket.destroy(), HANDSHAKE_TIMEOUT_MS);
       authenticate(socket).then(
-        (ok) => {
+        (role) => {
           clearTimeout(timer);
-          if (!ok || socket.destroyed) {
+          if (role === undefined || socket.destroyed) {
             socket.destroy();
             return;
           }
           const conn = wrapSocket(socket);
           conn.send({ ok: true });
-          onConnection(conn);
+          onConnection(conn, role);
         },
         () => {
           clearTimeout(timer);
@@ -343,6 +359,8 @@ export interface ConnectOptions {
   token: string;
   /** How long to wait for the core to answer the handshake. Defaults to 5000 ms. */
   timeoutMs?: number;
+  /** The role stated in the handshake. Defaults to "relay", the least trusted. */
+  role?: ConnectionRole;
 }
 
 /**
@@ -355,6 +373,7 @@ export function connectCore({
   path,
   token,
   timeoutMs = HANDSHAKE_TIMEOUT_MS,
+  role = "relay",
 }: ConnectOptions): Promise<Connection> {
   return new Promise((resolve, reject) => {
     const nonceC = newNonce();
@@ -383,7 +402,7 @@ export function connectCore({
         throw new Error("Core could not prove its identity.");
       }
       socket.write(
-        encodeMessage({ proof: clientProof(token, nonceS, nonceC) }, HANDSHAKE_MAX_BYTES),
+        encodeMessage({ proof: clientProof(token, nonceS, nonceC), role }, HANDSHAKE_MAX_BYTES),
       );
       // The core may start talking right behind its confirmation; those bytes are kept.
       const confirmation = await readFrame(socket, HANDSHAKE_MAX_BYTES, true);

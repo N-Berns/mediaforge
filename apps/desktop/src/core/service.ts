@@ -1,4 +1,4 @@
-import { resolve } from "node:path";
+import { isAbsolute, resolve } from "node:path";
 import { getProfile } from "@mediaforge/media-profiles";
 import {
   type ExtensionToHostMessage,
@@ -7,16 +7,19 @@ import {
   type ProbedMedia,
   parseExtensionMessage,
 } from "@mediaforge/shared-protocol";
-import type { DownloadJob } from "@mediaforge/shared-types";
+import type { DownloadJob, JobOrigin } from "@mediaforge/shared-types";
 import { contextError } from "../engine/args.ts";
 import type { DownloadEngine, EngineJob } from "../engine/index.ts";
 import { defaultOutputDir } from "../engine/paths.ts";
 import { CliError, ExitCode } from "../exit-codes.ts";
 import { kindOfProfile, withKindFolder } from "../kind-folder.ts";
 import { type SettingsStore, sanitizeSettings } from "../settings.ts";
+import type { HistoryJob, HistoryStore } from "./history.ts";
+import type { ConnectionRole } from "./ipc.ts";
 import { filenameError, folderSettingError, outputDirError } from "./path-rules.ts";
 import { type KnownFormat, selectorFor, UnsupportedSiteError } from "./probe.ts";
 import type { Provisioner, SetupStatus } from "./provisioner.ts";
+import type { TrashFn, TrashResult } from "./trash.ts";
 
 export interface ServiceClient {
   /** May throw (the transport rejects oversized or unserializable frames); the core ignores it. */
@@ -43,10 +46,15 @@ export interface CoreServiceDeps {
   onActivity(): void;
   now(): number;
   newId(): string;
+  /** Every job, across sessions. The service writes each engine update into it. */
+  history: HistoryStore;
+  /** Moves files to the Recycle Bin or the Trash. */
+  trash: TrashFn;
 }
 
 interface ClientState {
   client: ServiceClient;
+  role: ConnectionRole;
   /**
    * Set on the client's first request. The transport disconnects a client that is sent a frame
    * right behind the handshake ack, so nothing is pushed to a client before it has spoken.
@@ -69,7 +77,8 @@ const SNAPSHOT_MAX_BYTES = 900_000;
 const MAX_ERROR_TEXT = 1000;
 /** Probed pages whose format ids are remembered, so a `variantId` can be checked. */
 const MAX_PROBED_URLS = 64;
-const TERMINAL = new Set(["completed", "failed", "cancelled"]);
+/** Jobs that no longer run. A paused job counts: it does nothing until someone resumes it. */
+const TERMINAL = new Set(["completed", "failed", "cancelled", "paused"]);
 
 const encoder = new TextEncoder();
 const byteLength = (value: unknown): number => encoder.encode(JSON.stringify(value)).byteLength;
@@ -77,16 +86,17 @@ const byteLength = (value: unknown): number => encoder.encode(JSON.stringify(val
 const truncate = (text: string, max: number): string =>
   text.length <= max ? text : `${text.slice(0, max - 1)}…`;
 
-const toProtocolJob = (job: EngineJob): DownloadJob => ({
-  id: job.id,
-  request: job.request,
-  status: job.status,
-  progress: job.progress,
-  ...(job.outputPath !== undefined && { outputPath: job.outputPath }),
-  ...(job.error !== undefined && { error: job.error }),
-  createdAt: job.createdAt,
-  updatedAt: job.updatedAt,
-});
+const toProtocolJob = ({
+  files: _files,
+  workDir: _workDir,
+  formatSelector: _formatSelector,
+  plan: _plan,
+  ...job
+}: HistoryJob): DownloadJob => job;
+
+const toEngineJob = (row: HistoryJob): EngineJob => toProtocolJob(row) as EngineJob;
+
+const UNKNOWN = "No such download.";
 
 function describeProbeError(error: unknown): { code: string; text: string } {
   const text = (error instanceof Error ? error.message : String(error)).slice(0, 500);
@@ -105,6 +115,8 @@ export class CoreService {
   readonly #clients = new Set<ClientState>();
   /** When and with which status each job's progress was last passed on, for throttling. */
   readonly #lastProgress = new Map<string, { at: number; status: EngineJob["status"] }>();
+  /** Where each job of this session was started. */
+  readonly #origins = new Map<string, JobOrigin>();
   /** Format ids returned by `media.probe`, per page url, oldest first. */
   readonly #formats = new Map<string, Map<string, KnownFormat>>();
   /** The subtitle tracks each probed page offered, as `manual:en` or `auto:en`. */
@@ -117,6 +129,14 @@ export class CoreService {
   constructor(deps: CoreServiceDeps) {
     this.#deps = deps;
     this.#engine = deps.createEngine((job) => this.#onJob(job));
+    // Paused and failed jobs from earlier sessions can be resumed like this session's.
+    for (const row of deps.history.jobs()) {
+      if (row.status !== "paused" && row.status !== "failed") continue;
+      this.#engine.restore(toEngineJob(row), {
+        ...(row.formatSelector && { formatSelector: row.formatSelector }),
+        ...(row.plan && { plan: row.plan }),
+      });
+    }
     deps.provisioner.onChange((status) => this.#broadcastSetup(status));
   }
 
@@ -131,8 +151,14 @@ export class CoreService {
   }
 
   /** Registers a client. Sends nothing: the client speaks first. */
-  attach(client: ServiceClient): ClientHandle {
-    const state: ClientState = { client, active: false, subscribedAll: false, jobs: new Set() };
+  attach(client: ServiceClient, role: ConnectionRole = "relay"): ClientHandle {
+    const state: ClientState = {
+      client,
+      role,
+      active: false,
+      subscribedAll: false,
+      jobs: new Set(),
+    };
     this.#clients.add(state);
     this.#deps.onActivity();
     return {
@@ -142,6 +168,71 @@ export class CoreService {
         this.#deps.onActivity();
       },
     };
+  }
+
+  /** Re-read the settings and apply the ones that take effect live. */
+  async applySettings(): Promise<void> {
+    const settings = await this.#deps.settings.load();
+    this.#engine.setMaxConcurrent(settings.concurrency);
+  }
+
+  /** Record a clean exit. Called once, when the core shuts down normally. */
+  async shutdown(): Promise<void> {
+    await this.#deps.history.close();
+  }
+
+  /**
+   * Stop or forget each job, move every file it recorded to the trash in one call, and drop the
+   * rows whose files all went. Only paths in a job's own `files` list are ever touched. A file too
+   * large for the Recycle Bin keeps its row with code `too-large` until the client confirms and
+   * sends `permanent`.
+   */
+  async #trash(
+    state: ClientState,
+    id: string,
+    jobIds: string[],
+    permanent: boolean,
+  ): Promise<void> {
+    const history = this.#deps.history;
+    const filesOf = new Map<string, string[]>();
+    const failed: { jobId: string; message: string; code?: string }[] = [];
+    const known: string[] = [];
+    for (const jobId of new Set(jobIds)) {
+      if (history.get(jobId)) known.push(jobId);
+      else failed.push({ jobId, message: UNKNOWN });
+    }
+    // Together, so many cancellations do not add up to more than the client's timeout.
+    await Promise.all(known.map((jobId) => this.#engine.remove(jobId)));
+    for (const jobId of known) filesOf.set(jobId, history.get(jobId)?.files ?? []);
+    const all = [...new Set([...filesOf.values()].flat())];
+    const result: TrashResult =
+      all.length > 0 ? await this.#deps.trash(all, { permanent }) : { failed: [] };
+    const problems = new Map(result.failed.map((f) => [f.path, f]));
+    for (const [jobId, files] of filesOf) {
+      const stuck = files.find((file) => problems.has(file));
+      if (stuck) {
+        failed.push(
+          problems.get(stuck)?.code === "too-large"
+            ? {
+                jobId,
+                message: `${stuck} is too large for the Recycle Bin; it would be deleted permanently.`,
+                code: "too-large",
+              }
+            : {
+                jobId,
+                message: `Could not move ${stuck} to the trash: ${problems.get(stuck)?.message}`,
+              },
+        );
+        continue;
+      }
+      history.remove(jobId);
+    }
+    this.#reply(state, id, "jobs.result", { failed });
+    this.#deps.onActivity();
+  }
+
+  #forbidden(state: ClientState, id: string): void {
+    this.#error(state, id, "forbidden", "Only MediaForge itself may ask for this.");
   }
 
   #reply<T extends HostToExtensionMessage["type"]>(
@@ -219,6 +310,57 @@ export class CoreService {
         return this.#probe(state, message);
       case "folder.open":
         return this.#openFolder(state, message);
+      case "download.pause":
+        return this.#batch(state, message.id, message.payload.jobIds, (jobId) =>
+          this.#engine.pause(jobId) ? undefined : "Only queued or running downloads can be paused.",
+        );
+      case "download.resume":
+        return this.#batch(state, message.id, message.payload.jobIds, (jobId) =>
+          this.#engine.resume(jobId)
+            ? undefined
+            : "Only paused or failed downloads can be resumed.",
+        );
+      case "jobs.remove":
+        {
+          const failed: { jobId: string; message: string }[] = [];
+          const known: string[] = [];
+          for (const jobId of new Set(message.payload.jobIds)) {
+            if (this.#deps.history.get(jobId)) known.push(jobId);
+            else failed.push({ jobId, message: UNKNOWN });
+          }
+          // Together, so many cancellations do not add up to more than the client's timeout.
+          await Promise.all(known.map((jobId) => this.#engine.remove(jobId)));
+          for (const jobId of known) this.#deps.history.remove(jobId);
+          this.#reply(state, message.id, "jobs.result", { failed });
+          this.#deps.onActivity();
+        }
+        return this.#afterRemoval();
+      case "jobs.clearFinished": {
+        for (const row of this.#deps.history.jobs()) {
+          if (row.status !== "completed") continue;
+          await this.#engine.remove(row.id);
+          this.#deps.history.remove(row.id);
+        }
+        this.#reply(state, message.id, "jobs.result", { failed: [] });
+        return this.#afterRemoval();
+      }
+      case "jobs.trash":
+        if (state.role !== "terminal") return this.#forbidden(state, message.id);
+        await this.#trash(
+          state,
+          message.id,
+          message.payload.jobIds,
+          message.payload.permanent === true,
+        );
+        return this.#afterRemoval();
+      case "notice.dismiss":
+        this.#deps.history.setNotice(undefined);
+        this.#reply(state, message.id, "notice", {});
+        return this.#broadcast("notice", {}, state);
+      case "settings.reload":
+        if (state.role !== "terminal") return this.#forbidden(state, message.id);
+        await this.applySettings();
+        return this.#sendSettings(state, message.id);
       default: {
         // Compile-time: adding a message type without a case fails here. Runtime: say so.
         const unhandled: never = message;
@@ -233,8 +375,8 @@ export class CoreService {
    * under the host message cap. Jobs carry their candidate's variant list, which can be large.
    */
   #snapshot(requestId: string): DownloadJob[] {
-    const newest = this.#engine
-      .list()
+    const newest = this.#deps.history
+      .jobs()
       .sort((a, b) => a.createdAt - b.createdAt)
       .slice(-SNAPSHOT_LIMIT)
       .map(toProtocolJob);
@@ -317,7 +459,7 @@ export class CoreService {
       // `||`, not `??`: an empty string means "no folder chosen", as in #start.
       target = { path: settings.folder || defaultOutputDir(), select: false };
     } else {
-      const job = this.#engine.get(jobId);
+      const job = this.#deps.history.get(jobId);
       if (job?.status !== "completed" || !job.outputPath) {
         this.#error(state, message.id, "unknown-job", "No such download, or it has no file yet.");
         return;
@@ -355,12 +497,14 @@ export class CoreService {
       probe("ffmpeg"),
       this.#deps.settings.load(),
     ]);
+    const notice = this.#deps.history.notice();
     this.#reply(state, id, "hello.ack", {
       hostVersion: this.#deps.version,
       ytDlp,
       ffmpeg,
       setup: this.#deps.provisioner.status().state,
       keepRunning: settings.keepRunning,
+      ...(notice && { notice }),
     });
   }
 
@@ -368,7 +512,19 @@ export class CoreService {
     state: ClientState,
     message: Extract<ExtensionToHostMessage, { type: "download.start" }>,
   ): Promise<void> {
-    const { context, outputDir: requestedDir, ...request } = message.payload;
+    const {
+      context,
+      outputDir: requestedDir,
+      origin: askedOrigin,
+      formatSelector: terminalSelector,
+      plan,
+      ...request
+    } = message.payload;
+    const terminal = state.role === "terminal";
+    if (!terminal && (terminalSelector !== undefined || plan !== undefined)) {
+      this.#forbidden(state, message.id);
+      return;
+    }
     if (!getProfile(request.profileId)) {
       this.#error(state, message.id, "unknown-profile", `Unknown profile: ${request.profileId}`);
       return;
@@ -418,32 +574,64 @@ export class CoreService {
       return;
     }
     const settings = await this.#deps.settings.load();
-    // `||`, not `??`: an empty string means "no folder chosen" in both modes.
-    let base = settings.folder || undefined;
-    if (requestedDir) {
-      // The request may only pick a folder inside the one the user set (or the default).
-      const problem = outputDirError(
-        process.platform,
-        requestedDir,
-        settings.folder || defaultOutputDir(),
-      );
-      if (problem) {
-        this.#error(state, message.id, "invalid-output-dir", problem);
+    let outputDir: string | undefined;
+    if (terminal) {
+      if (requestedDir !== undefined && !isAbsolute(requestedDir)) {
+        this.#error(state, message.id, "invalid-output-dir", "The folder must be a full path.");
         return;
       }
-      base = resolve(requestedDir);
+      // A terminal already chose its type subfolder. `resolve` also settles
+      // a drive-relative backslash path on Windows and any "..".
+      outputDir = requestedDir === undefined ? undefined : resolve(requestedDir);
+    } else {
+      // `||`, not `??`: an empty string means "no folder chosen" in both modes.
+      let base = settings.folder || undefined;
+      if (requestedDir) {
+        // The request may only pick a folder inside the one the user set (or the default).
+        const problem = outputDirError(
+          process.platform,
+          requestedDir,
+          settings.folder || defaultOutputDir(),
+        );
+        if (problem) {
+          this.#error(state, message.id, "invalid-output-dir", problem);
+          return;
+        }
+        base = resolve(requestedDir);
+      }
+      outputDir = settings.sortByType
+        ? withKindFolder(
+            base || defaultOutputDir(),
+            request.subtitle ? "subtitles" : kindOfProfile(profile),
+            true,
+          )
+        : base;
     }
-    const outputDir = settings.sortByType
-      ? withKindFolder(
-          base || defaultOutputDir(),
-          request.subtitle ? "subtitles" : kindOfProfile(profile),
-          true,
-        )
-      : base;
+    const selector = terminalSelector ?? formatSelector;
     const job = this.#engine.submit(
       { ...request, profileId, ...(outputDir && { outputDir }) },
-      { ...(formatSelector && { formatSelector }), ...(context && { context }) },
+      {
+        ...(selector && { formatSelector: selector }),
+        ...(plan && { plan }),
+        ...(context && { context }),
+      },
     );
+    // The engine reports the job from inside `submit`, before the origin is known: patch the row
+    // `#onJob` already wrote.
+    const origin: JobOrigin = terminal ? (askedOrigin ?? "cli") : "extension";
+    this.#origins.set(job.id, origin);
+    const row = this.#deps.history.get(job.id);
+    if (row) {
+      this.#deps.history.upsert(
+        {
+          ...row,
+          origin,
+          ...(selector && { formatSelector: selector }),
+          ...(plan && { plan }),
+        },
+        { save: true },
+      );
+    }
     state.jobs.add(job.id);
     // The engine reports the job from inside `submit`, before this client owns it, and may have
     // started it already. Answer with where the job is now; later changes arrive via #onJob.
@@ -482,9 +670,36 @@ export class CoreService {
     await this.#sendSettings(state, message.id);
   }
 
+  #record(job: EngineJob): void {
+    const history = this.#deps.history;
+    const before = history.get(job.id);
+    const origin = this.#origins.get(job.id) ?? before?.origin;
+    const startedNow = job.status === "downloading" && before?.status !== "downloading";
+    const lastTryAt = startedNow ? this.#deps.now() : before?.lastTryAt;
+    const sizeBytes = job.progress.totalBytes ?? before?.sizeBytes;
+    const row: HistoryJob = {
+      ...job,
+      ...(origin && { origin }),
+      ...(lastTryAt !== undefined && { lastTryAt }),
+      ...(sizeBytes !== undefined && { sizeBytes }),
+      files: job.outputPath ? [job.outputPath] : (before?.files ?? []),
+      ...((job.workDir ?? before?.workDir) && { workDir: job.workDir ?? before?.workDir }),
+      ...(before?.formatSelector && { formatSelector: before.formatSelector }),
+      ...(before?.plan && { plan: before.plan }),
+    };
+    if (job.status === "completed" && sizeBytes && lastTryAt !== undefined) {
+      const seconds = (this.#deps.now() - lastTryAt) / 1000;
+      if (seconds > 0) row.avgSpeed = sizeBytes / seconds;
+    }
+    history.upsert(row, { save: before?.status !== job.status });
+  }
+
   #onJob(job: EngineJob): void {
+    this.#record(job);
+    this.#settleNotice();
     if (TERMINAL.has(job.status)) {
       this.#lastProgress.delete(job.id);
+      this.#origins.delete(job.id);
     } else {
       const last = this.#lastProgress.get(job.id);
       const now = this.#deps.now();
@@ -509,6 +724,7 @@ export class CoreService {
       this.#reply(state, id, "download.failed", {
         jobId: job.id,
         error: job.error ?? "Download failed.",
+        ...(job.errorKind !== undefined && { errorKind: job.errorKind }),
       });
     } else if (job.status === "cancelled") {
       this.#reply(state, id, "download.failed", {
@@ -516,13 +732,67 @@ export class CoreService {
         error: "Cancelled.",
         cancelled: true,
       });
+    } else if (job.status === "paused") {
+      this.#reply(state, id, "download.paused", { jobId: job.id, progress: job.progress });
     } else {
       this.#reply(state, id, "download.progress", {
         jobId: job.id,
         status: job.status,
         progress: job.progress,
+        ...(job.steps && { steps: job.steps }),
+        ...(job.overallPercent !== undefined && { overallPercent: job.overallPercent }),
       });
     }
+  }
+
+  /**
+   * Run `act` once per distinct id, and answer with one `jobs.result`. Ids history does not know
+   * fail with UNKNOWN; `act` returns a reason when it could not act on a known id.
+   */
+  async #batch(
+    state: ClientState,
+    id: string,
+    jobIds: string[],
+    act: (jobId: string) => string | undefined | Promise<string | undefined>,
+  ): Promise<void> {
+    const failed: { jobId: string; message: string }[] = [];
+    for (const jobId of new Set(jobIds)) {
+      const problem = this.#deps.history.get(jobId) ? await act(jobId) : UNKNOWN;
+      if (problem) failed.push({ jobId, message: problem });
+    }
+    this.#reply(state, id, "jobs.result", { failed });
+    this.#deps.onActivity();
+  }
+
+  /** Send a frame to every client that has spoken, except `skip`. */
+  #broadcast<T extends HostToExtensionMessage["type"]>(
+    type: T,
+    payload: Extract<HostToExtensionMessage, { type: T }>["payload"],
+    skip?: ClientState,
+  ): void {
+    for (const state of this.#clients) {
+      if (state === skip || !state.active) continue;
+      this.#reply(state, this.#deps.newId(), type, payload as never);
+    }
+  }
+
+  /** Rows went away: subscribers get the new list, and the notice may no longer apply. */
+  #afterRemoval(): void {
+    for (const state of this.#clients) {
+      if (!state.active || !state.subscribedAll) continue;
+      const id = this.#deps.newId();
+      this.#reply(state, id, "jobs.snapshot", { jobs: this.#snapshot(id) });
+    }
+    this.#settleNotice();
+  }
+
+  /** Clear the notice, for everyone, once none of the jobs it names is still paused. */
+  #settleNotice(): void {
+    const notice = this.#deps.history.notice();
+    if (!notice) return;
+    if (notice.jobIds.some((id) => this.#deps.history.get(id)?.status === "paused")) return;
+    this.#deps.history.setNotice(undefined);
+    this.#broadcast("notice", {});
   }
 
   #broadcastSetup(status: SetupStatus): void {

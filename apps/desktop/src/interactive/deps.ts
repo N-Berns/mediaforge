@@ -37,6 +37,8 @@ export interface AppDeps {
   defaultOutputDir: string;
   /** Start the background core at login, or stop doing so. Never rejects. */
   applyAutostart: (enabled: boolean) => Promise<void>;
+  /** Ask a running core to re-read the settings. Never starts a core, never rejects. */
+  notifyCore: () => Promise<void>;
   /** Where bundled tools are looked up, for "how to fix" messages. */
   binDir: string;
   version: string;

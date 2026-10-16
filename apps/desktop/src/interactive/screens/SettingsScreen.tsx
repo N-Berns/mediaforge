@@ -51,6 +51,7 @@ export function SettingsScreen({ onBack }: { onBack: () => void }) {
   const save = async (next: Settings, syncAutostart = false) => {
     try {
       await deps.download.settings.save(next);
+      if (next.concurrency !== settings.concurrency) void deps.notifyCore();
       // Never rejects in practice; a failure here must not read as a failed save.
       if (syncAutostart) await deps.applyAutostart(next.keepRunning).catch(() => {});
       setSettings(next);
