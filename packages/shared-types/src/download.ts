@@ -1,5 +1,6 @@
 import type { MediaCandidate } from "./media.ts";
 import type { Step } from "./steps.ts";
+import type { LimitPreset } from "./units.ts";
 
 /** A subtitle track to save on its own, instead of the media itself. */
 export interface SubtitleRequest {
@@ -74,4 +75,6 @@ export interface DownloadJob {
   overallPercent?: number;
   /** The CLI exit code matching a failure. */
   errorKind?: number;
+  /** This job's own speed cap, outside the global split. */
+  limitOverride?: LimitPreset;
 }

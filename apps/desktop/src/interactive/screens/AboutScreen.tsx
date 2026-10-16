@@ -1,7 +1,7 @@
+import { formatBytes } from "@mediaforge/shared-types";
 import { Box, Text } from "ink";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { isRequired, type ToolReport } from "../../doctor.ts";
-import { formatBytes } from "../../progress-view.ts";
 import type { UpdateInfo, UpdateProgress } from "../../self-update.ts";
 import { SUPPORTED_SITES_URL } from "../../sites.ts";
 import { aboutRows, developerRows, NOTICES } from "../about.ts";

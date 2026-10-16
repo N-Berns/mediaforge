@@ -1,4 +1,5 @@
 import { DEFAULT_PROFILE_ID, getProfile } from "@mediaforge/media-profiles";
+import { formatLimit } from "@mediaforge/shared-types";
 import { Box, Text } from "ink";
 import { useEffect, useState } from "react";
 import { DEFAULT_SETTINGS, MAX_CONCURRENCY, type Settings } from "../../settings.ts";
@@ -7,6 +8,7 @@ import { Menu } from "../components/Menu.tsx";
 import { useDeps } from "../deps.ts";
 import { effectiveFolder } from "../flow.ts";
 import { COLORS, ICONS } from "../theme.ts";
+import { BandwidthScreen, PRESET_NAMES } from "./BandwidthScreen.tsx";
 import { PathPickerScreen } from "./PathPickerScreen.tsx";
 import { profileItems } from "./QualityScreen.tsx";
 
@@ -17,17 +19,26 @@ type Choice =
   | "askQuality"
   | "sortByType"
   | "concurrency"
+  | "speedUnit"
+  | "bandwidth"
   | "keepRunning"
   | "extensionUi"
   | "reset"
   | "back";
-type Mode = "menu" | "folder" | "quality" | "concurrency" | "reset";
+type Mode = "menu" | "folder" | "quality" | "concurrency" | "bandwidth" | "reset";
 type Note = { tone: "ok" | "error"; text: string };
 
 const yesNo = (ask: boolean) =>
   `${ask ? ICONS.on : ICONS.off} ${ask ? "Yes" : "No, use the default"}`;
 
-export function SettingsScreen({ onBack }: { onBack: () => void }) {
+export function SettingsScreen({
+  onBack,
+  onSaved,
+}: {
+  onBack: () => void;
+  /** Told about every saved change, so the app can follow the speed unit. */
+  onSaved?: (settings: Settings) => void;
+}) {
   const deps = useDeps();
   const [settings, setSettings] = useState<Settings>();
   const [mode, setMode] = useState<Mode>("menu");
@@ -48,19 +59,25 @@ export function SettingsScreen({ onBack }: { onBack: () => void }) {
    * Save `next`. With `syncAutostart`, a successful save also sets the login entry for
    * `next.keepRunning`, so a core started at login matches the setting.
    */
-  const save = async (next: Settings, syncAutostart = false) => {
+  const save = async (next: Settings, syncAutostart = false, stay = false) => {
     try {
       await deps.download.settings.save(next);
-      if (next.concurrency !== settings.concurrency) void deps.notifyCore();
+      // The core applies these live, so it re-reads the file at once.
+      const live =
+        next.concurrency !== settings.concurrency ||
+        next.limitPreset !== settings.limitPreset ||
+        JSON.stringify(next.limits) !== JSON.stringify(settings.limits);
+      if (live) void deps.notifyCore();
       // Never rejects in practice; a failure here must not read as a failed save.
       if (syncAutostart) await deps.applyAutostart(next.keepRunning).catch(() => {});
       setSettings(next);
+      onSaved?.(next);
       setNote({ tone: "ok", text: "Saved" });
     } catch (error) {
       const text = error instanceof Error ? error.message : String(error);
       setNote({ tone: "error", text: `Could not save settings: ${text}` });
     }
-    setMode("menu");
+    if (!stay) setMode("menu");
   };
 
   const folder = effectiveFolder(deps.download.env, settings, deps.defaultOutputDir);
@@ -73,6 +90,20 @@ export function SettingsScreen({ onBack }: { onBack: () => void }) {
         startDir={folder}
         onPick={(value) => void save({ ...settings, folder: value })}
         onCancel={() => setMode("menu")}
+      />
+    );
+  }
+
+  if (mode === "bandwidth") {
+    return (
+      <BandwidthScreen
+        settings={settings}
+        note={note}
+        onSave={(next) => void save(next, false, true)}
+        onBack={() => {
+          setNote(undefined);
+          setMode("menu");
+        }}
       />
     );
   }
@@ -158,7 +189,18 @@ export function SettingsScreen({ onBack }: { onBack: () => void }) {
         <Menu<boolean>
           initial={false}
           onBack={() => setMode("menu")}
-          onSelect={(yes) => (yes ? void save({ ...DEFAULT_SETTINGS }, true) : setMode("menu"))}
+          onSelect={(yes) =>
+            yes
+              ? void save(
+                  {
+                    ...DEFAULT_SETTINGS,
+                    limits: { ...DEFAULT_SETTINGS.limits },
+                    managerSort: { ...DEFAULT_SETTINGS.managerSort },
+                  },
+                  true,
+                )
+              : setMode("menu")
+          }
           items={[
             { value: false, icon: ICONS.back, label: "No, keep my settings" },
             { value: true, icon: ICONS.retry, label: "Yes, reset" },
@@ -195,6 +237,8 @@ export function SettingsScreen({ onBack }: { onBack: () => void }) {
             void save({ ...settings, sortByType: !settings.sortByType });
           } else if (choice === "keepRunning") {
             void save({ ...settings, keepRunning: !settings.keepRunning }, true);
+          } else if (choice === "speedUnit") {
+            void save({ ...settings, speedUnit: settings.speedUnit === "bits" ? "bytes" : "bits" });
           } else if (choice === "extensionUi") {
             void save({
               ...settings,
@@ -228,6 +272,19 @@ export function SettingsScreen({ onBack }: { onBack: () => void }) {
             icon: ICONS.download,
             label: "Downloads at once",
             hint: `${settings.concurrency} (when you give several links)`,
+          },
+          {
+            value: "speedUnit",
+            icon: ICONS.download,
+            label: "Speed unit",
+            hint:
+              settings.speedUnit === "bits" ? "Mbps (bits per second)" : "MB/s (bytes per second)",
+          },
+          {
+            value: "bandwidth",
+            icon: ICONS.download,
+            label: "Bandwidth limit",
+            hint: `${PRESET_NAMES[settings.limitPreset]} (${formatLimit(settings.limits[settings.limitPreset], settings.speedUnit)})`,
           },
           {
             value: "keepRunning",

@@ -264,10 +264,18 @@ describe("hints", () => {
   });
 
   it("summarises progress with whatever is known", () => {
-    expect(describeProgress({ bytesDownloaded: 1024 })).toBe("1.0 KB");
+    expect(describeProgress({ bytesDownloaded: 1024 })).toBe("1.0 kB");
     expect(
-      describeProgress({ bytesDownloaded: 1024, totalBytes: 2048, speed: 512, etaSec: 2 }),
-    ).toBe("1.0 KB of 2.0 KB · 512 B/s · ETA 2s");
+      describeProgress({
+        bytesDownloaded: 1024,
+        totalBytes: 2048,
+        speed: 512,
+        etaSec: 2,
+      }),
+    ).toBe("1.0 kB of 2.0 kB · 512 B/s · ETA 2s");
+    expect(describeProgress({ bytesDownloaded: 1024, speed: 512 }, "bits")).toBe(
+      "1.0 kB · 4.1 kbps",
+    );
   });
 
   it("labels the download stage from the running step", () => {
@@ -292,7 +300,7 @@ describe("hints", () => {
     ];
     expect(
       activeDetail({ status: "downloading", steps, progress: { bytesDownloaded: 0 } } as EngineJob),
-    ).toBe("1.0 KB of 2.0 KB");
+    ).toBe("1.0 kB of 2.0 kB");
     expect(
       activeDetail({
         status: "processing",
@@ -443,7 +451,7 @@ describe("formatChoices", () => {
       },
       "video",
     );
-    expect(rows[0]?.hint).toMatch(/47\.7 MB$/);
+    expect(rows[0]?.hint).toMatch(/50\.0 MB$/);
     expect(rows[1]?.hint).toMatch(/ -$/);
     expect(rows[2]?.hint).toMatch(/~\d/);
   });

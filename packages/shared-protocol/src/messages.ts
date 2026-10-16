@@ -5,6 +5,7 @@ import {
   DownloadRequestSchema,
   ExtensionSettingsSchema,
   JobOriginSchema,
+  LimitPresetSchema,
   MAX_STEPS,
   NoticeSchema,
   PlannedStepSchema,
@@ -71,6 +72,11 @@ export const FolderOpenMessage = message("folder.open", z.object({ jobId: z.stri
 export const DownloadPauseMessage = message("download.pause", jobIds);
 /** Queue paused or failed jobs again under the same ids. */
 export const DownloadResumeMessage = message("download.resume", jobIds);
+/** Set (a preset) or clear (null) the speed cap of each job, outside the global split. */
+export const DownloadSetLimitMessage = message(
+  "download.setLimit",
+  jobIds.extend({ preset: LimitPresetSchema.nullable() }),
+);
 /** Cancel active jobs, then drop the rows. Finished files stay on disk. */
 export const JobsRemoveMessage = message("jobs.remove", jobIds);
 /** Terminal connections only: cancel, move each job's recorded files to the trash, drop the rows. */
@@ -85,6 +91,8 @@ export const JobsTrashMessage = message(
 export const JobsClearFinishedMessage = message("jobs.clearFinished", z.object({}));
 /** Clear the session notice for every client. */
 export const NoticeDismissMessage = message("notice.dismiss", z.object({}));
+/** Bring the downloads manager forward: flash an open one (later: open a new window). */
+export const AppOpenMessage = message("app.open", z.object({}));
 
 // Host → extension
 export const HelloAckMessage = message(
@@ -165,6 +173,14 @@ export const DownloadPausedMessage = message(
 /** The session notice changed: dismissed, or none of its paused jobs remain. */
 export const NoticeMessage = message("notice", z.object({ notice: NoticeSchema.optional() }));
 
+/** What app.open did: flashed a manager, opened a new one, or found no way to. */
+export const AppOpenedMessage = message(
+  "app.opened",
+  z.object({ mode: z.enum(["attention", "launched", "no-terminal"]) }),
+);
+/** Pushed to managers: the user asked for MediaForge from the browser. */
+export const AppAttentionMessage = message("app.attention", z.object({}));
+
 export const ExtensionToHostMessage = z.discriminatedUnion("type", [
   HelloMessage,
   DownloadStartMessage,
@@ -180,10 +196,12 @@ export const ExtensionToHostMessage = z.discriminatedUnion("type", [
   FolderOpenMessage,
   DownloadPauseMessage,
   DownloadResumeMessage,
+  DownloadSetLimitMessage,
   JobsRemoveMessage,
   JobsTrashMessage,
   JobsClearFinishedMessage,
   NoticeDismissMessage,
+  AppOpenMessage,
 ]);
 export const HostToExtensionMessage = z.discriminatedUnion("type", [
   HelloAckMessage,
@@ -199,6 +217,8 @@ export const HostToExtensionMessage = z.discriminatedUnion("type", [
   JobsResultMessage,
   DownloadPausedMessage,
   NoticeMessage,
+  AppOpenedMessage,
+  AppAttentionMessage,
 ]);
 
 export type ExtensionToHostMessage = z.infer<typeof ExtensionToHostMessage>;

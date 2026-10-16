@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { PROTOCOL_VERSION } from "@mediaforge/shared-protocol";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { EngineJob } from "../engine/index.ts";
 import { ExitCode } from "../exit-codes.ts";
 import { memorySettingsStore, type SettingsStore } from "../settings.ts";
 import { makeRuntime } from "../test-runtime.ts";
@@ -442,6 +443,37 @@ describe("runCore", () => {
       client.conn.send(hello());
       expect(await client.next()).toMatchObject({ type: "hello.ack" });
     });
+  });
+
+  it("starts the bandwidth controller with the saved preset", async () => {
+    const setRate = vi.fn();
+    const job = {
+      id: "j",
+      status: "downloading",
+      request: { candidate: {}, profileId: "best" },
+      progress: { bytesDownloaded: 0 },
+      createdAt: 1,
+      updatedAt: 1,
+    } as unknown as EngineJob;
+    let report: (job: EngineJob) => void = () => {};
+    const createEngine = vi.fn((onUpdate: (job: EngineJob) => void) => {
+      report = onUpdate;
+      return {
+        list: () => [job],
+        submit: () => ({}),
+        cancel: () => false,
+        get: () => undefined,
+        restore: () => {},
+        setRate,
+        applyRate: () => false,
+      } as never;
+    });
+    await launch({
+      settings: memorySettingsStore({ limitPreset: "low" }),
+      createEngine,
+    });
+    report(job);
+    expect(setRate).toHaveBeenCalledWith("j", 1_000_000);
   });
 
   it("builds the engine with the saved number of downloads at once", async () => {

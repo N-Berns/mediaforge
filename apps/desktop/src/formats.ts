@@ -1,4 +1,5 @@
 import type { Tool } from "@mediaforge/binary-resolver";
+import { formatBytes } from "@mediaforge/shared-types";
 import { type ResolveTool, requireTool, resolveTool } from "./binaries.ts";
 import type { Io } from "./commands.ts";
 import { FORMAT_SORT } from "./engine/args.ts";
@@ -7,7 +8,6 @@ import { classifyFailure } from "./engine/progress.ts";
 import { CliError, ExitCode } from "./exit-codes.ts";
 import { detectJsRuntimeArgs } from "./js-runtime.ts";
 import { parseCommandArgs, parseHttpUrl } from "./parse.ts";
-import { formatBytes } from "./progress-view.ts";
 import { withUpdateHint } from "./stale-extractor.ts";
 import { defaultEnsureTools } from "./tool-runtime.ts";
 

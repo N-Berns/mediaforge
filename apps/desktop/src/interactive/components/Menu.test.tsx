@@ -14,6 +14,25 @@ const items: MenuItem<string>[] = [
 ];
 
 describe("Menu number labels", () => {
+  it("reports the highlighted value as it moves", async () => {
+    const seen: string[] = [];
+    const app = render(
+      <Menu<string>
+        items={[
+          { value: "a", label: "A" },
+          { value: "b", label: "B" },
+        ]}
+        onSelect={() => {}}
+        onHighlight={(value) => seen.push(value)}
+      />,
+    );
+    await tick();
+    app.stdin.write("\u001B[B");
+    await tick();
+    expect(seen).toEqual(["a", "b"]);
+    app.unmount();
+  });
+
   it("numbers each selectable row and leaves disabled rows blank", () => {
     const app = render(<Menu items={items} onSelect={() => {}} />);
     const frame = app.lastFrame() ?? "";

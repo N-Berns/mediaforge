@@ -14,6 +14,7 @@ import { useTerminalSize } from "../../components/use-terminal-size.ts";
 import { useDeps } from "../../deps.ts";
 import type { Plan } from "../../flow.ts";
 import { NoticeContext } from "../../notice.tsx";
+import { startPayload } from "../../submit.ts";
 import { COLORS, ICONS, STEP_BAR, STEP_COLORS } from "../../theme.ts";
 import { stageLabel } from "../DownloadScreen.tsx";
 
@@ -110,20 +111,9 @@ export function BatchDownloadScreen({ plans, onDone }: BatchDownloadScreenProps)
           continue;
         }
         try {
-          const watched = await startJob(
-            client,
-            {
-              candidate: candidateFor(plan.url, profile.kind),
-              profileId: profile.id,
-              outputDir: plan.outputDir,
-              origin: "menu",
-              ...(plan.formatSelector && { formatSelector: plan.formatSelector }),
-              ...(plan.steps && { plan: plan.steps }),
-            },
-            (update) => {
-              if (live) setJobs((all) => all.map((job, i) => (i === at ? update : job)));
-            },
-          );
+          const watched = await startJob(client, startPayload(plan, "menu"), (update) => {
+            if (live) setJobs((all) => all.map((job, i) => (i === at ? update : job)));
+          });
           watchers.push(watched);
           if (cancelled) void watched.cancel();
           settled.push(watched.settled.catch((error) => lostJob(plan, error)));

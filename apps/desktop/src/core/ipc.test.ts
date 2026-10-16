@@ -215,6 +215,36 @@ describe("token file", () => {
 });
 
 describe("listenCore and connectCore", () => {
+  it("terminal connections carry frames over 1 MiB", async () => {
+    const path = testPath();
+    const token = newToken();
+    const big = "x".repeat(2 * 1024 * 1024);
+    const sendErrors: unknown[] = [];
+    servers.push(
+      await listenCore({
+        path,
+        token,
+        onConnection: (conn) =>
+          conn.onMessage(() => {
+            try {
+              conn.send({ big });
+            } catch (error) {
+              sendErrors.push(error);
+            }
+          }),
+      }),
+    );
+    const terminal = await connect({ path, token, role: "terminal" });
+    const reply = nextMessage(terminal);
+    terminal.send({ go: 1 });
+    expect(((await reply) as { big: string }).big.length).toBe(big.length);
+
+    const relay = await connect({ path, token, role: "relay" });
+    relay.send({ go: 1 });
+    await sleep(100);
+    expect(sendErrors).toHaveLength(1);
+  });
+
   it("exchanges framed messages after the handshake", async () => {
     const path = testPath();
     const token = newToken();

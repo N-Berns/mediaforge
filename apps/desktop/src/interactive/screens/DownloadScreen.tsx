@@ -1,4 +1,5 @@
 import { getProfile } from "@mediaforge/media-profiles";
+import type { SpeedUnit } from "@mediaforge/shared-types";
 import { Box, Text, useInput } from "ink";
 import { useContext, useEffect, useRef, useState } from "react";
 import { startJob } from "../../core/job-watch.ts";
@@ -13,6 +14,8 @@ import { useDeps } from "../deps.ts";
 import type { Plan } from "../flow.ts";
 import { describeProgress } from "../hints.ts";
 import { NoticeContext } from "../notice.tsx";
+import { useSpeedUnit } from "../speed-unit.ts";
+import { startPayload } from "../submit.ts";
 import { COLORS, ICONS, STEP_BAR, STEP_COLORS } from "../theme.ts";
 
 export interface DownloadScreenProps {
@@ -45,11 +48,11 @@ export function stageLabel(job: EngineJob | undefined): string {
 }
 
 /** The line under the overall bar: bytes and speed while downloading, the step name otherwise. */
-export function activeDetail(job: EngineJob | undefined): string {
+export function activeDetail(job: EngineJob | undefined, unit: SpeedUnit = "bytes"): string {
   const active = job?.steps?.find((s) => s.state === "active");
-  if (active?.progress) return describeProgress(active.progress);
+  if (active?.progress) return describeProgress(active.progress, unit);
   if (active) return `${STEP_ACTIONS[active.kind]}…`;
-  return job && job.status !== "queued" ? describeProgress(job.progress) : " ";
+  return job && job.status !== "queued" ? describeProgress(job.progress, unit) : " ";
 }
 
 /** Stable keys: the kind, plus a count when a kind repeats ("video", "video-2"). */
@@ -94,6 +97,7 @@ function StepRow({ step, width }: { step: Step; width: number }) {
 export function DownloadScreen({ plan, onDone }: DownloadScreenProps) {
   const deps = useDeps();
   const { columns } = useTerminalSize();
+  const speedUnit = useSpeedUnit();
   const [job, setJob] = useState<EngineJob>();
   const control = useRef<{ cancel: () => void }>({ cancel: () => {} });
   const { clear } = useContext(NoticeContext);
@@ -139,20 +143,9 @@ export function DownloadScreen({ plan, onDone }: DownloadScreenProps) {
           close();
           return finish("cancelled");
         }
-        const watched = await startJob(
-          client,
-          {
-            candidate: candidateFor(plan.url, profile.kind),
-            profileId: profile.id,
-            outputDir: plan.outputDir,
-            origin: "menu",
-            ...(plan.formatSelector && { formatSelector: plan.formatSelector }),
-            ...(plan.steps && { plan: plan.steps }),
-          },
-          (update) => {
-            if (live) setJob(update);
-          },
-        );
+        const watched = await startJob(client, startPayload(plan, "menu"), (update) => {
+          if (live) setJob(update);
+        });
         control.current = { cancel: () => void watched.cancel() };
         if (cancelled) void watched.cancel();
         watched.settled.then((final) => live && onDone(final), fail);
@@ -201,7 +194,7 @@ export function DownloadScreen({ plan, onDone }: DownloadScreenProps) {
         </Box>
         <Text color={COLORS.muted}>
           {" ".repeat(NAME_WIDTH)}
-          {activeDetail(job)}
+          {activeDetail(job, speedUnit)}
         </Text>
       </Box>
       {showSteps ? (

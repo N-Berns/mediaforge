@@ -335,7 +335,11 @@ export function listenCore({ path, token, onConnection }: ListenOptions): Promis
             socket.destroy();
             return;
           }
-          const conn = wrapSocket(socket);
+          // Terminal clients may be sent the whole history, far over the browser's 1 MiB cap.
+          const conn = wrapSocket(
+            socket,
+            role === "terminal" ? { maxSendBytes: MAX_EXTENSION_MESSAGE_BYTES } : {},
+          );
           conn.send({ ok: true });
           onConnection(conn, role);
         },
@@ -428,7 +432,8 @@ export function connectCore({
         settled = true;
         const conn = wrapSocket(socket, {
           maxSendBytes: MAX_EXTENSION_MESSAGE_BYTES,
-          maxReceiveBytes: MAX_HOST_MESSAGE_BYTES,
+          maxReceiveBytes:
+            role === "terminal" ? MAX_EXTENSION_MESSAGE_BYTES : MAX_HOST_MESSAGE_BYTES,
           initial: rest,
         });
         socket.off("error", fail);

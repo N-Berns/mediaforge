@@ -10,12 +10,7 @@ import { DownloadEngine, type EngineFs } from "./engine/index.ts";
 import type { ProcessRunner } from "./engine/process.ts";
 import { CliError, ExitCode } from "./exit-codes.ts";
 import { fetchMediaInfo, formatFormatsTable, runFormats } from "./formats.ts";
-import {
-  createProgressView,
-  formatBytes,
-  formatDuration,
-  formatProgressLine,
-} from "./progress-view.ts";
+import { createProgressView, formatDuration, formatProgressLine } from "./progress-view.ts";
 import { memorySettingsStore, type Settings } from "./settings.ts";
 
 const found = async (tool: Tool) => ({ tool, path: `/bin/${tool}`, source: "path" as const });
@@ -78,6 +73,24 @@ const succeed: ProcessRunner = async (_c, args, h) => {
 };
 
 describe("runDownload", () => {
+  it("shows the progress line in the saved speed unit", async () => {
+    const t = setup(
+      async (_c, args, h) => {
+        h.onStdoutLine("MFPROGRESS 50 100 NA 6100000 5");
+        // Past the core's 250 ms progress throttle, so this update reaches the CLI.
+        await new Promise((resolve) => setTimeout(resolve, 300));
+        h.onStdoutLine("MFPROGRESS 60 100 NA 6100000 4");
+        h.onStdoutLine(`MFFILE ${args[args.indexOf("--paths") + 1]}/Clip.mp4`);
+        return { exitCode: 0 };
+      },
+      {},
+      true,
+      { speedUnit: "bits" },
+    );
+    await runDownload(["https://example.com/v"], t.io, t.deps);
+    expect(t.err()).toContain("48.8 Mbps");
+  });
+
   it("prints the output path on stdout and progress lines on stderr", async () => {
     const t = setup(succeed);
     const code = await runDownload(["https://example.com/v"], t.io, t.deps);
@@ -373,25 +386,35 @@ describe("progress view", () => {
   const job = (patch: Partial<EngineJob>): EngineJob =>
     ({ status: "downloading", progress: { bytesDownloaded: 0 }, ...patch }) as EngineJob;
 
-  it("formats bytes and durations", () => {
-    expect(formatBytes(512)).toBe("512 B");
-    expect(formatBytes(1536)).toBe("1.5 KB");
-    expect(formatBytes(5 * 1024 * 1024)).toBe("5.0 MB");
+  it("formats durations", () => {
     expect(formatDuration(12)).toBe("12s");
     expect(formatDuration(65)).toBe("1m 05s");
     expect(formatDuration(3720)).toBe("1h 02m");
   });
 
-  it("describes downloading with whatever is known", () => {
+  it("describes downloading with whatever is known, in decimal units", () => {
     expect(
       formatProgressLine(
-        job({ progress: { bytesDownloaded: 1, percent: 42.5, speed: 2048, etaSec: 12 } }),
+        job({
+          progress: {
+            bytesDownloaded: 1,
+            percent: 42.5,
+            speed: 2048,
+            etaSec: 12,
+          },
+        }),
       ),
-    ).toBe("downloading  42.5%  2.0 KB/s  ETA 12s");
+    ).toBe("downloading  42.5%  2.0 kB/s  ETA 12s");
     expect(formatProgressLine(job({ progress: { bytesDownloaded: 2048 } }))).toBe(
-      "downloading  2.0 KB",
+      "downloading  2.0 kB",
     );
     expect(formatProgressLine(job({ status: "processing" }))).toBe("processing");
+  });
+
+  it("shows the speed in bits when asked", () => {
+    expect(
+      formatProgressLine(job({ progress: { bytesDownloaded: 1, speed: 6_100_000 } }), "bits"),
+    ).toBe("downloading  1 B  48.8 Mbps");
   });
 
   it("on a TTY rewrites one line and clears it at the end", () => {
@@ -438,7 +461,7 @@ describe("formats", () => {
     expect(text).toContain("My Video");
     expect(text).not.toContain("sb0");
     expect(text).toMatch(/140\s+m4a\s+audio only\s+-\s+-\s+mp4a\s+1\.0 MB/);
-    expect(text).toMatch(/137\s+mp4\s+1920x1080\s+30\s+avc1\s+-\s+~5\.0 MB/);
+    expect(text).toMatch(/137\s+mp4\s+1920x1080\s+30\s+avc1\s+-\s+~5\.2 MB/);
   });
 
   it("runs yt-dlp -J and prints the table", async () => {

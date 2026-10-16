@@ -140,3 +140,30 @@ Phase 2 has no buttons yet: send the requests with a small script through `CoreC
 - [ ] With "Don't move files to the Recycle Bin" set for a drive on Windows, trash a file there: refused; the file stays.
 - [ ] Trash a file reached through a junction that points to another drive or a network share on Windows: checked against the real drive (refused for a share); never deleted for good.
 - [ ] Resume a paused download that needed browser cookies after restarting the core: it runs without them (it may fail on login-only sites; start it again from the browser).
+
+## Speed unit and bandwidth (downloads manager phase 3a)
+
+- [ ] Sizes in the menu, the download screen, About and `mediaforge formats` read kB/MB/GB (×1000); a 5 MiB file reads 5.2 MB.
+- [ ] Set Speed unit to Mbps: the menu download screen and the `mediaforge download` progress line show Mbps.
+- [ ] Set the Bandwidth limit to Low (1.0 MB/s) during one large real download: within about 3 s the speed drops to about 1 MB/s, the screen never shows Paused, and the byte count keeps growing from where it was.
+- [ ] Start a second download with Low still active: both settle near 0.5 MB/s.
+- [ ] Set the limit back to High: both speed up within about 3 s.
+- [ ] Edit Custom to `40 Mbps` with the unit on MB/s: it saves as 5.0 MB/s. Edit it to empty: it shows "no limit".
+- [ ] Change the preset while a download is merging (Processing): the merge is not interrupted.
+- [ ] Put `"limits": { "med": -5 }` in config.json by hand: Settings shows Med at 5.0 MB/s and the other values are kept.
+
+## Downloads manager (phase 3b)
+
+- [ ] `mediaforge --manager` opens the Downloads table; Esc goes to the home menu. Home → Downloads opens it too. `mediaforge --manager | more` (no terminal) prints `--manager needs a terminal.`
+- [ ] Press `2` (Size), quit, reopen: the table is still sorted by Size.
+- [ ] `/` with part of a title narrows the list and the header shows `search: "…"` and `x of N items`; `f` → Paused shows only paused rows; Esc clears both.
+- [ ] On a large real download: `p` pauses it, `r` resumes it from where it was, `c` then `y` cancels it.
+- [ ] `x` on a finished row removes it without asking (the file stays on disk); on a running row it asks first.
+- [ ] `Del` then `y` on a finished row: the file is in the Recycle Bin (Windows) or the Trash (Linux) and can be restored.
+- [ ] `Del` on a file larger than the Recycle Bin allows: a second prompt says it will be deleted permanently; `y` deletes it.
+- [ ] During a real download: `l` cycles the header limit (High, Med, Low, Custom) and the speed follows within about 3 s; `L` → Low marks the row with `⏷`; `b` switches every speed to Mbps.
+- [ ] `a` with one link returns to the table with the cursor on the new row; `a` with two links (batch) returns with both rows.
+- [ ] Kill the core in Task Manager while the manager is open: the banner says `Reconnecting to MediaForge…`, the rows stay, and they come back live once the core restarts.
+- [ ] With a manager open, send `app.open` from the extension (or a test client): the window flashes and `Opened from browser` shows for a few seconds. Check in conhost, Windows Terminal and one Linux terminal.
+- [ ] Kill the core during a download, reopen the manager: the notice banner shows; `R` resumes the paused downloads, `z` dismisses the notice.
+- [ ] Narrow the window under 80 columns: Last try, ETA and Speed drop; the rows still fit on one line each.

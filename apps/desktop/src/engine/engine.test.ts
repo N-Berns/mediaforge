@@ -550,3 +550,164 @@ describe("pause and resume", () => {
     await expect(engine.remove("unknown")).resolves.toBeUndefined();
   });
 });
+
+describe("speed caps", () => {
+  const rateOf = (args: string[]) =>
+    args.includes("--limit-rate") ? args[args.indexOf("--limit-rate") + 1] : undefined;
+
+  it("passes the rate set before the job starts", async () => {
+    const { fs } = fakeFs();
+    const seen: (string | undefined)[] = [];
+    const engine: DownloadEngine = new DownloadEngine({
+      resolve: found,
+      fs,
+      // A cap set while the job reports "downloading" is in place before yt-dlp starts.
+      onUpdate: (job) => job.status === "downloading" && engine.setRate(job.id, 1_000_000),
+      run: runner(async (h, _s, args) => {
+        seen.push(rateOf(args));
+        h.onStdoutLine(`MFFILE ${args[args.indexOf("--paths") + 1]}/T.mp4`);
+        return 0;
+      }),
+    });
+    await engine.whenSettled(engine.submit(request()).id);
+    expect(seen).toEqual(["1000000"]);
+  });
+
+  it("restarts a downloading job with its new rate, unseen by clients", async () => {
+    const { fs, removed } = fakeFs();
+    const statuses: string[] = [];
+    const runs: (string | undefined)[] = [];
+    let first = true;
+    const engine = new DownloadEngine({
+      resolve: found,
+      fs,
+      onUpdate: (job) => statuses.push(job.status),
+      run: runner(async (h, signal, args) => {
+        runs.push(rateOf(args));
+        if (first) {
+          first = false;
+          return waitForAbort(signal);
+        }
+        h.onStdoutLine(`MFFILE ${args[args.indexOf("--paths") + 1]}/T.mp4`);
+        return 0;
+      }),
+    });
+    const { id } = engine.submit(request());
+    await vi.waitFor(() => expect(runs).toHaveLength(1));
+    expect(engine.applyRate(id)).toBe(false); // same rate: nothing to do
+    engine.setRate(id, 500_000);
+    expect(engine.applyRate(id)).toBe(true);
+    const job = await engine.whenSettled(id);
+    expect(job?.status).toBe("completed");
+    expect(job?.id).toBe(id);
+    expect(runs).toEqual([undefined, "500000"]);
+    // Clients only ever see it downloading, then completed: never paused or queued again.
+    const afterStart = statuses.slice(statuses.indexOf("downloading"));
+    expect(new Set(afterStart)).toEqual(new Set(["downloading", "completed"]));
+    // Only the final cleanup removes the work folder, never the restart.
+    expect(removed).toHaveLength(1);
+  });
+
+  it("does not restart a queued or processing job", async () => {
+    const { fs } = fakeFs();
+    let release: () => void = () => {};
+    const engine = new DownloadEngine({
+      resolve: found,
+      fs,
+      maxConcurrent: 1,
+      run: runner(async (h) => {
+        h.onStdoutLine("MFPOST started");
+        await new Promise<void>((resolve) => {
+          release = resolve;
+        });
+        return 1;
+      }),
+    });
+    const a = engine.submit(request()).id;
+    const b = engine.submit(request()).id;
+    await vi.waitFor(() => expect(engine.get(a)?.status).toBe("processing"));
+    engine.setRate(a, 1);
+    engine.setRate(b, 1);
+    expect(engine.applyRate(a)).toBe(false);
+    expect(engine.applyRate(b)).toBe(false);
+    // Cancel b while it still waits, so it never runs the held script.
+    engine.cancel(b);
+    release();
+    await engine.whenSettled(a);
+  });
+
+  it("lets a pause during a restart win", async () => {
+    const { fs } = fakeFs();
+    const engine = new DownloadEngine({
+      resolve: found,
+      fs,
+      run: runner(async (_h, signal) => waitForAbort(signal)),
+    });
+    const { id } = engine.submit(request());
+    await vi.waitFor(() => expect(engine.get(id)?.status).toBe("downloading"));
+    // A new rate on every try: a rate set before yt-dlp spawns is already the one it runs with.
+    let rate = 1000;
+    await vi.waitFor(() => {
+      engine.setRate(id, rate++);
+      expect(engine.applyRate(id)).toBe(true);
+    });
+    expect(engine.pause(id)).toBe(true);
+    await vi.waitFor(() => expect(engine.get(id)?.status).toBe("paused"));
+  });
+
+  it("completes a job whose restart landed after yt-dlp exited 0", async () => {
+    const { fs } = fakeFs();
+    let runs = 0;
+    const engine: DownloadEngine = new DownloadEngine({
+      resolve: found,
+      fs,
+      run: runner(async (h, _s, args) => {
+        runs += 1;
+        h.onStdoutLine(`MFFILE ${args[args.indexOf("--paths") + 1]}/T.mp4`);
+        // The cap changes in the moment between the last line and the exit.
+        engine.setRate(engine.list()[0]?.id ?? "", 1000);
+        engine.applyRate(engine.list()[0]?.id ?? "");
+        return 0;
+      }),
+    });
+    const job = await engine.whenSettled(engine.submit(request()).id);
+    expect(job?.status).toBe("completed");
+    expect(runs).toBe(1);
+  });
+});
+
+describe("speed cap restarts and progress", () => {
+  it("never moves progress backwards while restarting", async () => {
+    const { fs } = fakeFs();
+    const percents: number[] = [];
+    let first = true;
+    const engine = new DownloadEngine({
+      resolve: found,
+      fs,
+      onUpdate: (job) => {
+        if (job.overallPercent !== undefined) percents.push(job.overallPercent);
+      },
+      run: runner(async (h, signal, args) => {
+        if (first) {
+          first = false;
+          h.onStdoutLine("MFPROGRESS 500 1000 NA 100 5");
+          return waitForAbort(signal);
+        }
+        h.onStdoutLine("MFPROGRESS 600 1000 NA 100 4");
+        h.onStdoutLine(`MFFILE ${args[args.indexOf("--paths") + 1]}/T.mp4`);
+        return 0;
+      }),
+    });
+    const { id } = engine.submit(request());
+    await vi.waitFor(() => expect(Math.max(0, ...percents)).toBeGreaterThan(0));
+    let rate = 1000;
+    await vi.waitFor(() => {
+      engine.setRate(id, rate++);
+      expect(engine.applyRate(id)).toBe(true);
+    });
+    await engine.whenSettled(id);
+    for (let i = 1; i < percents.length; i++) {
+      expect(percents[i]).toBeGreaterThanOrEqual(percents[i - 1] as number);
+    }
+  });
+});

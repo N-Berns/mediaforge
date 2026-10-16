@@ -141,6 +141,8 @@ export interface BuildArgsInput {
   jsRuntimeArgs?: string[];
   /** Referer, user agent, cookies and headers to send with the download. */
   context?: RequestContext;
+  /** Speed cap in bytes per second. Unset: no cap. */
+  limitRate?: number;
 }
 
 /** yt-dlp post-processors that run ffmpeg over the whole file, so their progress is worth showing. */
@@ -217,6 +219,7 @@ export function buildYtDlpArgs({
   ffmpegProgressFile,
   jsRuntimeArgs,
   context,
+  limitRate,
 }: BuildArgsInput): string[] {
   const url = request.candidate.url;
   const maxHeight = profile.maxHeight;
@@ -228,6 +231,10 @@ export function buildYtDlpArgs({
     "--no-playlist",
     // Resume partial files left by a paused or failed try (yt-dlp's default, stated so it holds).
     "--continue",
+    // yt-dlp reads a bare number as bytes per second; it rejects 0.
+    ...(limitRate !== undefined
+      ? ["--limit-rate", String(Math.max(1, Math.floor(limitRate)))]
+      : []),
     ...(jsRuntimeArgs ?? []),
     "--newline",
     "--progress",

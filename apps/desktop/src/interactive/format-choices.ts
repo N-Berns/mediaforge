@@ -1,6 +1,6 @@
+import { formatBytes } from "@mediaforge/shared-types";
 import { codec, type MediaInfo, type RawFormat } from "../formats.ts";
 import type { MediaKind } from "../kind-folder.ts";
-import { formatBytes } from "../progress-view.ts";
 import type { MenuItem } from "./components/Menu.tsx";
 
 type Choice<T> = Pick<MenuItem<T>, "value" | "label" | "hint">;

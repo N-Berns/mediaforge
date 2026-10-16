@@ -25,7 +25,7 @@ describe("describeInstallProgress", () => {
         received: 1048576,
         total: 2097152,
       }),
-    ).toBe("ffmpeg: downloading 1.0 MB of 2.0 MB");
+    ).toBe("ffmpeg: downloading 1.0 MB of 2.1 MB");
     expect(describeInstallProgress({ tool: "ffmpeg", phase: "downloading", received: 0 })).toBe(
       "ffmpeg: downloading",
     );

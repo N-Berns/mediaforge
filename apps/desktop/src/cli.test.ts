@@ -207,3 +207,33 @@ describe("isRelayArgv", () => {
     expect(called).toBe(1);
   });
 });
+
+describe("--manager", () => {
+  it("--manager opens the manager", async () => {
+    const seen: unknown[] = [];
+    const code = await run(
+      ["--manager"],
+      { stdout: () => {}, stderr: () => {} },
+      {
+        interactive: async (options) => {
+          seen.push(options);
+          return 0;
+        },
+      },
+    );
+    expect(code).toBe(ExitCode.Ok);
+    expect(seen).toEqual([{ manager: true }]);
+  });
+
+  it("--manager without a terminal fails with Usage", async () => {
+    const { code, err } = await exec("--manager");
+    expect(code).toBe(ExitCode.Usage);
+    expect(err).toBe("--manager needs a terminal.\n");
+  });
+
+  it("help lists --manager under Options", async () => {
+    const { out } = await exec("--help");
+    const options = out.slice(out.indexOf("Options:"));
+    expect(options).toContain("  --manager      Open the downloads manager");
+  });
+});

@@ -11,7 +11,7 @@ export interface WatchedJob {
   cancel(): Promise<void>;
 }
 
-const jobIdOf = (message: HostToExtensionMessage): string | undefined =>
+export const jobIdOf = (message: HostToExtensionMessage): string | undefined =>
   message.type === "download.progress" ||
   message.type === "download.completed" ||
   message.type === "download.failed" ||

@@ -16,6 +16,7 @@ export function helpText(): string {
     ...lines,
     "",
     "Options:",
+    "  --manager      Open the downloads manager",
     "  -h, --help     Show help",
     "  -v, --version  Show version",
     "",
@@ -24,7 +25,7 @@ export function helpText(): string {
 
 export interface RunOptions {
   /** Opens the interactive menu. Provided only when running in a real terminal. */
-  interactive?: () => Promise<number>;
+  interactive?: (options?: { manager?: boolean }) => Promise<number>;
   /** The long-lived background core (`--core`). */
   core?: () => Promise<number>;
   /** The browser native-messaging relay (`--native-host`). */
@@ -65,6 +66,19 @@ export async function run(argv: string[], io: Io, options: RunOptions = {}): Pro
     }
     try {
       return await mode();
+    } catch (error) {
+      io.stderr(`Unexpected error: ${error instanceof Error ? error.message : String(error)}\n`);
+      return ExitCode.Failure;
+    }
+  }
+
+  if (first === "--manager") {
+    if (!options.interactive) {
+      io.stderr("--manager needs a terminal.\n");
+      return ExitCode.Usage;
+    }
+    try {
+      return await options.interactive({ manager: true });
     } catch (error) {
       io.stderr(`Unexpected error: ${error instanceof Error ? error.message : String(error)}\n`);
       return ExitCode.Failure;

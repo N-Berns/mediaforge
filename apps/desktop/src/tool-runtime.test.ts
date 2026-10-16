@@ -216,7 +216,7 @@ describe("createInstallPrinter", () => {
     print(progress("downloading", { received: 1048576, total: 2097152 }));
     print(progress("verifying"));
     const text = out.join("");
-    expect(text).toContain("\r  yt-dlp  [############------------]  50%  1.0 MB of 2.0 MB");
+    expect(text).toContain("\r  yt-dlp  [############------------]  50%  1.0 MB of 2.1 MB");
     expect(text.endsWith("\n  yt-dlp  verifying checksum\n")).toBe(true);
     expect(text).not.toContain("\x1b");
   });

@@ -423,3 +423,100 @@ describe("job control", () => {
     expect(PROTOCOL_VERSION).toBe(3);
   });
 });
+
+describe("bandwidth messages", () => {
+  const frame = (type: string, payload: unknown) => ({
+    v: PROTOCOL_VERSION,
+    id: "r",
+    type,
+    payload,
+  });
+
+  it("accepts download.setLimit with a preset or null, and rejects other presets", () => {
+    expect(
+      parseExtensionMessage(frame("download.setLimit", { jobIds: ["a"], preset: "low" })).ok,
+    ).toBe(true);
+    expect(
+      parseExtensionMessage(frame("download.setLimit", { jobIds: ["a"], preset: null })).ok,
+    ).toBe(true);
+    expect(
+      parseExtensionMessage(frame("download.setLimit", { jobIds: ["a"], preset: "max" })).ok,
+    ).toBe(false);
+    expect(parseExtensionMessage(frame("download.setLimit", { jobIds: [], preset: null })).ok).toBe(
+      false,
+    );
+  });
+
+  it("carries speedUnit, limitPreset and limits in settings, all optional", () => {
+    const limits = {
+      high: null,
+      med: 5_000_000,
+      low: 1_000_000,
+      custom: 250_000,
+    };
+    expect(
+      parseExtensionMessage(
+        frame("settings.set", {
+          speedUnit: "bits",
+          limitPreset: "med",
+          limits,
+        }),
+      ).ok,
+    ).toBe(true);
+    expect(
+      parseExtensionMessage(frame("settings.set", { limits: { ...limits, med: -1 } })).ok,
+    ).toBe(false);
+    expect(parseExtensionMessage(frame("settings.set", { speedUnit: "nibbles" })).ok).toBe(false);
+    const value = {
+      extensionUi: "popup",
+      keepRunning: false,
+      askQuality: true,
+    };
+    expect(parseHostMessage(frame("settings.value", value)).ok).toBe(true);
+    expect(
+      parseHostMessage(
+        frame("settings.value", {
+          ...value,
+          speedUnit: "bytes",
+          limitPreset: "high",
+          limits,
+        }),
+      ).ok,
+    ).toBe(true);
+  });
+
+  it("carries a job's limit override", () => {
+    const job = {
+      id: "a",
+      request: { candidate, profileId: "best" },
+      status: "downloading",
+      progress: { bytesDownloaded: 0 },
+      createdAt: 1,
+      updatedAt: 1,
+      limitOverride: "low",
+    };
+    expect(parseHostMessage(frame("jobs.snapshot", { jobs: [job] })).ok).toBe(true);
+    expect(
+      parseHostMessage(frame("jobs.snapshot", { jobs: [{ ...job, limitOverride: "x" }] })).ok,
+    ).toBe(false);
+  });
+});
+
+describe("attention messages", () => {
+  const msg = (type: string, payload: unknown) => ({ v: PROTOCOL_VERSION, id: "1", type, payload });
+
+  it("parses app.open", () => {
+    expect(parseExtensionMessage(msg("app.open", {})).ok).toBe(true);
+  });
+
+  it("parses app.opened with each mode", () => {
+    for (const mode of ["attention", "launched", "no-terminal"]) {
+      expect(parseHostMessage(msg("app.opened", { mode })).ok).toBe(true);
+    }
+    expect(parseHostMessage(msg("app.opened", { mode: "other" })).ok).toBe(false);
+  });
+
+  it("parses app.attention", () => {
+    expect(parseHostMessage(msg("app.attention", {})).ok).toBe(true);
+  });
+});

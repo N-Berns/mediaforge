@@ -1,5 +1,6 @@
 import type { InstallProgress, InstallResult, Tool } from "@mediaforge/binary-resolver";
 import { createContext, useContext } from "react";
+import type { CoreConnector } from "../core/connect.ts";
 import type { ToolReport } from "../doctor.ts";
 import type { DownloadDeps } from "../download.ts";
 import type { MediaInfo } from "../formats.ts";
@@ -42,6 +43,10 @@ export interface AppDeps {
   /** Where bundled tools are looked up, for "how to fix" messages. */
   binDir: string;
   version: string;
+  /** Joins the core as the downloads manager (starting it if needed). */
+  managerCore: CoreConnector;
+  /** Draws the user's eye to this terminal window. Never throws. */
+  flash: () => void;
 }
 
 export const DepsContext = createContext<AppDeps | undefined>(undefined);

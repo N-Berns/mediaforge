@@ -19,7 +19,7 @@ process.exitCode = await run(
   {
     // Loaded on demand so scripted commands never pay for the prompt library.
     interactive: inTerminal
-      ? async () => (await import("./interactive/start.tsx")).startInteractive()
+      ? async (options) => (await import("./interactive/start.tsx")).startInteractive(options)
       : undefined,
     core: async () => (await import("./core/run-core.ts")).runDefaultCore(),
     relay: async () => (await import("./core/relay.ts")).runDefaultRelay(),

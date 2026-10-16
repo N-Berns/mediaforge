@@ -57,6 +57,10 @@ describe("sanitizeSettings", () => {
         concurrency: 3,
         keepRunning: true,
         extensionUi: "popup",
+        speedUnit: "bits",
+        limitPreset: "low",
+        limits: { high: null, med: 5_000_000, low: 1_000_000, custom: 250_000 },
+        managerSort: { column: "size", descending: false },
       }),
     ).toEqual({
       folder: "/x",
@@ -67,6 +71,10 @@ describe("sanitizeSettings", () => {
       concurrency: 3,
       keepRunning: true,
       extensionUi: "popup",
+      speedUnit: "bits",
+      limitPreset: "low",
+      limits: { high: null, med: 5_000_000, low: 1_000_000, custom: 250_000 },
+      managerSort: { column: "size", descending: false },
     });
   });
 
@@ -105,6 +113,10 @@ describe("fileSettingsStore", () => {
       concurrency: 3,
       keepRunning: true,
       extensionUi: "popup",
+      speedUnit: "bits",
+      limitPreset: "low",
+      limits: { high: null, med: 5_000_000, low: 1_000_000, custom: 250_000 },
+      managerSort: { column: "size", descending: false },
     });
 
     expect(dirs).toEqual(["cfg"]);
@@ -118,6 +130,10 @@ describe("fileSettingsStore", () => {
       concurrency: 3,
       keepRunning: true,
       extensionUi: "popup",
+      speedUnit: "bits",
+      limitPreset: "low",
+      limits: { high: null, med: 5_000_000, low: 1_000_000, custom: 250_000 },
+      managerSort: { column: "size", descending: false },
     });
     expect(await store.load()).toEqual({
       folder: "/music",
@@ -128,6 +144,10 @@ describe("fileSettingsStore", () => {
       concurrency: 3,
       keepRunning: true,
       extensionUi: "popup",
+      speedUnit: "bits",
+      limitPreset: "low",
+      limits: { high: null, med: 5_000_000, low: 1_000_000, custom: 250_000 },
+      managerSort: { column: "size", descending: false },
     });
   });
 });
@@ -138,5 +158,69 @@ describe("memorySettingsStore", () => {
     expect(await store.load()).toEqual({ ...DEFAULT_SETTINGS, folder: "/a" });
     await store.save({ ...DEFAULT_SETTINGS, quality: "best" });
     expect((await store.load()).quality).toBe("best");
+  });
+});
+
+describe("bandwidth settings", () => {
+  it("defaults to bytes, the High preset and the built-in values", () => {
+    const s = sanitizeSettings({});
+    expect(s.speedUnit).toBe("bytes");
+    expect(s.limitPreset).toBe("high");
+    expect(s.limits).toEqual({
+      high: null,
+      med: 5_000_000,
+      low: 1_000_000,
+      custom: null,
+    });
+  });
+
+  it("keeps valid values and replaces each bad one with its default", () => {
+    const s = sanitizeSettings({
+      speedUnit: "bits",
+      limitPreset: "custom",
+      limits: { high: 1e16, med: "fast", low: -3, custom: 250_000.7 },
+    });
+    expect(s.speedUnit).toBe("bits");
+    expect(s.limitPreset).toBe("custom");
+    expect(s.limits).toEqual({
+      high: null,
+      med: 5_000_000,
+      low: 1_000_000,
+      custom: 250_000,
+    });
+  });
+
+  it("ignores an unknown unit, preset or limits shape", () => {
+    const s = sanitizeSettings({
+      speedUnit: "nibbles",
+      limitPreset: "max",
+      limits: [1, 2],
+    });
+    expect(s.speedUnit).toBe("bytes");
+    expect(s.limitPreset).toBe("high");
+    expect(s.limits).toEqual(DEFAULT_SETTINGS.limits);
+  });
+
+  it("keeps an explicit null (no limit) for any preset", () => {
+    expect(sanitizeSettings({ limits: { med: null } }).limits.med).toBeNull();
+  });
+});
+
+describe("managerSort", () => {
+  it("managerSort defaults to last try, newest first", () => {
+    expect(sanitizeSettings({}).managerSort).toEqual({ column: "lastTry", descending: true });
+    expect(DEFAULT_SETTINGS.managerSort).toEqual({ column: "lastTry", descending: true });
+  });
+
+  it("a bad managerSort falls back to the default", () => {
+    for (const bad of [{ column: "colour", descending: true }, "x", { column: "size" }]) {
+      expect(sanitizeSettings({ managerSort: bad }).managerSort).toEqual({
+        column: "lastTry",
+        descending: true,
+      });
+    }
+    expect(
+      sanitizeSettings({ managerSort: { column: "size", descending: false } }).managerSort,
+    ).toEqual({ column: "size", descending: false });
   });
 });

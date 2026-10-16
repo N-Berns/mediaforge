@@ -1,0 +1,721 @@
+import type { DownloadJob, Notice } from "@mediaforge/shared-types";
+import { render } from "ink-testing-library";
+import { describe, expect, it, vi } from "vitest";
+import { HistoryStore, memoryHistoryFs } from "../../core/history.ts";
+import { inProcessCore } from "../../core/in-process.ts";
+import type { TrashFn } from "../../core/trash.ts";
+import { DownloadEngine, type EngineFs } from "../../engine/index.ts";
+import type { ProcessRunner } from "../../engine/process.ts";
+import { memorySettingsStore, type Settings } from "../../settings.ts";
+import type { AppDeps } from "../deps.ts";
+import { DepsContext } from "../deps.ts";
+import { SpeedUnitContext } from "../speed-unit.ts";
+import { ManagerScreen, type ManagerScreenProps } from "./ManagerScreen.tsx";
+
+const KEY = {
+  enter: "\r",
+  esc: "\u001B",
+  up: "\u001B[A",
+  down: "\u001B[B",
+  pageDown: "\u001B[6~",
+  home: "\u001B[H",
+  end: "\u001B[F",
+  del: "\u001B[3~",
+  ctrlA: "\u0001",
+};
+
+const URL = "https://example.com/watch?v=abc";
+const fs: EngineFs = {
+  mkdir: async () => {},
+  rename: async () => {},
+  rm: async () => {},
+  exists: async () => false,
+  list: async () => [],
+  readText: async () => "",
+};
+
+type Row = DownloadJob & { files: string[] };
+
+function row(id: string, patch: Partial<Row> & { title?: string; url?: string } = {}): Row {
+  const { title, url = URL, ...rest } = patch;
+  return {
+    id,
+    request: {
+      candidate: {
+        id: url,
+        pageUrl: url,
+        url,
+        ...(title && { pageTitle: title }),
+        kind: "video",
+        streamType: "progressive",
+        source: "dom",
+        variants: [],
+        detectedAt: 0,
+      },
+      profileId: "mp4-720p",
+    },
+    status: "completed",
+    progress: { bytesDownloaded: 0 },
+    createdAt: 1,
+    updatedAt: 1,
+    files: [],
+    ...rest,
+  };
+}
+
+/** A download that reports half its progress, then waits until released. */
+function slowRunner() {
+  const waiting: (() => void)[] = [];
+  const runner: ProcessRunner = async (_c, args, h, signal) => {
+    h.onStdoutLine("MFPROGRESS 50 100 NA 10 5");
+    await new Promise<void>((r) => {
+      waiting.push(r);
+      signal?.addEventListener("abort", () => r());
+    });
+    h.onStdoutLine(`MFFILE ${args[args.indexOf("--paths") + 1]}/Clip.mp4`);
+    return { exitCode: signal?.aborted ? 1 : 0 };
+  };
+  return {
+    runner,
+    releaseAll: () => {
+      for (const release of waiting.splice(0)) release();
+    },
+  };
+}
+
+interface MountOptions {
+  jobs?: Row[];
+  notice?: Notice;
+  settings?: Partial<Settings>;
+  runner?: ProcessRunner;
+  trash?: TrashFn;
+  columns?: number;
+  props?: Partial<ManagerScreenProps>;
+}
+
+async function mount(options: MountOptions = {}) {
+  const store = memorySettingsStore(options.settings);
+  const history = await HistoryStore.open({
+    path: "/h/history.json",
+    fs: memoryHistoryFs({
+      "/h/history.json": JSON.stringify({
+        version: 1,
+        cleanExit: true,
+        jobs: options.jobs ?? [],
+        ...(options.notice && { notice: options.notice }),
+      }),
+    }),
+    debounceMs: 0,
+  });
+  const openPath = vi.fn(async () => {});
+  const core = inProcessCore({
+    settings: store,
+    history,
+    openPath,
+    ...(options.trash && { trash: options.trash }),
+    createEngine: (onUpdate) =>
+      new DownloadEngine({
+        resolve: async (tool) => ({ tool, path: `/bin/${tool}`, source: "path" as const }),
+        fs,
+        onUpdate,
+        run: options.runner ?? slowRunner().runner,
+      }),
+  });
+  const flash = vi.fn();
+  const deps = {
+    download: {
+      env: {},
+      isTTY: true,
+      settings: store,
+      onInterrupt: () => () => {},
+      core: core.connect,
+    },
+    managerCore: core.connectAs("manager"),
+    flash,
+    version: "1.0.0",
+  } as unknown as AppDeps;
+  const props: ManagerScreenProps = {
+    onBack: vi.fn(),
+    onAdd: vi.fn(),
+    onSpeedUnit: vi.fn(),
+    renderMs: 10,
+    retryMs: 300,
+    ...options.props,
+  };
+  const app = render(
+    <DepsContext.Provider value={deps}>
+      <SpeedUnitContext.Provider value={options.settings?.speedUnit ?? "bytes"}>
+        <ManagerScreen {...props} />
+      </SpeedUnitContext.Provider>
+    </DepsContext.Provider>,
+  );
+  if (options.columns) {
+    Object.defineProperty(app.stdout, "columns", { value: options.columns, configurable: true });
+    (app.stdout as unknown as NodeJS.EventEmitter).emit("resize");
+  }
+  const frame = () => app.lastFrame() ?? "";
+  const press = async (...keys: string[]) => {
+    for (const key of keys) {
+      app.stdin.write(key);
+      await new Promise((r) => setTimeout(r, 20));
+    }
+  };
+  const count = (options.jobs ?? []).length;
+  await vi.waitFor(() => expect(frame()).toContain(` ${count} item${count === 1 ? "" : "s"}`));
+  await vi.waitFor(() => expect(frame()).not.toContain("Connecting to MediaForge"));
+  return { app, frame, press, store, core, history, props, flash, openPath };
+}
+
+/** The table lines (those starting with the cursor column), in screen order. */
+const tableRows = (frame: string) =>
+  frame.split("\n").filter((line) => /^[> ]\[[ •]\]/.test(line) && !line.includes("Name"));
+
+const three = () => [
+  row("old", { title: "Trailer", lastTryAt: Date.now() - 3 * 86_400_000, sizeBytes: 23_000_000 }),
+  row("new", {
+    title: "Big Buck Bunny",
+    status: "paused",
+    lastTryAt: Date.now() - 1000,
+    sizeBytes: 412_000_000,
+  }),
+  row("mid", {
+    title: "Lecture 07",
+    lastTryAt: Date.now() - 86_400_000,
+    sizeBytes: 58_000_000,
+    url: "https://lectures.example.org/07",
+  }),
+];
+
+describe("ManagerScreen table", () => {
+  it("lists jobs newest last try first", async () => {
+    const m = await mount({ jobs: three() });
+    const rows = tableRows(m.frame());
+    expect(rows).toHaveLength(3);
+    expect(rows[0]).toContain("Big Buck Bunny");
+    expect(rows[1]).toContain("Lecture 07");
+    expect(rows[2]).toContain("Trailer");
+  });
+
+  it("shows the header counts and limit", async () => {
+    const running = row("run", { status: "paused", lastTryAt: 1 });
+    const m = await mount({ jobs: [...three(), running], runner: slowRunner().runner });
+    expect(m.frame()).toContain("Limit: High (∞) · 4 items · 0 active");
+  });
+
+  it("moves the cursor with arrows, PgDn and End", async () => {
+    const jobs = Array.from({ length: 30 }, (_, i) =>
+      row(`j${i}`, { title: `Item ${String(i).padStart(2, "0")}`, lastTryAt: 1000 - i }),
+    );
+    const m = await mount({ jobs });
+    const cursorRow = () => tableRows(m.frame()).find((line) => line.startsWith(">"));
+    expect(cursorRow()).toContain("Item 00");
+    await m.press(KEY.down);
+    expect(cursorRow()).toContain("Item 01");
+    await m.press(KEY.end);
+    await vi.waitFor(() => expect(cursorRow()).toContain("Item 29"));
+    await m.press(KEY.home, KEY.pageDown);
+    await vi.waitFor(() => expect(cursorRow()).not.toContain("Item 00"));
+  });
+
+  it("Space ticks the cursor row and Ctrl+A ticks all visible, then clears", async () => {
+    const m = await mount({ jobs: three() });
+    const ticked = () => tableRows(m.frame()).filter((line) => line.includes("[•]")).length;
+    await m.press(" ");
+    await vi.waitFor(() => expect(ticked()).toBe(1));
+    await m.press(KEY.ctrlA);
+    await vi.waitFor(() => expect(ticked()).toBe(3));
+    await m.press(KEY.ctrlA);
+    await vi.waitFor(() => expect(ticked()).toBe(0));
+  });
+
+  it("number keys sort and the same key reverses", async () => {
+    const m = await mount({ jobs: three() });
+    await m.press("2");
+    await vi.waitFor(() => expect(m.frame()).toContain("Size ▼"));
+    expect(tableRows(m.frame())[0]).toContain("Big Buck Bunny");
+    await m.press("2");
+    await vi.waitFor(() => expect(m.frame()).toContain("Size ▲"));
+    expect(tableRows(m.frame())[0]).toContain("Trailer");
+    await vi.waitFor(async () =>
+      expect((await m.store.load()).managerSort).toEqual({ column: "size", descending: false }),
+    );
+  });
+
+  it("slash searches name and URL; Enter keeps; Esc clears", async () => {
+    const m = await mount({ jobs: three() });
+    await m.press("/", "l", "e", "c");
+    await vi.waitFor(() => expect(tableRows(m.frame())).toHaveLength(1));
+    await m.press(KEY.enter);
+    await vi.waitFor(() => expect(m.frame()).toContain('search: "lec"'));
+    expect(m.frame()).toContain("1 of 3 items");
+    await m.press("/", KEY.esc);
+    await vi.waitFor(() => expect(tableRows(m.frame())).toHaveLength(3));
+    await m.press("/", "l", "e", "c", "t", "u", "r", "e", "s", ".", KEY.enter);
+    await vi.waitFor(() => expect(tableRows(m.frame())).toHaveLength(1));
+  });
+
+  it("shows the empty filter text", async () => {
+    const m = await mount({ jobs: three() });
+    await m.press("/", "z", "z", "z", KEY.enter);
+    await vi.waitFor(() =>
+      expect(m.frame()).toContain("No downloads match. Esc clears the filter."),
+    );
+  });
+
+  it("drops columns as the terminal narrows", async () => {
+    const narrow = await mount({ jobs: three(), columns: 85 });
+    await vi.waitFor(() => expect(narrow.frame()).not.toContain("Last try"));
+    expect(narrow.frame()).not.toContain("ETA");
+    expect(narrow.frame()).toContain("Speed");
+    const wide = await mount({ jobs: three(), columns: 120 });
+    await vi.waitFor(() => expect(wide.frame()).toContain("Last try"));
+    expect(wide.frame()).toContain("ETA");
+  });
+
+  it("cuts wide names without breaking alignment", async () => {
+    const m = await mount({
+      columns: 100,
+      jobs: [
+        row("cjk", { title: "日本語の名前".repeat(14), sizeBytes: 1_000, lastTryAt: 3 }),
+        row("long", {
+          url: `https://example.com/${"x".repeat(300)}`,
+          sizeBytes: 2_000,
+          lastTryAt: 2,
+        }),
+        row("short", { title: "Short", sizeBytes: 3_000, lastTryAt: 1 }),
+      ],
+    });
+    const lines = m.frame().split("\n");
+    const cjk = lines.find((l) => l.includes("日本"));
+    expect(cjk).toContain("1.0 kB");
+    expect(cjk).toContain("…");
+    const header = lines.find((l) => l.includes("Size")) as string;
+    const long = lines.find((l) => l.includes("2.0 kB")) as string;
+    const short = lines.find((l) => l.includes("3.0 kB")) as string;
+    expect(long.indexOf("2.0 kB")).toBe(header.indexOf("Size"));
+    expect(short.indexOf("3.0 kB")).toBe(header.indexOf("Size"));
+    expect(long.length).toBeLessThanOrEqual(100);
+  });
+
+  it("scrolls 2000 rows and keeps the cursor visible", async () => {
+    const jobs = Array.from({ length: 2000 }, (_, i) =>
+      row(`j${i}`, { title: `Item ${i}`, lastTryAt: 10_000 - i }),
+    );
+    const m = await mount({ jobs });
+    expect(m.frame()).toContain("2000 items");
+    await m.press(KEY.end);
+    await vi.waitFor(() =>
+      expect(tableRows(m.frame()).find((l) => l.startsWith(">"))).toContain("Item 1999"),
+    );
+  });
+
+  it("shows the reconnect banner and keeps rows", async () => {
+    const m = await mount({ jobs: three() });
+    m.core.dropAll();
+    await vi.waitFor(() => expect(m.frame()).toContain("Reconnecting to MediaForge…"));
+    expect(tableRows(m.frame())).toHaveLength(3);
+  });
+
+  it("Esc goes back when nothing is open", async () => {
+    const m = await mount({ jobs: three() });
+    await m.press(KEY.esc);
+    await vi.waitFor(() => expect(m.props.onBack).toHaveBeenCalled());
+  });
+});
+
+/** Start a download through another client, as the extension or the menu would. */
+async function startOne(m: Awaited<ReturnType<typeof mount>>, title: string): Promise<string> {
+  const client = await m.core.connect();
+  const reply = await client.request("download.start", {
+    candidate: row("x", { title }).request.candidate,
+    profileId: "mp4-720p",
+    outputDir: "/dl",
+  });
+  client.close();
+  const id = (reply.payload as { jobId: string }).jobId;
+  await vi.waitFor(() => expect(m.history.get(id)?.status).toBe("downloading"));
+  await vi.waitFor(() => expect(m.frame()).toContain(title));
+  return id;
+}
+
+const statusOf = (m: Awaited<ReturnType<typeof mount>>, id: string) => m.history.get(id)?.status;
+
+describe("ManagerScreen actions", () => {
+  it("p pauses the cursor row", async () => {
+    const m = await mount();
+    const id = await startOne(m, "Running one");
+    await m.press("p");
+    await vi.waitFor(() => expect(statusOf(m, id)).toBe("paused"));
+    await vi.waitFor(() => expect(m.frame()).toContain("Paused 1"));
+  });
+
+  it("p on ticked rows skips the ones that do not apply", async () => {
+    const m = await mount({ jobs: [row("done", { title: "Done one", lastTryAt: 1 })] });
+    const id = await startOne(m, "Running one");
+    await m.press(KEY.ctrlA, "p");
+    await vi.waitFor(() => expect(m.frame()).toContain("Paused 1 · 1 skipped"));
+    expect(statusOf(m, id)).toBe("paused");
+  });
+
+  it("r resumes paused and retries failed", async () => {
+    const m = await mount({
+      jobs: [
+        row("p1", { title: "Paused one", status: "paused", lastTryAt: 2 }),
+        row("f1", { title: "Failed one", status: "failed", lastTryAt: 1 }),
+      ],
+    });
+    await m.press(KEY.ctrlA, "r");
+    await vi.waitFor(() => expect(m.frame()).toContain("Resumed 2"));
+    expect(["queued", "downloading"]).toContain(statusOf(m, "p1"));
+    expect(["queued", "downloading"]).toContain(statusOf(m, "f1"));
+  });
+
+  it("c asks first and N keeps the job", async () => {
+    const m = await mount();
+    const id = await startOne(m, "Running one");
+    await m.press("c");
+    await vi.waitFor(() =>
+      expect(m.frame()).toContain("Cancel 1 download? Partial files are deleted. y/N"),
+    );
+    expect(m.frame()).not.toContain("a Add");
+    await m.press("n");
+    await vi.waitFor(() => expect(m.frame()).toContain("a Add"));
+    expect(statusOf(m, id)).toBe("downloading");
+    await m.press("c", "y");
+    await vi.waitFor(() => expect(statusOf(m, id)).toBe("cancelled"));
+  });
+
+  it("x removes finished rows without asking; asks for running ones", async () => {
+    const m = await mount({ jobs: [row("done", { title: "Done one", lastTryAt: 1 })] });
+    await m.press("x");
+    await vi.waitFor(() => expect(m.history.get("done")).toBeUndefined());
+    const id = await startOne(m, "Running one");
+    await m.press("x");
+    await vi.waitFor(() =>
+      expect(m.frame()).toContain(
+        "Remove 1 download? 1 is still running and will be cancelled. y/N",
+      ),
+    );
+    await m.press("y");
+    await vi.waitFor(() => expect(m.history.get(id)).toBeUndefined());
+  });
+
+  it("Del moves files to the trash after y", async () => {
+    const trash = vi.fn<TrashFn>(async () => ({ failed: [] }));
+    const m = await mount({
+      trash,
+      jobs: [row("done", { title: "Done one", lastTryAt: 1, files: ["/dl/a.mp4"] })],
+    });
+    await m.press(KEY.del);
+    await vi.waitFor(() =>
+      expect(m.frame()).toContain("Move the files of 1 download to the trash? y/N"),
+    );
+    await m.press("y");
+    await vi.waitFor(() => expect(m.history.get("done")).toBeUndefined());
+    expect(trash).toHaveBeenCalledWith(["/dl/a.mp4"], { permanent: false });
+  });
+
+  it("Del asks again for too-large files and sends permanent", async () => {
+    const trash = vi.fn<TrashFn>(async (paths, options) =>
+      options?.permanent
+        ? { failed: [] }
+        : { failed: paths.map((path) => ({ path, message: "too big", code: "too-large" })) },
+    );
+    const m = await mount({
+      trash,
+      jobs: [row("big", { title: "Huge one", lastTryAt: 1, files: ["/dl/huge.mkv"] })],
+    });
+    await m.press(KEY.del);
+    await vi.waitFor(() => expect(m.frame()).toContain("to the trash? y/N"));
+    await m.press("y");
+    await vi.waitFor(() =>
+      expect(m.frame()).toContain(
+        "1 download is too large for the Recycle Bin and will be deleted permanently. Delete? y/N",
+      ),
+    );
+    await m.press("y");
+    await vi.waitFor(() => expect(m.history.get("big")).toBeUndefined());
+    expect(trash).toHaveBeenLastCalledWith(["/dl/huge.mkv"], { permanent: true });
+  });
+
+  it("C clears finished rows after y", async () => {
+    const m = await mount({
+      jobs: [
+        row("d1", { title: "Done one", lastTryAt: 2 }),
+        row("p1", { title: "Paused one", status: "paused", lastTryAt: 1 }),
+      ],
+    });
+    await m.press("C");
+    await vi.waitFor(() =>
+      expect(m.frame()).toContain(
+        "Clear 1 finished download from the list? Files stay on disk. y/N",
+      ),
+    );
+    await m.press("y");
+    await vi.waitFor(() => expect(m.history.get("d1")).toBeUndefined());
+    expect(m.history.get("p1")).toBeDefined();
+  });
+
+  it("o opens the cursor row's folder only", async () => {
+    const m = await mount({
+      jobs: [
+        row("d1", { title: "Done one", lastTryAt: 2, outputPath: "/dl/one.mp4" }),
+        row("d2", { title: "Done two", lastTryAt: 1, outputPath: "/dl/two.mp4" }),
+      ],
+    });
+    await m.press(KEY.ctrlA, "o");
+    await vi.waitFor(() => expect(m.openPath).toHaveBeenCalledTimes(1));
+    expect(m.openPath).toHaveBeenCalledWith("/dl/one.mp4", { select: true });
+    await startOne(m, "Running one");
+    await m.press(KEY.ctrlA, KEY.home, "o");
+    await vi.waitFor(() => expect(m.frame()).toContain("Nothing to open."));
+  });
+
+  it("l cycles the global preset", async () => {
+    const m = await mount();
+    expect(m.frame()).toContain("Limit: High (∞)");
+    await m.press("l");
+    await vi.waitFor(() => expect(m.frame()).toContain("Limit: Med (5.0 MB/s)"));
+    await vi.waitFor(async () => expect((await m.store.load()).limitPreset).toBe("med"));
+  });
+
+  it("L opens the picker and applies the override", async () => {
+    const m = await mount({ jobs: [row("p1", { title: "Paused one", status: "paused" })] });
+    await m.press("L");
+    await vi.waitFor(() => expect(m.frame()).toContain("Med · 5.0 MB/s"));
+    await m.press(KEY.up, KEY.up, KEY.enter);
+    await vi.waitFor(() => expect(m.history.get("p1")?.limitOverride).toBe("low"));
+    await vi.waitFor(() => expect(tableRows(m.frame())[0]).toContain("⏷"));
+    await m.press("L");
+    await vi.waitFor(() => expect(m.frame()).toContain("Med · 5.0 MB/s"));
+    await m.press(KEY.down, KEY.down, KEY.enter);
+    await vi.waitFor(() => expect(m.history.get("p1")?.limitOverride).toBeUndefined());
+  });
+
+  it("b toggles the speed unit and saves it", async () => {
+    const m = await mount({ settings: { limitPreset: "med" } });
+    expect(m.frame()).toContain("Limit: Med (5.0 MB/s)");
+    await m.press("b");
+    await vi.waitFor(() => expect(m.frame()).toContain("Limit: Med (40.0 Mbps)"));
+    expect(m.props.onSpeedUnit).toHaveBeenCalledWith("bits");
+    await vi.waitFor(async () => expect((await m.store.load()).speedUnit).toBe("bits"));
+  });
+
+  it("a prompt acts on the rows it was opened for", async () => {
+    const m = await mount();
+    const first = await startOne(m, "First one");
+    await m.press("c");
+    await vi.waitFor(() => expect(m.frame()).toContain("y/N"));
+    const second = await startOne(m, "Second one");
+    await m.press("y");
+    await vi.waitFor(() => expect(statusOf(m, first)).toBe("cancelled"));
+    expect(statusOf(m, second)).toBe("downloading");
+  });
+
+  it("a lost connection closes the prompt", async () => {
+    const m = await mount();
+    await startOne(m, "Running one");
+    await m.press("c");
+    await vi.waitFor(() => expect(m.frame()).toContain("y/N"));
+    m.core.dropAll();
+    await vi.waitFor(() => expect(m.frame()).toContain("Not connected."));
+    expect(m.frame()).not.toContain("y/N");
+  });
+
+  it("action keys wait for the reply", async () => {
+    const m = await mount();
+    const id = await startOne(m, "Running one");
+    // Two presses in one burst: the second arrives while the first request is in flight.
+    m.app.stdin.write("p");
+    m.app.stdin.write("p");
+    await vi.waitFor(() => expect(m.frame()).toContain("Paused 1"));
+    await new Promise((r) => setTimeout(r, 100));
+    expect(m.frame()).not.toContain("Nothing to pause.");
+    expect(statusOf(m, id)).toBe("paused");
+  });
+
+  it("actions while reconnecting say Not connected", async () => {
+    const m = await mount({ jobs: [row("p1", { title: "Paused one", status: "paused" })] });
+    m.core.dropAll();
+    await vi.waitFor(() => expect(m.frame()).toContain("Reconnecting"));
+    await m.press("r");
+    await vi.waitFor(() => expect(m.frame()).toContain("Not connected."));
+    expect(statusOf(m, "p1")).toBe("paused");
+  });
+});
+
+const NOTICE = { reason: "unexpected" as const, pausedCount: 2, jobIds: ["n1", "n2"] };
+const noticeJobs = () => [
+  row("n1", { title: "Notice one", status: "paused", lastTryAt: 2 }),
+  row("n2", { title: "Notice two", status: "paused", lastTryAt: 1 }),
+];
+
+describe("ManagerScreen panels and banners", () => {
+  it("f opens the filter panel and filters live", async () => {
+    const m = await mount({
+      jobs: [
+        row("p1", { title: "Paused one", status: "paused", lastTryAt: 2 }),
+        row("d1", { title: "Done one", lastTryAt: 1 }),
+      ],
+    });
+    await m.press("f");
+    await vi.waitFor(() => expect(m.frame()).toContain("Last try"));
+    // Rows: Active, Queued, Paused…
+    await m.press(KEY.down, KEY.down, " ");
+    await vi.waitFor(() => expect(m.frame()).toContain("filter: Paused"));
+    await m.press(KEY.esc);
+    await vi.waitFor(() => expect(tableRows(m.frame())).toHaveLength(1));
+    expect(tableRows(m.frame())[0]).toContain("Paused one");
+  });
+
+  it("Esc clears search and filters before going back", async () => {
+    const m = await mount({ jobs: [row("p1", { title: "Paused one", status: "paused" })] });
+    await m.press("f", KEY.down, KEY.down, " ", KEY.enter);
+    await vi.waitFor(() => expect(m.frame()).toContain("filter: Paused"));
+    await m.press(KEY.esc);
+    await vi.waitFor(() => expect(m.frame()).not.toContain("filter:"));
+    expect(m.props.onBack).not.toHaveBeenCalled();
+    await m.press(KEY.esc);
+    await vi.waitFor(() => expect(m.props.onBack).toHaveBeenCalled());
+  });
+
+  it("Enter shows the detail panel with the full error", async () => {
+    const words = Array.from({ length: 60 }, (_, i) => `word${i}`).join(" ");
+    const m = await mount({
+      jobs: [
+        row("f1", { title: "Failed one", status: "failed", error: words, origin: "extension" }),
+      ],
+    });
+    await m.press(KEY.enter);
+    await vi.waitFor(() => expect(m.frame()).toContain("Origin"));
+    expect(m.frame()).toContain("word0");
+    expect(m.frame()).toContain("word59");
+    expect(m.frame()).toContain("Extension");
+    expect(m.frame()).toContain("None (shares the global limit)");
+    expect(m.frame()).toContain("https://example.com/watch?v=abc");
+    await m.press(KEY.esc);
+    await vi.waitFor(() => expect(m.frame()).not.toContain("word59"));
+    expect(m.props.onBack).not.toHaveBeenCalled();
+  });
+
+  it("? lists every key", async () => {
+    const m = await mount();
+    await m.press("?");
+    await vi.waitFor(() => expect(m.frame()).toContain("Dismiss the session notice"));
+    expect(m.frame()).toContain("Set the override");
+    await m.press(KEY.esc);
+    await vi.waitFor(() => expect(m.frame()).toContain("a Add"));
+  });
+
+  it("shows the session notice banner", async () => {
+    const m = await mount({ jobs: noticeJobs(), notice: NOTICE });
+    await vi.waitFor(() =>
+      expect(m.frame()).toContain("Previous session ended unexpectedly. 2 downloads were paused."),
+    );
+    expect(m.frame()).toContain("R resume all · z dismiss");
+  });
+
+  it("shows the restarted notice text", async () => {
+    const m = await mount({ jobs: noticeJobs(), notice: { ...NOTICE, reason: "restarted" } });
+    await vi.waitFor(() =>
+      expect(m.frame()).toContain("MediaForge was restarted. 2 downloads were paused."),
+    );
+  });
+
+  it("R resumes the notice jobs", async () => {
+    const m = await mount({ jobs: noticeJobs(), notice: NOTICE });
+    await m.press("R");
+    await vi.waitFor(() => expect(statusOf(m, "n1")).not.toBe("paused"));
+    expect(statusOf(m, "n2")).not.toBe("paused");
+    await vi.waitFor(() => expect(m.frame()).not.toContain("z dismiss"));
+  });
+
+  it("z dismisses the notice", async () => {
+    const m = await mount({ jobs: noticeJobs(), notice: NOTICE });
+    await m.press("z");
+    await vi.waitFor(() => expect(m.frame()).not.toContain("z dismiss"));
+    const other = await m.core.connect();
+    expect(other.ack.notice).toBeUndefined();
+    other.close();
+    expect(statusOf(m, "n1")).toBe("paused");
+  });
+
+  it("R and z do nothing without a banner", async () => {
+    const m = await mount({ jobs: noticeJobs() });
+    await m.press("R", "z");
+    await new Promise((r) => setTimeout(r, 100));
+    expect(statusOf(m, "n1")).toBe("paused");
+    expect(statusOf(m, "n2")).toBe("paused");
+  });
+
+  it("app.attention flashes and shows the banner", async () => {
+    const m = await mount({ props: { attentionMs: 300 } });
+    const other = await m.core.connectAs("extension")();
+    await other.request("app.open", {});
+    other.close();
+    await vi.waitFor(() => expect(m.frame()).toContain("Opened from browser"));
+    expect(m.flash).toHaveBeenCalledTimes(1);
+    await vi.waitFor(() => expect(m.frame()).not.toContain("Opened from browser"), {
+      timeout: 2000,
+    });
+  });
+});
+
+describe("ManagerScreen review fixes", () => {
+  it("keys work again when the row in the detail panel goes away", async () => {
+    const m = await mount({ jobs: [row("d1", { title: "Done one", lastTryAt: 1 })] });
+    await m.press(KEY.enter);
+    await vi.waitFor(() => expect(m.frame()).toContain("Details"));
+    const other = await m.core.connect();
+    await other.request("jobs.remove", { jobIds: ["d1"] });
+    other.close();
+    await vi.waitFor(() => expect(m.frame()).not.toContain("Details"));
+    // Ink takes the new key handler a moment after drawing the frame.
+    await new Promise((r) => setTimeout(r, 50));
+    await m.press("?");
+    await vi.waitFor(() => expect(m.frame()).toContain("Dismiss the session notice"));
+  });
+
+  it("says so instead of dropping an action while another is in flight", async () => {
+    let release: () => void = () => {};
+    const trash = vi.fn<TrashFn>(
+      () =>
+        new Promise((resolve) => {
+          release = () => resolve({ failed: [] });
+        }),
+    );
+    const m = await mount({
+      trash,
+      jobs: [
+        row("d1", { title: "Done one", lastTryAt: 2, files: ["/dl/a.mp4"] }),
+        row("d2", { title: "Done two", lastTryAt: 1 }),
+      ],
+    });
+    await m.press(KEY.del, "y");
+    await vi.waitFor(() => expect(trash).toHaveBeenCalled());
+    await m.press(KEY.down, "x");
+    await vi.waitFor(() => expect(m.frame()).toContain("Still working on the last action."));
+    release();
+  });
+});
+
+describe("ManagerScreen columns keep their own text", () => {
+  it("shows whole speeds, dates and the override mark", async () => {
+    const m = await mount({
+      columns: 120,
+      settings: { speedUnit: "bits" },
+      jobs: [
+        row("old", {
+          title: "A very long lecture title that will never fit in the name column at all",
+          avgSpeed: 4_100_000,
+          lastTryAt: new Date(2025, 9, 12, 12).getTime(),
+          limitOverride: "low",
+        }),
+      ],
+    });
+    const line = tableRows(m.frame())[0] ?? "";
+    expect(line).toContain("avg 32.8 Mbps");
+    expect(line).toContain("Oct 12 2025");
+    expect(line).toContain("⏷");
+  });
+});

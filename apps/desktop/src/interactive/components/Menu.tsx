@@ -1,5 +1,5 @@
 import { Box, Text, useInput } from "ink";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { COLORS, ICONS } from "../theme.ts";
 import { useEnterLock } from "./use-enter-lock.ts";
 
@@ -34,6 +34,8 @@ export interface MenuProps<T> {
   /** How many rows to show before scrolling. */
   maxVisible?: number;
   isActive?: boolean;
+  /** Called with the highlighted value, first on mount and then on every move. */
+  onHighlight?: (value: T) => void;
 }
 
 /** Which slice of a long list to show so the selected row stays visible. */
@@ -68,6 +70,7 @@ export function Menu<T>({
   initial,
   maxVisible = 12,
   isActive = true,
+  onHighlight,
 }: MenuProps<T>) {
   const firstEnabled = Math.max(
     0,
@@ -77,6 +80,10 @@ export function Menu<T>({
     const at = initial === undefined ? -1 : items.findIndex((i) => i.value === initial);
     return at >= 0 && !items[at]?.disabled ? at : firstEnabled;
   });
+  const highlighted = items[index]?.value;
+  useEffect(() => {
+    if (highlighted !== undefined) onHighlight?.(highlighted);
+  }, [highlighted, onHighlight]);
 
   const claim = useEnterLock();
   /** The number key of each row: dividers are skipped, so the numbers have no gaps. */

@@ -4,7 +4,7 @@ import { Frame } from "../components/Frame.tsx";
 import { Menu } from "../components/Menu.tsx";
 import { COLORS, ICONS } from "../theme.ts";
 
-export type HomeChoice = "download" | "settings" | "setup" | "about" | "quit";
+export type HomeChoice = "download" | "downloads" | "settings" | "setup" | "about" | "quit";
 
 export function HomeScreen({ onPick }: { onPick: (choice: HomeChoice) => void }) {
   const [confirming, setConfirming] = useState(false);
@@ -46,7 +46,7 @@ export function HomeScreen({ onPick }: { onPick: (choice: HomeChoice) => void })
       hints={[
         ["↑↓", "Move"],
         ["Enter", "Select"],
-        ["1-5", "Jump"],
+        ["1-6", "Jump"],
       ]}
     >
       <Box marginBottom={1}>
@@ -60,6 +60,12 @@ export function HomeScreen({ onPick }: { onPick: (choice: HomeChoice) => void })
             icon: ICONS.download,
             label: "Download media",
             hint: "video or audio from a link",
+          },
+          {
+            value: "downloads",
+            icon: ICONS.download,
+            label: "Downloads",
+            hint: "every download: pause, resume, limit",
           },
           {
             value: "settings",

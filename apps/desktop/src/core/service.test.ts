@@ -86,6 +86,8 @@ function fakeEngine(notify: (job: EngineJob) => void, autoStart: boolean) {
     list: () => [...jobs.values()],
     get: (id: string) => jobs.get(id),
     setMaxConcurrent: vi.fn(),
+    setRate: vi.fn(),
+    applyRate: vi.fn(() => false),
   };
   return { engine, jobs, submitted, submitOptions };
 }
@@ -102,6 +104,7 @@ interface SetupOptions {
   /** Raw history.json content to start from. */
   historyFile?: string;
   trash?: TrashFn;
+  bandwidth?: CoreServiceDeps["bandwidth"];
 }
 
 async function setup(options: SetupOptions = {}) {
@@ -148,6 +151,7 @@ async function setup(options: SetupOptions = {}) {
     newId: () => `id-${++clock}`,
     history,
     trash: options.trash ?? (async () => ({ failed: [] })),
+    ...(options.bandwidth && { bandwidth: options.bandwidth }),
   });
   const sent: HostToExtensionMessage[] = [];
   const handle = service.attach({ send: (m) => sent.push(m) }, options.role);
@@ -1309,5 +1313,241 @@ describe("trash", () => {
     expect(options).toEqual([{ permanent: true }]);
     expect(t.history.jobs()).toEqual([]);
     expect(resultOf(t.sent)).toEqual({ failed: [] });
+  });
+});
+
+describe("bandwidth settings over the protocol", () => {
+  it("sends speedUnit, limitPreset and limits in settings.value", async () => {
+    const t = await setup({
+      settings: { speedUnit: "bits", limitPreset: "low" },
+    });
+    await t.send("settings.get");
+    expect(t.sent[0]).toMatchObject({
+      type: "settings.value",
+      payload: {
+        speedUnit: "bits",
+        limitPreset: "low",
+        limits: { high: null, med: 5_000_000, low: 1_000_000, custom: null },
+      },
+    });
+  });
+
+  it("lets the relay change the unit and the preset", async () => {
+    const t = await setup();
+    await t.send("settings.set", { speedUnit: "bits", limitPreset: "med" });
+    expect(t.sent[0]).toMatchObject({
+      type: "settings.value",
+      payload: { limitPreset: "med" },
+    });
+    expect(await t.settings.load()).toMatchObject({
+      speedUnit: "bits",
+      limitPreset: "med",
+    });
+  });
+
+  it("refuses preset values from the relay and saves nothing", async () => {
+    const t = await setup();
+    const limits = { high: 1, med: 1, low: 1, custom: 1 };
+    await t.send("settings.set", { limitPreset: "med", limits });
+    expect(t.sent[0]).toMatchObject({
+      type: "error",
+      payload: { code: "forbidden", replyTo: "req" },
+    });
+    expect((await t.settings.load()).limitPreset).toBe("high");
+  });
+
+  it("lets a terminal change the preset values", async () => {
+    const t = await setup({ role: "terminal" });
+    const limits = {
+      high: null,
+      med: 2_000_000,
+      low: 500_000,
+      custom: 100_000,
+    };
+    await t.send("settings.set", { limits });
+    expect((await t.settings.load()).limits).toEqual(limits);
+  });
+});
+
+describe("bandwidth", () => {
+  const start = async (t: Awaited<ReturnType<typeof setup>>, id = "s") => {
+    await t.send("download.start", { candidate, profileId: "best" }, id);
+  };
+
+  it("caps a starting job with the global preset", async () => {
+    const t = await setup({
+      autoStart: true,
+      bandwidth: {
+        limitPreset: "med",
+        limits: { high: null, med: 5_000_000, low: 1_000_000, custom: null },
+      },
+    });
+    await start(t);
+    expect(t.fake.engine.setRate).toHaveBeenCalledWith("job-1", 5_000_000);
+  });
+
+  it("applies a new preset from settings.set at once", async () => {
+    const t = await setup({ autoStart: true });
+    await start(t);
+    t.fake.engine.setRate.mockClear();
+    await t.send("settings.set", { limitPreset: "low" });
+    expect(t.fake.engine.setRate).toHaveBeenCalledWith("job-1", 1_000_000);
+  });
+
+  it("applies preset values re-read on applySettings", async () => {
+    const t = await setup({
+      autoStart: true,
+      settings: { limitPreset: "custom" },
+    });
+    await start(t);
+    await t.settings.save({
+      ...(await t.settings.load()),
+      limits: { high: null, med: 1, low: 1, custom: 300_000 },
+    });
+    t.fake.engine.setRate.mockClear();
+    await t.service.applySettings();
+    expect(t.fake.engine.setRate).toHaveBeenCalledWith("job-1", 300_000);
+  });
+
+  it("sets and clears a job override, then sends subscribers a snapshot", async () => {
+    const t = await setup({ autoStart: true });
+    await start(t);
+    await t.send("jobs.subscribe", {}, "sub");
+    t.sent.length = 0;
+    await t.send("download.setLimit", { jobIds: ["job-1"], preset: "low" }, "lim");
+    expect(t.sent[0]).toMatchObject({
+      id: "lim",
+      type: "jobs.result",
+      payload: { failed: [] },
+    });
+    const snapshot = t.sent.find((m) => m.type === "jobs.snapshot");
+    expect(snapshot).toMatchObject({
+      payload: { jobs: [{ id: "job-1", limitOverride: "low" }] },
+    });
+    expect(t.history.get("job-1")?.limitOverride).toBe("low");
+    expect(t.fake.engine.setRate).toHaveBeenLastCalledWith("job-1", 1_000_000);
+
+    await t.send("download.setLimit", { jobIds: ["job-1"], preset: null }, "clr");
+    expect(t.history.get("job-1")?.limitOverride).toBeUndefined();
+  });
+
+  it("reports unknown and finished jobs, and still sets the others", async () => {
+    const t = await setup({ autoStart: true });
+    await start(t, "s1");
+    await start(t, "s2");
+    t.update("job-2", { status: "completed", outputPath: "/out/a.mp4" });
+    t.sent.length = 0;
+    await t.send("download.setLimit", {
+      jobIds: ["job-1", "job-2", "nope", "job-1"],
+      preset: "med",
+    });
+    expect(t.sent[0]).toMatchObject({
+      type: "jobs.result",
+      payload: {
+        failed: [
+          { jobId: "job-2", message: "Finished downloads have no limit." },
+          { jobId: "nope", message: "No such download." },
+        ],
+      },
+    });
+    expect(t.history.get("job-1")?.limitOverride).toBe("med");
+  });
+
+  it("keeps the override when the engine reports the job again", async () => {
+    const t = await setup({ autoStart: true });
+    await start(t);
+    await t.send("download.setLimit", { jobIds: ["job-1"], preset: "low" });
+    t.update("job-1", { progress: { bytesDownloaded: 10 } });
+    t.update("job-1", { status: "paused" });
+    expect(t.history.get("job-1")?.limitOverride).toBe("low");
+  });
+});
+
+describe("app.open and client kinds", () => {
+  /** Attach one more client to the same service; it records what it is sent. */
+  const join = (t: Awaited<ReturnType<typeof setup>>, role: ConnectionRole) => {
+    const got: HostToExtensionMessage[] = [];
+    const h = t.service.attach({ send: (m) => got.push(m) }, role);
+    const send = (type: string, payload: unknown = {}, id = "other") =>
+      h.handle({ v: PROTOCOL_VERSION, id, type, payload });
+    return { got, send };
+  };
+
+  it("app.open pushes app.attention to terminal manager clients and replies attention", async () => {
+    const t = await setup({ role: "terminal" });
+    const manager = join(t, "terminal");
+    await manager.send("hello", { client: "manager" });
+    await t.send("app.open", {}, "open");
+    expect(manager.got.map((m) => m.type)).toContain("app.attention");
+    expect(t.sent.find((m) => m.id === "open")).toMatchObject({
+      type: "app.opened",
+      payload: { mode: "attention" },
+    });
+  });
+
+  it("app.open replies no-terminal without a manager", async () => {
+    const t = await setup({ role: "terminal" });
+    const menu = join(t, "terminal");
+    await menu.send("hello", { client: "menu" });
+    await t.send("app.open", {}, "open");
+    expect(menu.got.map((m) => m.type)).not.toContain("app.attention");
+    expect(t.sent.find((m) => m.id === "open")).toMatchObject({
+      type: "app.opened",
+      payload: { mode: "no-terminal" },
+    });
+  });
+
+  it("a relay client calling itself manager gets no attention", async () => {
+    const t = await setup();
+    const fake = join(t, "relay");
+    await fake.send("hello", { client: "manager" });
+    await t.send("app.open", {}, "open");
+    expect(fake.got.map((m) => m.type)).not.toContain("app.attention");
+    expect(t.sent.find((m) => m.id === "open")).toMatchObject({ payload: { mode: "no-terminal" } });
+  });
+
+  it("a manager that has not said hello gets no attention", async () => {
+    const t = await setup();
+    const silent = join(t, "terminal");
+    await t.send("app.open", {}, "open");
+    expect(silent.got).toHaveLength(0);
+    expect(t.sent.find((m) => m.id === "open")).toMatchObject({ payload: { mode: "no-terminal" } });
+  });
+
+  const rows = (count: number) =>
+    Array.from({ length: count }, (_, i) => ({
+      id: `j${i}`,
+      request: { candidate, profileId: "best" },
+      status: "completed",
+      progress: { bytesDownloaded: 0 },
+      createdAt: i,
+      updatedAt: i,
+      files: [],
+    }));
+
+  const listed = (messages: HostToExtensionMessage[]) => {
+    const snap = messages.find((m) => m.type === "jobs.snapshot");
+    return snap?.type === "jobs.snapshot" ? snap.payload.jobs.length : -1;
+  };
+
+  it("terminal clients get the whole history in jobs.list", async () => {
+    const t = await setup({
+      role: "terminal",
+      historyFile: JSON.stringify({ version: 1, cleanExit: true, jobs: rows(300) }),
+    });
+    await t.send("jobs.list");
+    expect(listed(t.sent)).toBe(300);
+    const relay = join(t, "relay");
+    await relay.send("jobs.list");
+    expect(listed(relay.got)).toBe(200);
+  });
+
+  it("terminal snapshots hold 2000 jobs", async () => {
+    const t = await setup({
+      role: "terminal",
+      historyFile: JSON.stringify({ version: 1, cleanExit: true, jobs: rows(2000) }),
+    });
+    await t.send("jobs.list");
+    expect(listed(t.sent)).toBe(2000);
   });
 });

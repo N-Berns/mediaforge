@@ -140,3 +140,28 @@ describe("subtitle downloads", () => {
     expect(args({ lang: "en", auto: false, format: "srt" })).toContain("--continue");
   });
 });
+
+describe("speed cap", () => {
+  const candidate = {
+    id: "c",
+    pageUrl: "https://e.test/w",
+    url: "https://e.test/w",
+    kind: "video" as const,
+    streamType: "progressive" as const,
+    source: "dom" as const,
+    variants: [],
+    detectedAt: 0,
+  };
+  const input = {
+    request: { candidate, profileId: "best" },
+    profile: getProfile("best") as never,
+    workDir: "/w",
+    ffmpegPath: "/bin/ffmpeg",
+  };
+
+  it("caps the speed with --limit-rate in whole bytes per second", () => {
+    const args = buildYtDlpArgs({ ...input, limitRate: 2_500_000.9 });
+    expect(args[args.indexOf("--limit-rate") + 1]).toBe("2500000");
+    expect(buildYtDlpArgs(input)).not.toContain("--limit-rate");
+  });
+});

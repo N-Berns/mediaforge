@@ -120,10 +120,13 @@ export async function runCore(deps: RunCoreDeps): Promise<number> {
   // exist, so no await sits between publishing them and creating the service: a relay that
   // connects at once would otherwise be closed for want of a service.
   let maxConcurrent = DEFAULT_SETTINGS.concurrency;
+  let bandwidth = { limitPreset: DEFAULT_SETTINGS.limitPreset, limits: DEFAULT_SETTINGS.limits };
   try {
-    maxConcurrent = (await deps.settings.load()).concurrency;
+    const initial = await deps.settings.load();
+    maxConcurrent = initial.concurrency;
+    bandwidth = { limitPreset: initial.limitPreset, limits: initial.limits };
   } catch {
-    // Keep the default.
+    // Keep the defaults.
   }
 
   let server: Server;
@@ -202,6 +205,7 @@ export async function runCore(deps: RunCoreDeps): Promise<number> {
     service = new CoreService({
       createEngine: (onUpdate) => deps.createEngine(onUpdate, setup, { maxConcurrent }),
       settings: deps.settings,
+      bandwidth,
       history,
       trash: deps.trash ?? createTrash(),
       provisioner: setup,

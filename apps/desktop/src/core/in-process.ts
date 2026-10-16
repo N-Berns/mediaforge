@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import type { JobOrigin } from "@mediaforge/shared-types";
 import { memorySettingsStore } from "../settings.ts";
 import type { CoreClient } from "./client.ts";
 import { openCoreClient } from "./client.ts";
@@ -21,7 +22,14 @@ const readyProvisioner: Provisioner = {
  */
 export function inProcessCore(
   deps: Partial<CoreServiceDeps> & Pick<CoreServiceDeps, "createEngine">,
-): { connect: CoreConnector; service: Promise<CoreService> } {
+): {
+  connect: CoreConnector;
+  /** Connect as this kind of client (the manager, the menu…). */
+  connectAs: (client: JobOrigin) => CoreConnector;
+  /** Close every open connection, as if the core went away. */
+  dropAll: () => void;
+  service: Promise<CoreService>;
+} {
   const service = (async () =>
     new CoreService({
       settings: memorySettingsStore(),
@@ -45,7 +53,8 @@ export function inProcessCore(
       ...deps,
     }))();
 
-  const connect = async (): Promise<CoreClient> => {
+  const open = new Set<() => void>();
+  const connectAs = (client: JobOrigin) => async (): Promise<CoreClient> => {
     const core = await service;
     let toClient: (message: unknown) => void = () => {};
     const closeHandlers: (() => void)[] = [];
@@ -62,9 +71,11 @@ export function inProcessCore(
     const close = () => {
       if (closed) return;
       closed = true;
+      open.delete(close);
       handle.detach();
       for (const h of closeHandlers) queueMicrotask(h);
     };
+    open.add(close);
     const conn: Connection = {
       send: (m) => void handle.handle(structuredClone(m)),
       onMessage: (h) => {
@@ -73,7 +84,10 @@ export function inProcessCore(
       onClose: (h) => void closeHandlers.push(h),
       close,
     };
-    return openCoreClient(conn, { client: "cli" });
+    return openCoreClient(conn, { client });
   };
-  return { connect, service };
+  const dropAll = () => {
+    for (const close of [...open]) close();
+  };
+  return { connect: connectAs("cli"), connectAs, dropAll, service };
 }

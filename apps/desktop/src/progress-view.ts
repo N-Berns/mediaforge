@@ -1,15 +1,5 @@
+import { formatBytes, formatRate, type SpeedUnit } from "@mediaforge/shared-types";
 import type { EngineJob } from "./engine/index.ts";
-
-export function formatBytes(bytes: number): string {
-  const units = ["B", "KB", "MB", "GB", "TB"];
-  let value = bytes;
-  let unit = 0;
-  while (value >= 1024 && unit < units.length - 1) {
-    value /= 1024;
-    unit++;
-  }
-  return unit === 0 ? `${Math.round(value)} B` : `${value.toFixed(1)} ${units[unit]}`;
-}
 
 export function formatDuration(seconds: number): string {
   const total = Math.max(0, Math.round(seconds));
@@ -22,13 +12,13 @@ export function formatDuration(seconds: number): string {
 }
 
 /** One-line description of a job's current state. */
-export function formatProgressLine(job: EngineJob): string {
+export function formatProgressLine(job: EngineJob, unit: SpeedUnit = "bytes"): string {
   if (job.status === "downloading") {
     const { percent, bytesDownloaded, speed, etaSec } = job.progress;
     return [
       "downloading",
       percent !== undefined ? `${percent.toFixed(1)}%` : formatBytes(bytesDownloaded),
-      speed !== undefined && `${formatBytes(speed)}/s`,
+      speed !== undefined && formatRate(speed, unit),
       etaSec !== undefined && `ETA ${formatDuration(etaSec)}`,
     ]
       .filter(Boolean)
@@ -41,6 +31,8 @@ export interface ProgressViewOptions {
   write: (text: string) => void;
   isTTY: boolean;
   quiet: boolean;
+  /** Bytes or bits per second. Default bytes. */
+  speedUnit?: SpeedUnit;
 }
 
 const CLEAR_LINE = "\r\x1b[K";
@@ -50,7 +42,12 @@ const ACTIVE = new Set(["queued", "downloading", "processing"]);
  * Shows job progress on stderr: one updating line on a terminal, one line per
  * status change otherwise (no control codes in logs or pipes).
  */
-export function createProgressView({ write, isTTY, quiet }: ProgressViewOptions) {
+export function createProgressView({
+  write,
+  isTTY,
+  quiet,
+  speedUnit = "bytes",
+}: ProgressViewOptions) {
   let lastStatus: string | undefined;
   let dirty = false;
 
@@ -58,10 +55,10 @@ export function createProgressView({ write, isTTY, quiet }: ProgressViewOptions)
     update(job: EngineJob): void {
       if (quiet || !ACTIVE.has(job.status)) return;
       if (isTTY) {
-        write(`${CLEAR_LINE}${formatProgressLine(job)}`);
+        write(`${CLEAR_LINE}${formatProgressLine(job, speedUnit)}`);
         dirty = true;
       } else if (job.status !== lastStatus) {
-        write(`${formatProgressLine(job)}\n`);
+        write(`${formatProgressLine(job, speedUnit)}\n`);
       }
       lastStatus = job.status;
     },

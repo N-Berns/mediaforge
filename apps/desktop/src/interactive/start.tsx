@@ -1,5 +1,6 @@
 import { stat } from "node:fs/promises";
 import { render } from "ink";
+import { flashWindow } from "../attention.ts";
 import { defaultBinDir } from "../binaries.ts";
 import { applyAutostart } from "../core/autostart.ts";
 import { defaultCoreConnector } from "../core/connect.ts";
@@ -66,17 +67,22 @@ export function realDeps(): AppDeps {
     },
     binDir: defaultBinDir(),
     version: VERSION,
+    managerCore: defaultCoreConnector("manager"),
+    flash: () => flashWindow(),
   };
 }
 
 /**
- * Run the full-screen interactive app. It uses the terminal's alternate screen,
- * so quitting restores whatever was on screen before.
+ * Run the full-screen interactive app, on the downloads manager with `manager`. It uses the
+ * terminal's alternate screen, so quitting restores whatever was on screen before.
  */
-export async function startInteractive(): Promise<ExitCode> {
+export async function startInteractive(options: { manager?: boolean } = {}): Promise<ExitCode> {
   process.stdout.write(ENTER_SCREEN);
   try {
-    const app = render(<App deps={realDeps()} />, { exitOnCtrlC: false });
+    const app = render(
+      <App deps={realDeps()} {...(options.manager && { start: "manager" as const })} />,
+      { exitOnCtrlC: false },
+    );
     await app.waitUntilExit();
   } finally {
     process.stdout.write(LEAVE_SCREEN);

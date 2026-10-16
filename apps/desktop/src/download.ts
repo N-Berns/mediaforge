@@ -78,9 +78,14 @@ export const defaultDownloadDeps = (): DownloadDeps => ({
 });
 
 /** A bare URL has no detection data, so the candidate only carries what the engine needs. */
-export const candidateFor = (url: string, kind: "video" | "audio"): MediaCandidate => ({
+export const candidateFor = (
+  url: string,
+  kind: "video" | "audio",
+  title?: string,
+): MediaCandidate => ({
   id: url,
   pageUrl: url,
+  ...(title && { pageTitle: title }),
   url,
   kind,
   streamType: "progressive",
@@ -121,6 +126,7 @@ export async function runDownload(
     write: io.stderr,
     isTTY: deps.isTTY,
     quiet: values.quiet ?? false,
+    speedUnit: settings.speedUnit,
   });
   const baseDir = values.output ?? deps.env[OUTPUT_DIR_ENV] ?? settings.folder;
   // The type subfolder needs a concrete folder, so name the built-in default when none is set.

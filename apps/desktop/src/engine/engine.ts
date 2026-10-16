@@ -73,8 +73,17 @@ interface Entry {
   controller: AbortController;
   settled: Promise<EngineJob>;
   settle: (job: EngineJob) => void;
-  /** Why the controller was aborted: a pause keeps the partial files, a cancel removes them. */
-  stopReason: "pause" | "cancel" | undefined;
+  /**
+   * Why the controller was aborted: a pause keeps the partial files, a cancel removes them, a
+   * restart runs yt-dlp again at once with the new speed cap.
+   */
+  stopReason: "pause" | "cancel" | "restart" | undefined;
+  /** The cap `setRate` asked for, in bytes per second. */
+  rate: number | undefined;
+  /** The cap the running yt-dlp was started with. */
+  appliedRate: number | undefined;
+  /** True once this try's yt-dlp has its arguments, so `appliedRate` means something. */
+  spawned: boolean;
   formatSelector: string | undefined;
   plan: PlannedStep[] | undefined;
   /** Never copied onto the job: it carries cookies and headers. */
@@ -139,6 +148,9 @@ export class DownloadEngine {
       settled: Promise.resolve(job),
       settle: () => {},
       stopReason: undefined,
+      rate: undefined,
+      appliedRate: undefined,
+      spawned: false,
       formatSelector: options.formatSelector,
       plan: options.plan,
       context: options.context,
@@ -189,8 +201,14 @@ export class DownloadEngine {
   /** Stop a queued or running job and keep its partial files, so `resume` can continue it. */
   pause(id: string): boolean {
     const entry = this.#entries.get(id);
-    // A stop already in flight (cancel or pause) is final; do not overwrite it.
-    if (!entry || !ACTIVE.has(entry.job.status) || entry.stopReason) return false;
+    // A cancel or pause already in flight is final; a restart is not.
+    if (
+      !entry ||
+      !ACTIVE.has(entry.job.status) ||
+      (entry.stopReason && entry.stopReason !== "restart")
+    ) {
+      return false;
+    }
     const queued = this.#queue.indexOf(id);
     if (queued >= 0) {
       this.#queue.splice(queued, 1);
@@ -227,6 +245,9 @@ export class DownloadEngine {
       settled: Promise.resolve(job),
       settle: () => {},
       stopReason: undefined,
+      rate: undefined,
+      appliedRate: undefined,
+      spawned: false,
       formatSelector: options.formatSelector,
       plan: options.plan,
       // Cookies and headers are never stored, so a restored job runs without them.
@@ -234,6 +255,28 @@ export class DownloadEngine {
     };
     this.#newSettle(entry);
     this.#entries.set(job.id, entry);
+  }
+
+  /** The speed cap for this job, in bytes per second (undefined: none). Used from its next start. */
+  setRate(id: string, bytesPerSec: number | undefined): void {
+    const entry = this.#entries.get(id);
+    if (entry) entry.rate = bytesPerSec;
+  }
+
+  /**
+   * Restart a downloading job whose yt-dlp runs with another cap than `setRate` last asked for.
+   * Clients see nothing: the status stays downloading, the job keeps its slot, and yt-dlp
+   * continues the partial files. False when there was nothing to restart.
+   */
+  applyRate(id: string): boolean {
+    const entry = this.#entries.get(id);
+    if (entry?.job.status !== "downloading" || entry.stopReason || !entry.spawned) {
+      return false;
+    }
+    if (entry.rate === entry.appliedRate) return false;
+    entry.stopReason = "restart";
+    entry.controller.abort();
+    return true;
   }
 
   /**
@@ -314,13 +357,18 @@ export class DownloadEngine {
     return pick ? join(workDir, pick) : printed;
   }
 
-  async #execute(entry: Entry): Promise<void> {
+  /** `carried` is the step tracker of a try that a speed cap restart cut short. */
+  async #execute(entry: Entry, carried?: StepTracker): Promise<void> {
     const { job, controller } = entry;
     const profile = getProfile(job.request.profileId) as OutputProfile;
     const outputDir = resolve(job.request.outputDir ?? this.#outputDir);
     const workDir = this.#workDirOf(job);
     const secrets = contextSecrets(entry.context);
     let outcome: Partial<EngineJob>;
+    let restart = false;
+    let tracker: StepTracker | undefined;
+    // A resumed try has no yt-dlp yet: the last try's applied cap means nothing until it spawns.
+    entry.spawned = false;
 
     this.#update(entry, { status: "downloading", workDir });
     try {
@@ -331,19 +379,21 @@ export class DownloadEngine {
 
       const stderr: string[] = [];
       let filePath: string | undefined;
-      const tracker = new StepTracker(entry.plan);
-      const stepsPatch = () => ({ steps: tracker.snapshot(), overallPercent: tracker.overall });
-      this.#update(entry, stepsPatch());
+      // A restart keeps the tracker, so the steps and the overall bar never go backwards.
+      tracker = carried ?? new StepTracker(entry.plan);
+      const steps = tracker;
+      const stepsPatch = () => ({ steps: steps.snapshot(), overallPercent: steps.overall });
+      if (!carried) this.#update(entry, stepsPatch());
       // yt-dlp may route progress to either stream, so both go through one parser.
       const onLine = (line: string) => {
         const parsed = parseProgress(line);
         if (parsed) {
-          tracker.onDownload(parsed.progress, parsed.stream);
+          steps.onDownload(parsed.progress, parsed.stream);
           return this.#update(entry, { progress: parsed.progress, ...stepsPatch() });
         }
         const post = parsePostprocessLine(line);
         if (post) {
-          tracker.onPostprocess(post);
+          steps.onPostprocess(post);
           return this.#update(entry, {
             ...(post.status === "started" && { status: "processing" as const }),
             ...stepsPatch(),
@@ -356,14 +406,14 @@ export class DownloadEngine {
       const progressFile = join(workDir, "ffmpeg-progress.txt");
       let reading = false;
       const poll = setInterval(() => {
-        if (reading || !tracker.active || !isPostStep(tracker.active.kind)) return;
+        if (reading || !steps.active || !isPostStep(steps.active.kind)) return;
         reading = true;
         this.#fs
           .readText(progressFile)
           .then((text) => {
             const { seconds } = parseFfmpegProgress(text);
             if (seconds === undefined) return;
-            tracker.onFfmpegTime(seconds);
+            steps.onFfmpegTime(seconds);
             this.#update(entry, stepsPatch());
           })
           .catch(() => {})
@@ -372,6 +422,8 @@ export class DownloadEngine {
           });
       }, FFMPEG_POLL_MS);
 
+      entry.appliedRate = entry.rate;
+      entry.spawned = true;
       const { exitCode } = await this.#run(
         ytDlp.path,
         buildYtDlpArgs({
@@ -385,6 +437,7 @@ export class DownloadEngine {
           ...(!job.request.subtitle && { ffmpegProgressFile: progressFile }),
           jsRuntimeArgs,
           context: entry.context,
+          limitRate: entry.appliedRate,
         }),
         {
           onStdoutLine: onLine,
@@ -397,7 +450,11 @@ export class DownloadEngine {
         controller.signal,
       ).finally(() => clearInterval(poll));
 
-      if (controller.signal.aborted) {
+      const restarting = controller.signal.aborted && entry.stopReason === "restart";
+      if (restarting && exitCode !== 0) {
+        restart = true;
+        outcome = {};
+      } else if (controller.signal.aborted && !restarting) {
         outcome = { status: entry.stopReason === "pause" ? "paused" : "cancelled" };
       } else if (exitCode === 0 && (filePath || job.request.subtitle)) {
         // yt-dlp prints the (unwritten) video name for a subtitle job, so the file is whatever
@@ -409,7 +466,7 @@ export class DownloadEngine {
         const { base, ext } = splitName(basename(finished));
         const finalPath = await uniquePath(outputDir, base, ext, this.#fs.exists);
         await this.#fs.rename(finished, finalPath);
-        tracker.complete();
+        steps.complete();
         outcome = { status: "completed", outputPath: finalPath, ...stepsPatch() };
       } else {
         const failure = classifyFailure(stderr, exitCode);
@@ -420,13 +477,26 @@ export class DownloadEngine {
         };
       }
     } catch (error) {
-      outcome = controller.signal.aborted
-        ? { status: entry.stopReason === "pause" ? "paused" : "cancelled" }
-        : {
-            status: "failed",
-            error: redactSecrets(error instanceof Error ? error.message : String(error), secrets),
-            errorKind: error instanceof CliError ? error.exitCode : ExitCode.Failure,
-          };
+      if (controller.signal.aborted && entry.stopReason === "restart") {
+        restart = true;
+        outcome = {};
+      } else {
+        outcome = controller.signal.aborted
+          ? { status: entry.stopReason === "pause" ? "paused" : "cancelled" }
+          : {
+              status: "failed",
+              error: redactSecrets(error instanceof Error ? error.message : String(error), secrets),
+              errorKind: error instanceof CliError ? error.exitCode : ExitCode.Failure,
+            };
+      }
+    }
+
+    // Same slot, same id, same work folder: run yt-dlp again with the new cap.
+    if (restart) {
+      entry.controller = new AbortController();
+      entry.stopReason = undefined;
+      entry.spawned = false;
+      return this.#execute(entry, tracker);
     }
 
     // Partial files stay for a paused job (resume continues them) and a failed one (retry does).

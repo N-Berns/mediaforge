@@ -74,6 +74,16 @@ export const DownloadStatusSchema = z.enum([
 
 export const JobOriginSchema = z.enum(["extension", "manager", "menu", "cli"]);
 
+export const LimitPresetSchema = z.enum(["high", "med", "low", "custom"]);
+export const SpeedUnitSchema = z.enum(["bytes", "bits"]);
+/** Bytes per second per preset; null is unlimited. 1e15 is 1 PB/s. */
+export const LimitsSchema = z.object({
+  high: z.number().int().positive().max(1e15).nullable(),
+  med: z.number().int().positive().max(1e15).nullable(),
+  low: z.number().int().positive().max(1e15).nullable(),
+  custom: z.number().int().positive().max(1e15).nullable(),
+});
+
 const StepKindSchema = z.enum(["download", "video", "audio", "merge", "convert"]);
 
 export const StepSchema = z.object({
@@ -108,6 +118,7 @@ export const DownloadJobSchema = z.object({
   steps: z.array(StepSchema).max(MAX_STEPS).optional(),
   overallPercent: z.number().min(0).max(100).optional(),
   errorKind: z.number().int().optional(),
+  limitOverride: LimitPresetSchema.optional(),
 });
 
 export const NoticeSchema = z.object({
@@ -133,6 +144,10 @@ export const ExtensionSettingsSchema = z.object({
   askQuality: z.boolean(),
   folder: z.string().optional(),
   quality: z.string().optional(),
+  // Optional so a newer popup still reads settings from a phase 2 core; the core always sends them.
+  speedUnit: SpeedUnitSchema.optional(),
+  limitPreset: LimitPresetSchema.optional(),
+  limits: LimitsSchema.optional(),
 });
 
 export type SetupState = z.infer<typeof SetupStateSchema>;

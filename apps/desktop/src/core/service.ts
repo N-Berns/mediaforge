@@ -7,13 +7,14 @@ import {
   type ProbedMedia,
   parseExtensionMessage,
 } from "@mediaforge/shared-protocol";
-import type { DownloadJob, JobOrigin } from "@mediaforge/shared-types";
+import { DEFAULT_LIMITS, type DownloadJob, type JobOrigin } from "@mediaforge/shared-types";
 import { contextError } from "../engine/args.ts";
 import type { DownloadEngine, EngineJob } from "../engine/index.ts";
 import { defaultOutputDir } from "../engine/paths.ts";
 import { CliError, ExitCode } from "../exit-codes.ts";
 import { kindOfProfile, withKindFolder } from "../kind-folder.ts";
 import { type SettingsStore, sanitizeSettings } from "../settings.ts";
+import { Bandwidth, type BandwidthSettings } from "./bandwidth.ts";
 import type { HistoryJob, HistoryStore } from "./history.ts";
 import type { ConnectionRole } from "./ipc.ts";
 import { filenameError, folderSettingError, outputDirError } from "./path-rules.ts";
@@ -50,6 +51,8 @@ export interface CoreServiceDeps {
   history: HistoryStore;
   /** Moves files to the Recycle Bin or the Trash. */
   trash: TrashFn;
+  /** The bandwidth settings at start. `applySettings` and `settings.set` keep them current. */
+  bandwidth?: BandwidthSettings;
 }
 
 interface ClientState {
@@ -62,6 +65,8 @@ interface ClientState {
   active: boolean;
   subscribedAll: boolean;
   jobs: Set<string>;
+  /** What the client said it is in `hello`. Trusted only together with the terminal role. */
+  kind?: JobOrigin;
 }
 
 /**
@@ -73,6 +78,8 @@ const PROGRESS_INTERVAL_MS = 250;
 const SNAPSHOT_LIMIT = 200;
 /** Margin under MAX_HOST_MESSAGE_BYTES (1 MiB) for the snapshot's whole serialized message. */
 const SNAPSHOT_MAX_BYTES = 900_000;
+/** Terminal clients get every job; this only guards against a runaway history file. */
+const TERMINAL_SNAPSHOT_MAX_BYTES = 60_000_000;
 /** Longest error text sent back for an invalid message; zod issue lists can run to many KiB. */
 const MAX_ERROR_TEXT = 1000;
 /** Probed pages whose format ids are remembered, so a `variantId` can be checked. */
@@ -112,6 +119,7 @@ function describeProbeError(error: unknown): { code: string; text: string } {
 export class CoreService {
   readonly #deps: CoreServiceDeps;
   readonly #engine: DownloadEngine;
+  readonly #bandwidth: Bandwidth;
   readonly #clients = new Set<ClientState>();
   /** When and with which status each job's progress was last passed on, for throttling. */
   readonly #lastProgress = new Map<string, { at: number; status: EngineJob["status"] }>();
@@ -129,6 +137,11 @@ export class CoreService {
   constructor(deps: CoreServiceDeps) {
     this.#deps = deps;
     this.#engine = deps.createEngine((job) => this.#onJob(job));
+    this.#bandwidth = new Bandwidth({
+      engine: this.#engine,
+      overrideOf: (id) => this.#deps.history.get(id)?.limitOverride,
+      settings: deps.bandwidth ?? { limitPreset: "high", limits: { ...DEFAULT_LIMITS } },
+    });
     // Paused and failed jobs from earlier sessions can be resumed like this session's.
     for (const row of deps.history.jobs()) {
       if (row.status !== "paused" && row.status !== "failed") continue;
@@ -174,10 +187,12 @@ export class CoreService {
   async applySettings(): Promise<void> {
     const settings = await this.#deps.settings.load();
     this.#engine.setMaxConcurrent(settings.concurrency);
+    this.#bandwidth.setSettings({ limitPreset: settings.limitPreset, limits: settings.limits });
   }
 
   /** Record a clean exit. Called once, when the core shuts down normally. */
   async shutdown(): Promise<void> {
+    this.#bandwidth.dispose();
     await this.#deps.history.close();
   }
 
@@ -282,6 +297,8 @@ export class CoreService {
   async #dispatch(state: ClientState, message: ExtensionToHostMessage): Promise<void> {
     switch (message.type) {
       case "hello":
+        state.kind = message.payload.client;
+        return this.#hello(state, message.id);
       case "host.info":
         return this.#hello(state, message.id);
       case "download.start":
@@ -294,7 +311,7 @@ export class CoreService {
       }
       case "jobs.list":
         return this.#reply(state, message.id, "jobs.snapshot", {
-          jobs: this.#snapshot(message.id),
+          jobs: this.#snapshot(message.id, state.role),
         });
       case "jobs.subscribe":
         state.subscribedAll = true;
@@ -320,6 +337,23 @@ export class CoreService {
             ? undefined
             : "Only paused or failed downloads can be resumed.",
         );
+      case "download.setLimit": {
+        const preset = message.payload.preset;
+        await this.#batch(state, message.id, message.payload.jobIds, (jobId) => {
+          const row = this.#deps.history.get(jobId);
+          if (!row) return UNKNOWN;
+          if (row.status === "completed" || row.status === "cancelled") {
+            return "Finished downloads have no limit.";
+          }
+          const { limitOverride: _old, ...rest } = row;
+          this.#deps.history.upsert(preset ? { ...rest, limitOverride: preset } : rest, {
+            save: true,
+          });
+          return undefined;
+        });
+        this.#bandwidth.update();
+        return this.#pushSnapshot();
+      }
       case "jobs.remove":
         {
           const failed: { jobId: string; message: string }[] = [];
@@ -361,6 +395,17 @@ export class CoreService {
         if (state.role !== "terminal") return this.#forbidden(state, message.id);
         await this.applySettings();
         return this.#sendSettings(state, message.id);
+      case "app.open": {
+        let found = false;
+        for (const client of this.#clients) {
+          if (!client.active || client.role !== "terminal" || client.kind !== "manager") continue;
+          found = true;
+          this.#reply(client, this.#deps.newId(), "app.attention", {});
+        }
+        return this.#reply(state, message.id, "app.opened", {
+          mode: found ? "attention" : "no-terminal",
+        });
+      }
       default: {
         // Compile-time: adding a message type without a case fails here. Runtime: say so.
         const unhandled: never = message;
@@ -372,14 +417,14 @@ export class CoreService {
 
   /**
    * The newest jobs, trimmed from the oldest end until the whole `jobs.snapshot` message fits
-   * under the host message cap. Jobs carry their candidate's variant list, which can be large.
+   * under the message cap. Jobs carry their candidate's variant list, which can be large. Relay
+   * clients get at most SNAPSHOT_LIMIT jobs under the browser's cap; terminal clients get all.
    */
-  #snapshot(requestId: string): DownloadJob[] {
-    const newest = this.#deps.history
-      .jobs()
-      .sort((a, b) => a.createdAt - b.createdAt)
-      .slice(-SNAPSHOT_LIMIT)
-      .map(toProtocolJob);
+  #snapshot(requestId: string, role: ConnectionRole): DownloadJob[] {
+    const terminal = role === "terminal";
+    const sorted = this.#deps.history.jobs().sort((a, b) => a.createdAt - b.createdAt);
+    const newest = (terminal ? sorted : sorted.slice(-SNAPSHOT_LIMIT)).map(toProtocolJob);
+    const maxBytes = terminal ? TERMINAL_SNAPSHOT_MAX_BYTES : SNAPSHOT_MAX_BYTES;
     const sizes = newest.map(byteLength);
     // The message is the envelope around a JSON array: each job adds its own bytes, and every
     // job after the first adds one separating comma.
@@ -393,7 +438,7 @@ export class CoreService {
       sizes.reduce((sum, size) => sum + size, 0) +
       Math.max(0, newest.length - 1);
     let dropped = 0;
-    while (dropped < newest.length && total > SNAPSHOT_MAX_BYTES) {
+    while (dropped < newest.length && total > maxBytes) {
       const comma = newest.length - dropped > 1 ? 1 : 0;
       total -= (sizes[dropped] ?? 0) + comma;
       dropped += 1;
@@ -644,6 +689,9 @@ export class CoreService {
       extensionUi: s.extensionUi,
       keepRunning: s.keepRunning,
       askQuality: s.askQuality,
+      speedUnit: s.speedUnit,
+      limitPreset: s.limitPreset,
+      limits: s.limits,
       ...(s.folder && { folder: s.folder }),
       ...(s.quality && { quality: s.quality }),
     });
@@ -653,6 +701,11 @@ export class CoreService {
     state: ClientState,
     message: Extract<ExtensionToHostMessage, { type: "settings.set" }>,
   ): Promise<void> {
+    // Preset values are edited in MediaForge itself; the popup only picks the preset.
+    if (state.role !== "terminal" && message.payload.limits !== undefined) {
+      this.#forbidden(state, message.id);
+      return;
+    }
     // `folder: ""` (or only spaces) keeps its meaning "clear the folder": it is not validated,
     // and `sanitizeSettings` drops it. Any other folder must be a full, valid path.
     const folder = message.payload.folder?.trim();
@@ -664,6 +717,7 @@ export class CoreService {
     const current = await this.#deps.settings.load();
     const next = sanitizeSettings({ ...current, ...message.payload });
     await this.#deps.settings.save(next);
+    this.#bandwidth.setSettings({ limitPreset: next.limitPreset, limits: next.limits });
     if (next.keepRunning !== current.keepRunning) {
       await this.#deps.applyAutostart(next.keepRunning);
     }
@@ -686,6 +740,7 @@ export class CoreService {
       ...((job.workDir ?? before?.workDir) && { workDir: job.workDir ?? before?.workDir }),
       ...(before?.formatSelector && { formatSelector: before.formatSelector }),
       ...(before?.plan && { plan: before.plan }),
+      ...(before?.limitOverride && { limitOverride: before.limitOverride }),
     };
     if (job.status === "completed" && sizeBytes && lastTryAt !== undefined) {
       const seconds = (this.#deps.now() - lastTryAt) / 1000;
@@ -695,7 +750,10 @@ export class CoreService {
   }
 
   #onJob(job: EngineJob): void {
+    const before = this.#deps.history.get(job.id)?.status;
     this.#record(job);
+    // A job starting or stopping changes every running job's share.
+    if (before !== job.status) this.#bandwidth.update();
     this.#settleNotice();
     if (TERMINAL.has(job.status)) {
       this.#lastProgress.delete(job.id);
@@ -776,13 +834,18 @@ export class CoreService {
     }
   }
 
-  /** Rows went away: subscribers get the new list, and the notice may no longer apply. */
-  #afterRemoval(): void {
+  /** Subscribers get the whole list again: rows went away or changed outside the engine. */
+  #pushSnapshot(): void {
     for (const state of this.#clients) {
       if (!state.active || !state.subscribedAll) continue;
       const id = this.#deps.newId();
-      this.#reply(state, id, "jobs.snapshot", { jobs: this.#snapshot(id) });
+      this.#reply(state, id, "jobs.snapshot", { jobs: this.#snapshot(id, state.role) });
     }
+  }
+
+  /** Rows went away: subscribers get the new list, and the notice may no longer apply. */
+  #afterRemoval(): void {
+    this.#pushSnapshot();
     this.#settleNotice();
   }
 
