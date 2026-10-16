@@ -48,6 +48,9 @@ export function split(action: Action, jobs: readonly DownloadJob[]): Split {
   return { ids, skipped: jobs.length - ids.length };
 }
 
+/** First, so a narrow window never hides which keys answer. */
+const KEYS = "y/N  ";
+
 const downloads = (n: number) => `${n} download${n === 1 ? "" : "s"}`;
 
 export function confirmText(
@@ -57,23 +60,23 @@ export function confirmText(
   const n = jobs.length;
   switch (action) {
     case "cancel":
-      return `Cancel ${downloads(n)}? Partial files are deleted. y/N`;
+      return `${KEYS}Cancel ${downloads(n)}? Partial files are deleted.`;
     case "remove": {
       const running = jobs.filter((job) => RUNNING.includes(job.status)).length;
       if (running === 0) return undefined;
       const verb = running === 1 ? "is" : "are";
-      return `Remove ${downloads(n)}? ${running} ${verb} still running and will be cancelled. y/N`;
+      return `${KEYS}Remove ${n}? ${running} ${verb} running and will be cancelled.`;
     }
     case "trash":
-      return `Move the files of ${downloads(n)} to the trash? y/N`;
+      return `${KEYS}Trash the files of ${downloads(n)}?`;
     case "clear":
-      return `Clear ${n} finished download${n === 1 ? "" : "s"} from the list? Files stay on disk. y/N`;
+      return `${KEYS}Clear ${n} finished? Files stay on disk.`;
   }
 }
 
 export function tooLargeText(count: number): string {
   const verb = count === 1 ? "is" : "are";
-  return `${downloads(count)} ${verb} too large for the Recycle Bin and will be deleted permanently. Delete? y/N`;
+  return `${KEYS}${count} ${verb} too big for the Recycle Bin. Delete for good?`;
 }
 
 const WORDS: Record<Action | "clear", { done: string; verb: string }> = {

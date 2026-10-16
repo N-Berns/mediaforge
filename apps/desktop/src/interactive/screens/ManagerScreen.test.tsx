@@ -9,6 +9,7 @@ import type { ProcessRunner } from "../../engine/process.ts";
 import { memorySettingsStore, type Settings } from "../../settings.ts";
 import type { AppDeps } from "../deps.ts";
 import { DepsContext } from "../deps.ts";
+import { NO_FILTERS } from "../manager/model.ts";
 import { SpeedUnitContext } from "../speed-unit.ts";
 import { ManagerScreen, type ManagerScreenProps } from "./ManagerScreen.tsx";
 
@@ -377,7 +378,7 @@ describe("ManagerScreen actions", () => {
     const id = await startOne(m, "Running one");
     await m.press("c");
     await vi.waitFor(() =>
-      expect(m.frame()).toContain("Cancel 1 download? Partial files are deleted. y/N"),
+      expect(m.frame()).toContain("y/N  Cancel 1 download? Partial files are deleted."),
     );
     expect(m.frame()).not.toContain("a Add");
     await m.press("n");
@@ -394,9 +395,7 @@ describe("ManagerScreen actions", () => {
     const id = await startOne(m, "Running one");
     await m.press("x");
     await vi.waitFor(() =>
-      expect(m.frame()).toContain(
-        "Remove 1 download? 1 is still running and will be cancelled. y/N",
-      ),
+      expect(m.frame()).toContain("y/N  Remove 1? 1 is running and will be cancelled."),
     );
     await m.press("y");
     await vi.waitFor(() => expect(m.history.get(id)).toBeUndefined());
@@ -409,9 +408,7 @@ describe("ManagerScreen actions", () => {
       jobs: [row("done", { title: "Done one", lastTryAt: 1, files: ["/dl/a.mp4"] })],
     });
     await m.press(KEY.del);
-    await vi.waitFor(() =>
-      expect(m.frame()).toContain("Move the files of 1 download to the trash? y/N"),
-    );
+    await vi.waitFor(() => expect(m.frame()).toContain("y/N  Trash the files of 1 download?"));
     await m.press("y");
     await vi.waitFor(() => expect(m.history.get("done")).toBeUndefined());
     expect(trash).toHaveBeenCalledWith(["/dl/a.mp4"], { permanent: false });
@@ -428,12 +425,10 @@ describe("ManagerScreen actions", () => {
       jobs: [row("big", { title: "Huge one", lastTryAt: 1, files: ["/dl/huge.mkv"] })],
     });
     await m.press(KEY.del);
-    await vi.waitFor(() => expect(m.frame()).toContain("to the trash? y/N"));
+    await vi.waitFor(() => expect(m.frame()).toContain("y/N  Trash the files of"));
     await m.press("y");
     await vi.waitFor(() =>
-      expect(m.frame()).toContain(
-        "1 download is too large for the Recycle Bin and will be deleted permanently. Delete? y/N",
-      ),
+      expect(m.frame()).toContain("y/N  1 is too big for the Recycle Bin. Delete for good?"),
     );
     await m.press("y");
     await vi.waitFor(() => expect(m.history.get("big")).toBeUndefined());
@@ -449,9 +444,7 @@ describe("ManagerScreen actions", () => {
     });
     await m.press("C");
     await vi.waitFor(() =>
-      expect(m.frame()).toContain(
-        "Clear 1 finished download from the list? Files stay on disk. y/N",
-      ),
+      expect(m.frame()).toContain("y/N  Clear 1 finished? Files stay on disk."),
     );
     await m.press("y");
     await vi.waitFor(() => expect(m.history.get("d1")).toBeUndefined());
@@ -806,5 +799,89 @@ describe("ManagerScreen key lock and compact panels", () => {
     for (let i = 0; i < 40; i++) await m.press(KEY.down);
     await vi.waitFor(() => expect(m.frame()).toContain("w599"));
     expect(m.frame().split("\n").length).toBeLessThanOrEqual(height);
+  });
+});
+
+describe("ManagerScreen prompts, focus, clear and banners", () => {
+  it("a prompt wider than the window wraps instead of being cut", async () => {
+    const trash = vi.fn<TrashFn>(async (paths, options) =>
+      options?.permanent
+        ? { failed: [] }
+        : { failed: paths.map((path) => ({ path, message: "too big", code: "too-large" })) },
+    );
+    const m = await mount({
+      columns: 40,
+      trash,
+      jobs: [row("big", { title: "Huge one", lastTryAt: 1, files: ["/dl/huge.mkv"] })],
+    });
+    await m.press(KEY.del, "y");
+    await vi.waitFor(() => expect(m.frame()).toContain("Delete for good?"));
+    expect(m.frame()).toContain("y/N  1 is too big");
+  });
+
+  it("does not move the cursor to a new row the search hides", async () => {
+    const m = await mount({
+      jobs: [
+        row("a1", { title: "Alpha", lastTryAt: 2 }),
+        row("b1", { title: "Beta", lastTryAt: 1 }),
+      ],
+      props: { focusId: "b1", view: { ticks: [], search: "alp", filters: NO_FILTERS } },
+    });
+    await m.press(KEY.esc);
+    await vi.waitFor(() => expect(tableRows(m.frame())).toHaveLength(2));
+    expect(tableRows(m.frame()).find((l) => l.startsWith(">"))).toContain("Alpha");
+  });
+
+  it("uses the focus once and says the note once", async () => {
+    const onFocused = vi.fn();
+    const m = await mount({
+      jobs: [
+        row("a1", { title: "Alpha", lastTryAt: 2 }),
+        row("b1", { title: "Beta", lastTryAt: 1 }),
+      ],
+      props: { focusId: "b1", note: "Could not start: nope", onFocused },
+    });
+    await vi.waitFor(() =>
+      expect(tableRows(m.frame()).find((l) => l.startsWith(">"))).toContain("Beta"),
+    );
+    expect(m.frame()).toContain("Could not start: nope");
+    await vi.waitFor(() => expect(onFocused).toHaveBeenCalledTimes(1));
+  });
+
+  it("Clear finished clears the rows finished when y is pressed", async () => {
+    const slow = slowRunner();
+    const m = await mount({
+      runner: slow.runner,
+      jobs: [row("d1", { title: "Done one", lastTryAt: 1 })],
+    });
+    const id = await startOne(m, "Running one");
+    await m.press("C");
+    await vi.waitFor(() => expect(m.frame()).toContain("y/N  Clear 1 finished?"));
+    slow.releaseAll();
+    await vi.waitFor(() => expect(statusOf(m, id)).toBe("completed"));
+    await vi.waitFor(() => expect(m.frame()).toContain("Completed"));
+    await new Promise((r) => setTimeout(r, 50));
+    await m.press("y");
+    await vi.waitFor(() => expect(m.history.get("d1")).toBeUndefined());
+    await vi.waitFor(() => expect(m.history.get(id)).toBeUndefined());
+    await vi.waitFor(() => expect(m.frame()).toContain("Cleared 2"));
+  });
+
+  it("shows every banner at once and R works while the browser banner shows", async () => {
+    const m = await mount({
+      jobs: [
+        row("n1", { title: "Notice one", status: "paused", lastTryAt: 2 }),
+        row("n2", { title: "Notice two", status: "paused", lastTryAt: 1 }),
+      ],
+      notice: { reason: "unexpected", pausedCount: 2, jobIds: ["n1", "n2"] },
+      props: { attentionMs: 5000 },
+    });
+    const other = await m.core.connectAs("extension")();
+    await other.request("app.open", {});
+    other.close();
+    await vi.waitFor(() => expect(m.frame()).toContain("Opened from browser"));
+    expect(m.frame()).toContain("R resume all · z dismiss");
+    await m.press("R");
+    await vi.waitFor(() => expect(statusOf(m, "n1")).not.toBe("paused"));
   });
 });

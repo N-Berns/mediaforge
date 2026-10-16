@@ -2055,6 +2055,32 @@ describe("downloads manager", () => {
     t.app.unmount();
   });
 
+  it("backing out of a second Add link keeps the cursor where it was", async () => {
+    const t = await openManager({ settings: SKIP_QUESTIONS });
+    for (let i = 0; i < 2; i++) {
+      await press(t.app, "a");
+      await waitFor(t.app, URL);
+      await press(t.app, KEY.enter);
+      await waitFor(t.app, i === 0 ? "1 item" : "2 items");
+      await waitFor(t.app, MANAGER);
+    }
+    // Both rows share a title: compare where the cursor is, not what it shows.
+    const cursorRow = () =>
+      (t.app.lastFrame() ?? "").split("\n").findIndex((l) => l.startsWith(">["));
+    const newest = cursorRow();
+    await press(t.app, KEY.down);
+    await tick(100);
+    const moved = cursorRow();
+    expect(moved).not.toBe(newest);
+    await press(t.app, "a");
+    await waitFor(t.app, URL);
+    await press(t.app, KEY.esc);
+    await waitFor(t.app, MANAGER);
+    await tick(200);
+    expect(cursorRow()).toBe(moved);
+    t.app.unmount();
+  });
+
   it("the menu download shows the title before the file exists", async () => {
     const t = setup({ settings: SKIP_QUESTIONS, runner: hang });
     await startDownload(t);

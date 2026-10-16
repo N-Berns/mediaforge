@@ -381,6 +381,8 @@ export function App({ deps, start }: { deps: AppDeps; start?: "manager" }) {
             }}
             {...(screen.focusId && { focusId: screen.focusId })}
             {...(screen.note && { note: screen.note })}
+            // Used once: coming back to this entry later must not jump the cursor again.
+            onFocused={() => nav.replace({ name: "manager" })}
             onBack={() => nav.reset({ name: "home" })}
             onAdd={() => {
               addFromManager.current = true;

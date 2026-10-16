@@ -60,6 +60,8 @@ export interface ManagerScreenProps {
   focusId?: string;
   /** Shown in the status line on arrival, e.g. why Add link could not start a download. */
   note?: string;
+  /** Called once `focusId` and `note` have been used, so the app can forget them. */
+  onFocused?: () => void;
   /** Tests shorten these. */
   renderMs?: number;
   retryMs?: number;
@@ -129,6 +131,7 @@ export function ManagerScreen({
   onView,
   focusId,
   note,
+  onFocused,
   renderMs,
   retryMs,
   attentionMs = ATTENTION_MS,
@@ -181,7 +184,9 @@ export function ManagerScreen({
   useEffect(() => () => clearTimeout(statusTimer.current), []);
   useEffect(() => {
     if (note) say(note);
-  }, [note, say]);
+    // Without a row to wait for, the note was all there was to use.
+    if (note && !focusId) onFocused?.();
+  }, [note, focusId, say, onFocused]);
 
   useEffect(() => {
     let live = true;
@@ -206,6 +211,9 @@ export function ManagerScreen({
 
   const now = Date.now();
   const all = [...session.jobs.values()];
+  /** The rows as they are now, for prompts answered after the list moved on. */
+  const latest = useRef(all);
+  latest.current = all;
   const shown = sortJobs(
     all.filter((job) => matchesSearch(job, view.search) && matchesFilters(job, view.filters, now)),
     sort,
@@ -217,28 +225,29 @@ export function ManagerScreen({
   const cursorJob = cursor >= 0 ? shown[cursor] : undefined;
   const ticks = new Set(view.ticks);
 
-  // After Add link, put the cursor on the new row as soon as it shows up.
+  // After Add link, put the cursor on the new row as soon as it shows up, unless the search or
+  // the filter hides it: a cursor on an invisible row helps nobody.
+  const focusVisible = focusId !== undefined && shown.some((job) => job.id === focusId);
   useEffect(() => {
-    if (focusId && !focused.current && session.jobs.has(focusId)) {
-      focused.current = true;
-      setView((v) => ({ ...v, cursorId: focusId }));
-    }
-  }, [focusId, session.jobs, setView]);
+    if (!focusId || focused.current || !session.jobs.has(focusId)) return;
+    focused.current = true;
+    if (focusVisible) setView((v) => ({ ...v, cursorId: focusId }));
+    onFocused?.();
+  }, [focusId, focusVisible, session.jobs, setView, onFocused]);
 
   const notice = session.notice;
   const noticeText = notice
     ? `${NOTICE_TEXT[notice.reason]} ${notice.pausedCount} download${notice.pausedCount === 1 ? " was" : "s were"} paused. ─ R resume all · z dismiss`
     : undefined;
-  const banner =
-    session.state === "reconnecting"
-      ? "Reconnecting to MediaForge…"
-      : session.state === "connecting"
-        ? "Connecting to MediaForge…"
-        : attention
-          ? "Opened from browser"
-          : noticeText;
+  // Each on its own line, so none hides another (R and z always act on a notice in view).
+  const banners = [
+    ...(session.state === "reconnecting" ? ["Reconnecting to MediaForge…"] : []),
+    ...(session.state === "connecting" ? ["Connecting to MediaForge…"] : []),
+    ...(attention ? ["Opened from browser"] : []),
+    ...(noticeText ? [noticeText] : []),
+  ];
   const listRows = height
-    ? Math.max(3, height - 1 - FIXED_LINES - (banner ? 1 : 0))
+    ? Math.max(3, height - 1 - FIXED_LINES - banners.length)
     : DEFAULT_LIST_ROWS;
   top.current = scrollWindow(Math.max(0, cursor), shown.length, listRows, top.current);
   const windowRows = shown.slice(top.current, top.current + listRows);
@@ -352,8 +361,11 @@ export function ManagerScreen({
     const done = all.filter((job) => job.status === "completed");
     if (done.length === 0) return say(resultText("clear", 0, 0, []));
     confirm(confirmText("clear", done), async () => {
-      const failed = await batch("jobs.clearFinished", {});
-      say(resultText("clear", done.length - failed.length, 0, failed));
+      // Exactly the rows finished when y is pressed: not one that finishes on the way.
+      const ids = latest.current.filter((job) => job.status === "completed").map((j) => j.id);
+      if (ids.length === 0) return say(resultText("clear", 0, 0, []));
+      const failed = await batch("jobs.remove", { jobIds: ids });
+      say(resultText("clear", ids.length - failed.length, 0, failed));
     });
   };
 
@@ -561,7 +573,8 @@ export function ManagerScreen({
 
   const footer =
     mode.name === "confirm" ? (
-      <Text color={COLORS.warn} wrap="truncate-end">
+      // Wraps rather than cuts: the whole question must be readable.
+      <Text color={COLORS.warn} wrap="wrap">
         {` ${mode.text}`}
       </Text>
     ) : mode.name === "search" ? (
@@ -585,11 +598,11 @@ export function ManagerScreen({
         </Text>
         <Text wrap="truncate-end">{summary}</Text>
       </Box>
-      {banner ? (
-        <Text color={COLORS.warn} wrap="truncate-end">
-          {` ${banner}`}
+      {banners.map((text) => (
+        <Text key={text} color={COLORS.warn} wrap="truncate-end">
+          {` ${text}`}
         </Text>
-      ) : null}
+      ))}
       {body}
       <Text color={COLORS.muted} wrap="truncate-end">
         {"─".repeat(Math.max(0, width))}

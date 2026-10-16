@@ -88,42 +88,36 @@ describe("split", () => {
 describe("texts", () => {
   it("cancel", () => {
     expect(confirmText("cancel", [job("a"), job("b"), job("c")])).toBe(
-      "Cancel 3 downloads? Partial files are deleted. y/N",
+      "y/N  Cancel 3 downloads? Partial files are deleted.",
     );
     expect(confirmText("cancel", [job("a")])).toBe(
-      "Cancel 1 download? Partial files are deleted. y/N",
+      "y/N  Cancel 1 download? Partial files are deleted.",
     );
   });
 
   it("remove asks only when a row is still running", () => {
     expect(confirmText("remove", [job("a"), job("b")])).toBeUndefined();
     expect(confirmText("remove", [job("a", "downloading"), job("b"), job("c")])).toBe(
-      "Remove 3 downloads? 1 is still running and will be cancelled. y/N",
+      "y/N  Remove 3? 1 is running and will be cancelled.",
     );
     expect(confirmText("remove", [job("a", "queued"), job("b", "processing")])).toBe(
-      "Remove 2 downloads? 2 are still running and will be cancelled. y/N",
+      "y/N  Remove 2? 2 are running and will be cancelled.",
     );
   });
 
   it("trash and clear", () => {
     expect(confirmText("trash", [job("a"), job("b"), job("c")])).toBe(
-      "Move the files of 3 downloads to the trash? y/N",
+      "y/N  Trash the files of 3 downloads?",
     );
     expect(confirmText("clear", [job("a"), job("b"), job("c"), job("d"), job("e")])).toBe(
-      "Clear 5 finished downloads from the list? Files stay on disk. y/N",
+      "y/N  Clear 5 finished? Files stay on disk.",
     );
-    expect(confirmText("clear", [job("a")])).toBe(
-      "Clear 1 finished download from the list? Files stay on disk. y/N",
-    );
+    expect(confirmText("clear", [job("a")])).toBe("y/N  Clear 1 finished? Files stay on disk.");
   });
 
   it("too-large", () => {
-    expect(tooLargeText(2)).toBe(
-      "2 downloads are too large for the Recycle Bin and will be deleted permanently. Delete? y/N",
-    );
-    expect(tooLargeText(1)).toBe(
-      "1 download is too large for the Recycle Bin and will be deleted permanently. Delete? y/N",
-    );
+    expect(tooLargeText(2)).toBe("y/N  2 are too big for the Recycle Bin. Delete for good?");
+    expect(tooLargeText(1)).toBe("y/N  1 is too big for the Recycle Bin. Delete for good?");
   });
 
   it("result", () => {
