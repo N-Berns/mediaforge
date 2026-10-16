@@ -2025,6 +2025,36 @@ describe("downloads manager", () => {
     t.app.unmount();
   });
 
+  it("a second pick while Add link is starting does not start a menu download", async () => {
+    const t = await openManager({
+      settings: { askQuality: false, quality: "mp4-720p", askFolder: true },
+    });
+    // Hold the submit, as a slow core would.
+    const connect = t.deps.managerCore;
+    let release: () => void = () => {};
+    const open = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    t.deps.managerCore = async () => {
+      await open;
+      return connect();
+    };
+    await press(t.app, "a");
+    await waitFor(t.app, URL);
+    await press(t.app, KEY.enter);
+    await waitFor(t.app, "Where should it be saved?");
+    await press(t.app, KEY.enter);
+    // Past the menu's double-Enter lock: a real second pick.
+    await tick(400);
+    await press(t.app, KEY.enter);
+    await tick(100);
+    release();
+    await waitFor(t.app, "1 item");
+    const jobs = await listed(t);
+    expect(jobs.map((j) => j.origin)).toEqual(["manager"]);
+    t.app.unmount();
+  });
+
   it("the menu download shows the title before the file exists", async () => {
     const t = setup({ settings: SKIP_QUESTIONS, runner: hang });
     await startDownload(t);

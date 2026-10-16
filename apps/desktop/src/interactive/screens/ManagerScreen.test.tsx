@@ -22,6 +22,8 @@ const KEY = {
   end: "\u001B[F",
   del: "\u001B[3~",
   ctrlA: "\u0001",
+  right: "\u001B[C",
+  left: "\u001B[D",
 };
 
 const URL = "https://example.com/watch?v=abc";
@@ -560,8 +562,8 @@ describe("ManagerScreen panels and banners", () => {
     });
     await m.press("f");
     await vi.waitFor(() => expect(m.frame()).toContain("Last try"));
-    // Rows: Active, Queued, Paused…
-    await m.press(KEY.down, KEY.down, " ");
+    // The Status line: Active, Queued, Paused…
+    await m.press(KEY.right, KEY.right, " ");
     await vi.waitFor(() => expect(m.frame()).toContain("filter: Paused"));
     await m.press(KEY.esc);
     await vi.waitFor(() => expect(tableRows(m.frame())).toHaveLength(1));
@@ -570,7 +572,7 @@ describe("ManagerScreen panels and banners", () => {
 
   it("Esc clears search and filters before going back", async () => {
     const m = await mount({ jobs: [row("p1", { title: "Paused one", status: "paused" })] });
-    await m.press("f", KEY.down, KEY.down, " ", KEY.enter);
+    await m.press("f", KEY.right, KEY.right, " ", KEY.enter);
     await vi.waitFor(() => expect(m.frame()).toContain("filter: Paused"));
     await m.press(KEY.esc);
     await vi.waitFor(() => expect(m.frame()).not.toContain("filter:"));
@@ -717,5 +719,92 @@ describe("ManagerScreen columns keep their own text", () => {
     expect(line).toContain("avg 32.8 Mbps");
     expect(line).toContain("Oct 12 2025");
     expect(line).toContain("⏷");
+  });
+});
+
+describe("ManagerScreen key lock and compact panels", () => {
+  /** A trash call that waits until the test releases it, so the manager stays busy. */
+  function slowTrash() {
+    let release: () => void = () => {};
+    const trash = vi.fn<TrashFn>(
+      () =>
+        new Promise((resolve) => {
+          release = () => resolve({ failed: [] });
+        }),
+    );
+    return { trash, release: () => release() };
+  }
+
+  const busyMount = async () => {
+    const slow = slowTrash();
+    const m = await mount({
+      trash: slow.trash,
+      jobs: [
+        row("d1", { title: "Done one", lastTryAt: 2, files: ["/dl/a.mp4"], sizeBytes: 1 }),
+        row("d2", { title: "Done two", lastTryAt: 1, sizeBytes: 9 }),
+      ],
+    });
+    await m.press(KEY.del, "y");
+    await vi.waitFor(() => expect(slow.trash).toHaveBeenCalled());
+    return { m, slow };
+  };
+
+  it("sort keys wait while an action runs", async () => {
+    const { m, slow } = await busyMount();
+    await m.press("2");
+    await vi.waitFor(() => expect(m.frame()).toContain("Still working on the last action."));
+    expect(m.frame()).not.toContain("Size ▼");
+    expect((await m.store.load()).managerSort).toEqual({ column: "lastTry", descending: true });
+    slow.release();
+  });
+
+  it("Add link waits while an action runs", async () => {
+    const { m, slow } = await busyMount();
+    await m.press("a");
+    await vi.waitFor(() => expect(m.frame()).toContain("Still working on the last action."));
+    expect(m.props.onAdd).not.toHaveBeenCalled();
+    slow.release();
+  });
+
+  it("moving and searching still work while an action runs", async () => {
+    const { m, slow } = await busyMount();
+    await m.press(KEY.down);
+    await vi.waitFor(() =>
+      expect(tableRows(m.frame()).find((l) => l.startsWith(">"))).toContain("Done two"),
+    );
+    await m.press("/", "t", "w", "o", KEY.enter);
+    await vi.waitFor(() => expect(tableRows(m.frame())).toHaveLength(1));
+    slow.release();
+  });
+
+  it("the filter panel takes one line per group", async () => {
+    const m = await mount();
+    await m.press("f");
+    await vi.waitFor(() => expect(m.frame()).toContain("Last try"));
+    const lines = m.frame().split("\n");
+    const top = lines.findIndex((l) => l.includes("Filter"));
+    const hint = lines.findIndex((l) => l.includes("Space toggle"));
+    expect(hint - top).toBeLessThanOrEqual(4);
+    const status = lines.find((l) => l.includes("Status")) ?? "";
+    expect(status).toContain("Active");
+    expect(status).toContain("Cancelled");
+    // Down to Origin, right to Menu, toggle.
+    await m.press(KEY.down, KEY.right, " ");
+    await vi.waitFor(() => expect(m.frame()).toContain("filter: Menu"));
+  });
+
+  it("the detail panel scrolls a long error instead of growing", async () => {
+    const words = Array.from({ length: 600 }, (_, i) => `w${i}`).join(" ");
+    const m = await mount({
+      jobs: [row("f1", { title: "Failed one", status: "failed", error: words })],
+    });
+    await m.press(KEY.enter);
+    await vi.waitFor(() => expect(m.frame()).toContain("Details"));
+    expect(m.frame()).toContain("↓ more");
+    expect(m.frame()).not.toContain("w599");
+    const height = m.frame().split("\n").length;
+    for (let i = 0; i < 40; i++) await m.press(KEY.down);
+    await vi.waitFor(() => expect(m.frame()).toContain("w599"));
+    expect(m.frame().split("\n").length).toBeLessThanOrEqual(height);
   });
 });

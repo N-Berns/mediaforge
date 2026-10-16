@@ -82,6 +82,8 @@ export function App({ deps, start }: { deps: AppDeps; start?: "manager" }) {
   const managerView = useRef<ManagerView | undefined>(undefined);
   /** Set while the wizard runs for the manager's Add link: it submits and returns there. */
   const addFromManager = useRef(false);
+  /** True while those plans are being sent: a second pick in the wizard must not send again. */
+  const submitting = useRef(false);
   /** Deno is offered once per session; saying no must not block every later download. */
   const offeredOptional = useRef(false);
   const screenName = useRef(screen.name);
@@ -149,7 +151,8 @@ export function App({ deps, start }: { deps: AppDeps; start?: "manager" }) {
 
   /** Start the plans for the manager and go back to it, with the cursor on the first new row. */
   const submitForManager = async (plans: Plan[]) => {
-    addFromManager.current = false;
+    if (submitting.current) return;
+    submitting.current = true;
     let focusId: string | undefined;
     let note: string | undefined;
     try {
@@ -159,11 +162,19 @@ export function App({ deps, start }: { deps: AppDeps; start?: "manager" }) {
     } catch (error) {
       note = `Could not start: ${error instanceof Error ? error.message : String(error)}`;
     }
+    submitting.current = false;
+    addFromManager.current = false;
     nav.reset(
       { name: "home" },
       { name: "manager", ...(focusId && { focusId }), ...(note && { note }) },
     );
   };
+
+  // Back on the table, also after backing out of the wizard: no Add link is pending. An effect
+  // on the entry, so a redraw while Add link opens the wizard does not clear it.
+  useEffect(() => {
+    if (screen.name === "manager" && !submitting.current) addFromManager.current = false;
+  }, [screen]);
 
   /**
    * Work out what is still needed for this draft, using the latest saved settings, and go there.
@@ -362,8 +373,6 @@ export function App({ deps, start }: { deps: AppDeps; start?: "manager" }) {
           />
         );
       case "manager":
-        // Back on the table (also after backing out of the wizard): no Add link is pending.
-        addFromManager.current = false;
         return (
           <ManagerScreen
             {...(managerView.current && { view: managerView.current })}

@@ -248,22 +248,13 @@ export function ManagerScreen({
     if (target) setView((v) => ({ ...v, cursorId: target.id }));
   };
 
-  const saveSort = (next: ManagerSort) => {
-    setSort(next);
-    void deps.download.settings
-      .load()
-      .then((s) => deps.download.settings.save({ ...s, managerSort: next }))
-      .catch(() => {});
-  };
-
-  /** Run one request-sending step; ignored while another is in flight or the core is away. */
-  const send = (work: () => Promise<void>) => {
+  /**
+   * Run one action at a time. Keys that change something wait for it (and say so); moving,
+   * ticking, searching and the panels stay free.
+   */
+  const lock = (work: () => Promise<void>) => {
     if (busy.current) {
       say(BUSY);
-      return;
-    }
-    if (!ready) {
-      say(NOT_CONNECTED);
       return;
     }
     busy.current = true;
@@ -273,6 +264,23 @@ export function ManagerScreen({
         busy.current = false;
       });
   };
+
+  /** An action that needs the core: refused at once while it is away. */
+  const send = (work: () => Promise<void>) => {
+    if (!busy.current && !ready) {
+      say(NOT_CONNECTED);
+      return;
+    }
+    lock(work);
+  };
+
+  // Saved through the lock, so it never races the core's own write of the settings file.
+  const saveSort = (next: ManagerSort) =>
+    lock(async () => {
+      setSort(next);
+      const saved = await deps.download.settings.load();
+      await deps.download.settings.save({ ...saved, managerSort: next });
+    });
 
   const batch = async (type: ExtensionToHostMessage["type"], payload: unknown): Promise<Failed> => {
     const reply: HostToExtensionMessage = await session.request(type, payload);
@@ -454,8 +462,10 @@ export function ManagerScreen({
     } else if (/^[1-6]$/.test(input)) {
       saveSort(nextSort(sort, SORT_COLUMNS[Number(input) - 1] as ManagerSort["column"]));
     } else if (input === "/") setMode({ name: "search" });
-    else if (input === "a") onAdd();
-    else if (input === "p") simple("pause", "download.pause");
+    else if (input === "a") {
+      if (busy.current) say(BUSY);
+      else onAdd();
+    } else if (input === "p") simple("pause", "download.pause");
     else if (input === "r") simple("resume", "download.resume");
     else if (input === "c") cancel();
     else if (input === "x") remove();
@@ -510,6 +520,9 @@ export function ManagerScreen({
         job={detailJob}
         unit={unit}
         limits={limits}
+        // The space the column header and the rows had.
+        height={listRows + 1}
+        width={width}
         onClose={() => setMode({ name: "list" })}
       />
     ) : mode.name === "limit" && limits ? (
