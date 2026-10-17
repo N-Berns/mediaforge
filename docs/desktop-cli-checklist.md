@@ -158,7 +158,7 @@ Phase 2 has no buttons yet: send the requests with a small script through `CoreC
 - [ ] Press `3` (Size), quit, reopen: the table is still sorted by Size.
 - [ ] `/` with part of a title narrows the list and the header shows `search: "…"` and `x of N items`; `f` → Paused shows only paused rows; Esc clears both.
 - [ ] On a large real download: `p` pauses it, `r` resumes it from where it was, `c` then `y` cancels it.
-- [ ] `x` on a finished row removes it without asking (the file stays on disk); on a running row it asks first.
+- [ ] `x` on a finished row asks `Remove 1 download from the list? Files stay on disk.`; `y` removes it and the file stays on disk. On a running row the prompt also says it will be cancelled.
 - [ ] `Del` then `y` on a finished row: the file is in the Recycle Bin (Windows) or the Trash (Linux) and can be restored.
 - [ ] `Del` on a file larger than the Recycle Bin allows: a second prompt says it will be deleted permanently; `y` deletes it.
 - [ ] During a real download: `l` cycles the header limit (High, Med, Low, Custom) and the speed follows within about 3 s; `L` → Low marks the row with `⏷`; `b` switches every speed to Mbps.
@@ -168,7 +168,7 @@ Phase 2 has no buttons yet: send the requests with a small script through `CoreC
 - [ ] Kill the core during a download, reopen the manager: the notice banner shows; `R` resumes the paused downloads, `z` dismisses the notice.
 - [ ] Narrow the window from 120 to under 80 columns: Last try drops under 112, Type under 100, ETA under 90, Speed under 80; the rows still fit on one line each.
 - [ ] Type column: a download picked as Video only (menu or extension format list) reads `Video only`, an MP3 `Audio only`, a saved subtitle `Subtitle`, a plain download `Video`. `2` sorts by type; `f` → Type → Video only shows only those rows.
-- [ ] The key bar starts with `Space Tick  ^A All`; clicking `^A All`, or the `[ ]` above the rows, ticks every visible row and shows `[•]` there; again unticks them.
+- [ ] The key bar starts with `Space Tick  Ctrl+A All`; clicking `Ctrl+A All`, or the `[ ]` above the rows, ticks every visible row and shows `[•]` there; again unticks them.
 
 ## Mouse (phase 3c)
 

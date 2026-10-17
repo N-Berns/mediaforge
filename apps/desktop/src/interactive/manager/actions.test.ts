@@ -95,8 +95,13 @@ describe("texts", () => {
     );
   });
 
-  it("remove asks only when a row is still running", () => {
-    expect(confirmText("remove", [job("a"), job("b")])).toBeUndefined();
+  it("remove always asks, and warns when a row is still running", () => {
+    expect(confirmText("remove", [job("a"), job("b")])).toBe(
+      "y/N  Remove 2 downloads from the list? Files stay on disk.",
+    );
+    expect(confirmText("remove", [job("a")])).toBe(
+      "y/N  Remove 1 download from the list? Files stay on disk.",
+    );
     expect(confirmText("remove", [job("a", "downloading"), job("b"), job("c")])).toBe(
       "y/N  Remove 3? 1 is running and will be cancelled.",
     );

@@ -328,6 +328,14 @@ describe("ManagerScreen table", () => {
     expect(wide.frame()).toContain("Type");
   });
 
+  it("leaves a blank line between the header and the table", async () => {
+    const m = await mount({ jobs: three() });
+    const lines = m.frame().split("\n");
+    const header = lines.findIndex((line) => line.includes("MediaForge · Downloads"));
+    expect(lines[header + 1]?.trim()).toBe("");
+    expect(lines[header + 2]).toContain("Name");
+  });
+
   it("shows what each row saves in the Type column", async () => {
     const m = await mount({
       columns: 120,
@@ -456,9 +464,16 @@ describe("ManagerScreen actions", () => {
     await vi.waitFor(() => expect(statusOf(m, id)).toBe("cancelled"));
   });
 
-  it("x removes finished rows without asking; asks for running ones", async () => {
+  it("x asks before removing, finished or running", async () => {
     const m = await mount({ jobs: [row("done", { title: "Done one", lastTryAt: 1 })] });
     await m.press("x");
+    await vi.waitFor(() =>
+      expect(m.frame()).toContain("y/N  Remove 1 download from the list? Files stay on disk."),
+    );
+    await m.press("n");
+    await vi.waitFor(() => expect(m.frame()).not.toContain("y/N"));
+    expect(m.history.get("done")).toBeDefined();
+    await m.press("x", "y");
     await vi.waitFor(() => expect(m.history.get("done")).toBeUndefined());
     const id = await startOne(m, "Running one");
     await m.press("x");
@@ -1032,10 +1047,10 @@ describe("ManagerScreen mouse", () => {
     await vi.waitFor(() => expect(m.frame()).toContain("Move the cursor"));
   });
 
-  it("the key bar names Space and Ctrl+A, and ^A ticks every row", async () => {
+  it("the key bar names Space and Ctrl+A, and Ctrl+A ticks every row", async () => {
     const m = await mount({ jobs: three() });
-    expect(m.frame()).toContain("Space Tick  ^A All  a Add");
-    const all = m.find("^A All");
+    expect(m.frame()).toContain("Space Tick  Ctrl+A All  a Add");
+    const all = m.find("Ctrl+A All");
     await m.click(all.x, all.y);
     await vi.waitFor(() =>
       expect(tableRows(m.frame()).filter((line) => line.includes("[•]"))).toHaveLength(3),

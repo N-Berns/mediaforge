@@ -63,7 +63,7 @@ export function confirmText(
       return `${KEYS}Cancel ${downloads(n)}? Partial files are deleted.`;
     case "remove": {
       const running = jobs.filter((job) => RUNNING.includes(job.status)).length;
-      if (running === 0) return undefined;
+      if (running === 0) return `${KEYS}Remove ${downloads(n)} from the list? Files stay on disk.`;
       const verb = running === 1 ? "is" : "are";
       return `${KEYS}Remove ${n}? ${running} ${verb} running and will be cancelled.`;
     }

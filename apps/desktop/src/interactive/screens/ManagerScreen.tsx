@@ -74,8 +74,8 @@ export interface ManagerScreenProps {
 
 const EMPTY_VIEW: ManagerView = { ticks: [], search: "", filters: NO_FILTERS };
 const DEFAULT_SORT: ManagerSort = { column: "lastTry", descending: true };
-/** Header, column header, divider, status line and key bar. */
-const FIXED_LINES = 5;
+/** Header, the blank line under it, column header, divider, status line and key bar. */
+const FIXED_LINES = 6;
 /** Rows shown when the terminal height is unknown (tests, pipes). */
 const DEFAULT_LIST_ROWS = 20;
 const NOT_CONNECTED = "Not connected.";
@@ -90,7 +90,7 @@ const NOTICE_TEXT = {
 
 const KEY_BAR: [string, string][] = [
   ["Space", "Tick"],
-  ["^A", "All"],
+  ["Ctrl+A", "All"],
   ["a", "Add"],
   ["p", "Pause"],
   ["r", "Resume"],
@@ -708,6 +708,7 @@ export function ManagerScreen({
           {` ${text}`}
         </Text>
       ))}
+      <Text> </Text>
       {body}
       <Text color={COLORS.muted} wrap="truncate-end">
         {"─".repeat(Math.max(0, width))}
