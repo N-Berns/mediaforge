@@ -1,4 +1,6 @@
+import { getProfile } from "@mediaforge/media-profiles";
 import {
+  type ContentKind,
   type DownloadJob,
   type DownloadStatus,
   formatBytes,
@@ -13,11 +15,12 @@ export type LastTryFilter = "today" | "7d" | "30d" | "all";
 
 export interface Filters {
   statuses: StatusFilter[];
+  types: ContentKind[];
   origins: JobOrigin[];
   lastTry: LastTryFilter;
 }
 
-export const NO_FILTERS: Filters = { statuses: [], origins: [], lastTry: "all" };
+export const NO_FILTERS: Filters = { statuses: [], types: [], origins: [], lastTry: "all" };
 
 export const STATUS_FILTERS: StatusFilter[] = [
   "active",
@@ -27,6 +30,7 @@ export const STATUS_FILTERS: StatusFilter[] = [
   "failed",
   "cancelled",
 ];
+export const KINDS: ContentKind[] = ["video-audio", "video", "audio", "subtitles"];
 export const ORIGINS: JobOrigin[] = ["extension", "menu", "manager", "cli"];
 export const LAST_TRY_FILTERS: LastTryFilter[] = ["today", "7d", "30d", "all"];
 
@@ -37,6 +41,12 @@ export const STATUS_FILTER_LABELS: Record<StatusFilter, string> = {
   completed: "Completed",
   failed: "Failed",
   cancelled: "Cancelled",
+};
+export const KIND_LABELS: Record<ContentKind, string> = {
+  "video-audio": "Video",
+  video: "Video only",
+  audio: "Audio only",
+  subtitles: "Subtitle",
 };
 export const ORIGIN_LABELS: Record<JobOrigin, string> = {
   extension: "Extension",
@@ -55,6 +65,7 @@ export type Column = SortColumn;
 
 export const COLUMN_LABELS: Record<Column, string> = {
   name: "Name",
+  type: "Type",
   size: "Size",
   status: "Status",
   speed: "Speed",
@@ -64,6 +75,7 @@ export const COLUMN_LABELS: Record<Column, string> = {
 
 /** Each fixed column's width, including the gap after it. */
 export const COLUMN_WIDTH: Record<Exclude<Column, "name">, number> = {
+  type: 12,
   size: 9,
   status: 17,
   speed: 15,
@@ -90,6 +102,16 @@ export function rowName(job: DownloadJob): string {
 
 /** Shown after the name, outside its cut, when the job has its own speed cap. */
 export const OVERRIDE_MARK = "⏷";
+
+/**
+ * What the job saves. Rows from before the core recorded it fall back to the request: a subtitle,
+ * else the profile's kind. Those can never say "Video only".
+ */
+export function jobKind(job: DownloadJob): ContentKind {
+  if (job.kind) return job.kind;
+  if (job.request.subtitle) return "subtitles";
+  return getProfile(job.request.profileId)?.kind === "audio" ? "audio" : "video-audio";
+}
 
 export function statusText(job: DownloadJob): string {
   switch (job.status) {
@@ -179,6 +201,8 @@ const sortValue = (job: DownloadJob, column: SortColumn): string | number | unde
   switch (column) {
     case "name":
       return rowName(job).toLowerCase();
+    case "type":
+      return KINDS.indexOf(jobKind(job));
     case "size":
       return sizeOf(job);
     case "status":
@@ -218,6 +242,7 @@ export function sortJobs(jobs: readonly DownloadJob[], sort: ManagerSort): Downl
 /** Which way each column sorts on its first press: the useful end first. */
 const FIRST_DESCENDING: Record<SortColumn, boolean> = {
   name: false,
+  type: false,
   size: true,
   status: false,
   speed: true,
@@ -247,6 +272,7 @@ export function matchesFilters(job: DownloadJob, filters: Filters, now: number):
   if (filters.statuses.length > 0 && !filters.statuses.some((f) => statusMatches(job.status, f))) {
     return false;
   }
+  if (filters.types.length > 0 && !filters.types.includes(jobKind(job))) return false;
   if (filters.origins.length > 0 && !(job.origin && filters.origins.includes(job.origin))) {
     return false;
   }
@@ -260,23 +286,29 @@ export function matchesFilters(job: DownloadJob, filters: Filters, now: number):
 }
 
 export const hasFilters = (filters: Filters): boolean =>
-  filters.statuses.length > 0 || filters.origins.length > 0 || filters.lastTry !== "all";
+  filters.statuses.length > 0 ||
+  filters.types.length > 0 ||
+  filters.origins.length > 0 ||
+  filters.lastTry !== "all";
 
 /** The header's filter text, e.g. "Paused, Extension, 7 days"; empty when nothing is set. */
 export function filterSummary(filters: Filters): string {
   return [
     ...filters.statuses.map((s) => STATUS_FILTER_LABELS[s]),
+    ...filters.types.map((k) => KIND_LABELS[k]),
     ...filters.origins.map((o) => ORIGIN_LABELS[o]),
     ...(filters.lastTry === "all" ? [] : [LAST_TRY_LABELS[filters.lastTry]]),
   ].join(", ");
 }
 
-/** Last try goes under 100 columns, ETA under 90, Speed under 80. */
+/** Last try goes under 112 columns, Type under 100, ETA under 90, Speed under 80. */
 export function visibleColumns(width: number): Column[] {
-  const columns: Column[] = ["name", "size", "status"];
+  const columns: Column[] = ["name"];
+  if (width >= 100) columns.push("type");
+  columns.push("size", "status");
   if (width >= 80) columns.push("speed");
   if (width >= 90) columns.push("eta");
-  if (width >= 100) columns.push("lastTry");
+  if (width >= 112) columns.push("lastTry");
   return columns;
 }
 

@@ -4,6 +4,8 @@ import { Clickable, HoverText } from "../mouse/MouseProvider.tsx";
 import { COLORS } from "../theme.ts";
 import {
   type Filters,
+  KIND_LABELS,
+  KINDS,
   LAST_TRY_FILTERS,
   LAST_TRY_LABELS,
   ORIGIN_LABELS,
@@ -30,6 +32,15 @@ const GROUPS: Group[] = [
       label: STATUS_FILTER_LABELS[value],
       on: (f) => f.statuses.includes(value),
       toggle: (f) => ({ ...f, statuses: toggled(f.statuses, value) }),
+    })),
+  },
+  {
+    name: "Type",
+    radio: false,
+    options: KINDS.map((value) => ({
+      label: KIND_LABELS[value],
+      on: (f) => f.types.includes(value),
+      toggle: (f) => ({ ...f, types: toggled(f.types, value) }),
     })),
   },
   {
@@ -61,7 +72,7 @@ export interface FilterPanelProps {
 }
 
 /**
- * Status, origin and last-try filters, combined with AND: one line per group. ↑↓ picks the
+ * Status, type, origin and last-try filters, combined with AND: one line per group. ↑↓ picks the
  * group, ←→ the option, Space toggles. Changes apply as they are made.
  */
 export function FilterPanel({ filters, onChange, onClose }: FilterPanelProps) {

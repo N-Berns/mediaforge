@@ -17,21 +17,23 @@ const fs: EngineFs = {
 const plan = (patch: Partial<Plan> = {}): Plan => ({
   url: URL,
   profileId: "mp4-720p",
+  kind: "video-audio",
   outputDir: "/dl/Video",
   ...patch,
 });
 
 describe("startPayload", () => {
-  it("startPayload carries origin, folder, selector, steps and the title", () => {
+  it("startPayload carries origin, folder, selector, kind, steps and the title", () => {
     const steps = [{ kind: "download" }] as NonNullable<Plan["steps"]>;
     const payload = startPayload(
-      plan({ title: "My Video", formatSelector: "137+140", steps }),
+      plan({ title: "My Video", formatSelector: "137+140", kind: "video", steps }),
       "manager",
     );
     expect(payload).toMatchObject({
       profileId: "mp4-720p",
       outputDir: "/dl/Video",
       origin: "manager",
+      kind: "video",
       formatSelector: "137+140",
       plan: steps,
       candidate: { url: URL, pageUrl: URL, pageTitle: "My Video", kind: "video" },

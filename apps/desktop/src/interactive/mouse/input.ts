@@ -77,7 +77,7 @@ export function keySequence(label: string): string | undefined {
   const key = (label.split(" / ")[0] ?? "").trim();
   const named = NAMED[key];
   if (named) return named;
-  const ctrl = /^Ctrl\+([A-Z])$/.exec(key)?.[1];
+  const ctrl = /^(?:Ctrl\+|\^)([A-Z])$/.exec(key)?.[1];
   if (ctrl) return String.fromCharCode(ctrl.charCodeAt(0) - 64);
   return [...key].length === 1 ? key : undefined;
 }

@@ -89,6 +89,8 @@ const NOTICE_TEXT = {
 } as const;
 
 const KEY_BAR: [string, string][] = [
+  ["Space", "Tick"],
+  ["^A", "All"],
   ["a", "Add"],
   ["p", "Pause"],
   ["r", "Resume"],
@@ -231,6 +233,18 @@ export function ManagerScreen({
   const cursorJob = cursor >= 0 ? shown[cursor] : undefined;
   const ticks = new Set(view.ticks);
   const visibleIds = shown.map((job) => job.id);
+  const allTicked = visibleIds.length > 0 && visibleIds.every((id) => ticks.has(id));
+  /** Tick every visible row, or untick them all when they already are. */
+  const tickAll = () =>
+    setView((v) => {
+      const next = new Set(v.ticks);
+      const all = visibleIds.length > 0 && visibleIds.every((id) => next.has(id));
+      for (const id of visibleIds) {
+        if (all) next.delete(id);
+        else next.add(id);
+      }
+      return { ...v, ticks: [...next] };
+    });
 
   // After Add link, put the cursor on the new row as soon as it shows up, unless the search or
   // the filter hides it: a cursor on an invisible row helps nobody.
@@ -520,17 +534,8 @@ export function ManagerScreen({
     else if (key.home) moveTo(0);
     else if (key.end) moveTo(shown.length - 1);
     else if (key.delete) trash();
-    else if (key.ctrl && input === "a") {
-      setView((v) => {
-        const next = new Set(v.ticks);
-        const allTicked = visibleIds.length > 0 && visibleIds.every((id) => next.has(id));
-        for (const id of visibleIds) {
-          if (allTicked) next.delete(id);
-          else next.add(id);
-        }
-        return { ...v, ticks: [...next] };
-      });
-    } else if (key.ctrl) return;
+    else if (key.ctrl && input === "a") tickAll();
+    else if (key.ctrl) return;
     else if (input === " " && cursorJob) {
       setView((v) => ({
         ...v,
@@ -538,7 +543,7 @@ export function ManagerScreen({
           ? v.ticks.filter((id) => id !== cursorJob.id)
           : [...v.ticks, cursorJob.id],
       }));
-    } else if (/^[1-6]$/.test(input)) {
+    } else if (/^[1-7]$/.test(input)) {
       saveSort(nextSort(sort, SORT_COLUMNS[Number(input) - 1] as ManagerSort["column"]));
     } else if (input === "/") setMode({ name: "search" });
     else if (input === "a") {
@@ -635,6 +640,8 @@ export function ManagerScreen({
           active={listMode}
           onRowClick={clickRow}
           onHeaderClick={(column) => saveSort(nextSort(sort, column))}
+          allTicked={allTicked}
+          onTickAllClick={tickAll}
         />
         {shown.length === 0 && all.length > 0 ? (
           <Text color={COLORS.muted}> No downloads match. Esc clears the filter.</Text>

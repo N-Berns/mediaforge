@@ -16,6 +16,7 @@ export function startPayload(plan: Plan, origin: JobOrigin): StartPayload {
     profileId: profile.id,
     outputDir: plan.outputDir,
     origin,
+    kind: plan.kind,
     ...(plan.formatSelector && { formatSelector: plan.formatSelector }),
     ...(plan.steps && { plan: plan.steps }),
   };

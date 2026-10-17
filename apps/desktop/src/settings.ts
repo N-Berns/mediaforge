@@ -12,7 +12,7 @@ import {
 } from "@mediaforge/shared-types";
 
 /** Columns the downloads manager can sort by. */
-export const SORT_COLUMNS = ["name", "size", "status", "speed", "eta", "lastTry"] as const;
+export const SORT_COLUMNS = ["name", "type", "size", "status", "speed", "eta", "lastTry"] as const;
 export type SortColumn = (typeof SORT_COLUMNS)[number];
 
 export interface ManagerSort {

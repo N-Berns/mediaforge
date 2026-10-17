@@ -262,6 +262,7 @@ describe("flow", () => {
       url: draft.url,
       title: "T",
       profileId: "best",
+      kind: "video-audio",
       outputDir: resolve("/o"),
       formatSelector: "18",
     });

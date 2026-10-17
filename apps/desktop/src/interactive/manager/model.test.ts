@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   etaText,
   filterSummary,
+  jobKind,
   lastTryText,
   matchesFilters,
   matchesSearch,
@@ -240,16 +241,72 @@ describe("search and filters", () => {
   });
 
   it("filterSummary", () => {
-    expect(filterSummary({ statuses: ["paused"], origins: ["extension"], lastTry: "7d" })).toBe(
-      "Paused, Extension, 7 days",
-    );
+    expect(
+      filterSummary({
+        statuses: ["paused"],
+        types: ["video"],
+        origins: ["extension"],
+        lastTry: "7d",
+      }),
+    ).toBe("Paused, Video only, Extension, 7 days");
     expect(filterSummary(NO_FILTERS)).toBe("");
   });
 });
 
+describe("type", () => {
+  const subtitle = { lang: "en", auto: false, format: "srt" } as const;
+  const withRequest = (
+    patch: Partial<DownloadJob["request"]>,
+    extra: Partial<DownloadJob> = {},
+  ) => {
+    const base = job("a");
+    return { ...base, ...extra, request: { ...base.request, ...patch } };
+  };
+
+  it("jobKind uses the recorded kind, else the subtitle, else the profile", () => {
+    expect(jobKind(job("a", { kind: "video" }))).toBe("video");
+    expect(jobKind(withRequest({ subtitle }))).toBe("subtitles");
+    expect(jobKind(withRequest({ profileId: "audio-mp3-320" }))).toBe("audio");
+    expect(jobKind(job("a"))).toBe("video-audio");
+  });
+
+  it("sorts by type in the order video, video only, audio only, subtitle", () => {
+    const rows = [
+      job("s", { kind: "subtitles" }),
+      job("a", { kind: "audio" }),
+      job("v", { kind: "video-audio" }),
+      job("o", { kind: "video" }),
+    ];
+    const ids = (descending: boolean) =>
+      sortJobs(rows, { column: "type", descending }).map((j) => j.id);
+    expect(ids(false)).toEqual(["v", "o", "a", "s"]);
+    expect(ids(true)).toEqual(["s", "a", "o", "v"]);
+    expect(nextSort({ column: "name", descending: false }, "type")).toEqual({
+      column: "type",
+      descending: false,
+    });
+  });
+
+  it("filters by type, guessing rows that have none recorded", () => {
+    const audioOnly = { ...NO_FILTERS, types: ["audio" as const] };
+    expect(matchesFilters(job("a", { kind: "audio" }), audioOnly, 0)).toBe(true);
+    expect(matchesFilters(withRequest({ profileId: "audio-m4a" }), audioOnly, 0)).toBe(true);
+    expect(matchesFilters(job("a"), audioOnly, 0)).toBe(false);
+  });
+});
+
 describe("layout", () => {
-  it("visibleColumns drops last try, ETA, speed as the terminal narrows", () => {
-    expect(visibleColumns(120)).toEqual(["name", "size", "status", "speed", "eta", "lastTry"]);
+  it("visibleColumns drops last try, type, ETA, speed as the terminal narrows", () => {
+    expect(visibleColumns(112)).toEqual([
+      "name",
+      "type",
+      "size",
+      "status",
+      "speed",
+      "eta",
+      "lastTry",
+    ]);
+    expect(visibleColumns(111)).toEqual(["name", "type", "size", "status", "speed", "eta"]);
     expect(visibleColumns(99)).toEqual(["name", "size", "status", "speed", "eta"]);
     expect(visibleColumns(89)).toEqual(["name", "size", "status", "speed"]);
     expect(visibleColumns(79)).toEqual(["name", "size", "status"]);

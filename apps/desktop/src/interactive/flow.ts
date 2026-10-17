@@ -25,6 +25,8 @@ export interface Plan {
   title?: string;
   profileId: string;
   formatSelector?: string;
+  /** What the chosen format saves, so the manager can show it. */
+  kind: MediaKind;
   outputDir: string;
   /** Steps expected for this format, shown as bars before they start. */
   steps?: PlannedStep[];
@@ -88,6 +90,7 @@ export function toPlan(draft: Draft, sortByType: boolean): Plan {
     ...(draft.info?.title && { title: draft.info.title }),
     profileId: draft.profileId,
     ...(draft.formatSelector && { formatSelector: draft.formatSelector }),
+    kind: draftKind(draft),
     outputDir: withKindFolder(resolve(draft.outputDir), draftKind(draft), sortByType),
     ...(steps && { steps }),
   };

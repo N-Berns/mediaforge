@@ -284,10 +284,10 @@ describe("ManagerScreen table", () => {
 
   it("number keys sort and the same key reverses", async () => {
     const m = await mount({ jobs: three() });
-    await m.press("2");
+    await m.press("3");
     await vi.waitFor(() => expect(m.frame()).toContain("Size ▼"));
     expect(tableRows(m.frame())[0]).toContain("Big Buck Bunny");
-    await m.press("2");
+    await m.press("3");
     await vi.waitFor(() => expect(m.frame()).toContain("Size ▲"));
     expect(tableRows(m.frame())[0]).toContain("Trailer");
     await vi.waitFor(async () =>
@@ -321,9 +321,26 @@ describe("ManagerScreen table", () => {
     await vi.waitFor(() => expect(narrow.frame()).not.toContain("Last try"));
     expect(narrow.frame()).not.toContain("ETA");
     expect(narrow.frame()).toContain("Speed");
+    expect(narrow.frame()).not.toContain("Type");
     const wide = await mount({ jobs: three(), columns: 120 });
     await vi.waitFor(() => expect(wide.frame()).toContain("Last try"));
     expect(wide.frame()).toContain("ETA");
+    expect(wide.frame()).toContain("Type");
+  });
+
+  it("shows what each row saves in the Type column", async () => {
+    const m = await mount({
+      columns: 120,
+      jobs: [
+        row("o", { title: "Picture", kind: "video", lastTryAt: 3 }),
+        row("a", { title: "Sound", kind: "audio", lastTryAt: 2 }),
+        row("p", { title: "Older", lastTryAt: 1 }),
+      ],
+    });
+    const rows = tableRows(m.frame());
+    expect(rows.find((line) => line.includes("Picture"))).toContain("Video only");
+    expect(rows.find((line) => line.includes("Sound"))).toContain("Audio only");
+    expect(rows.find((line) => line.includes("Older"))).toMatch(/Older\s+Video\s/);
   });
 
   it("cuts wide names without breaking alignment", async () => {
@@ -828,12 +845,13 @@ describe("ManagerScreen key lock and compact panels", () => {
     const lines = m.frame().split("\n");
     const top = lines.findIndex((l) => l.includes("Filter"));
     const hint = lines.findIndex((l) => l.includes("Space toggle"));
-    expect(hint - top).toBeLessThanOrEqual(4);
+    expect(hint - top).toBeLessThanOrEqual(5);
     const status = lines.find((l) => l.includes("Status")) ?? "";
     expect(status).toContain("Active");
     expect(status).toContain("Cancelled");
-    // Down to Origin, right to Menu, toggle.
-    await m.press(KEY.down, KEY.right, " ");
+    expect(lines.find((l) => l.includes("Type"))).toContain("Video only");
+    // Down past Type to Origin, right to Menu, toggle.
+    await m.press(KEY.down, KEY.down, KEY.right, " ");
     await vi.waitFor(() => expect(m.frame()).toContain("filter: Menu"));
   });
 
@@ -1012,6 +1030,30 @@ describe("ManagerScreen mouse", () => {
     const word = m.find("? Keys");
     await m.click(word.x, word.y);
     await vi.waitFor(() => expect(m.frame()).toContain("Move the cursor"));
+  });
+
+  it("the key bar names Space and Ctrl+A, and ^A ticks every row", async () => {
+    const m = await mount({ jobs: three() });
+    expect(m.frame()).toContain("Space Tick  ^A All  a Add");
+    const all = m.find("^A All");
+    await m.click(all.x, all.y);
+    await vi.waitFor(() =>
+      expect(tableRows(m.frame()).filter((line) => line.includes("[•]"))).toHaveLength(3),
+    );
+  });
+
+  it("the box above the rows ticks every visible row, then unticks them", async () => {
+    const m = await mount({ jobs: three() });
+    const ticked = () => tableRows(m.frame()).filter((line) => line.includes("[•]")).length;
+    const header = m.find("Name");
+    await m.press(" ");
+    await vi.waitFor(() => expect(ticked()).toBe(1));
+    await m.click(2, header.y);
+    await vi.waitFor(() => expect(ticked()).toBe(3));
+    expect(m.frame().split("\n")[header.y]).toContain("[•]");
+    await m.click(2, header.y);
+    await vi.waitFor(() => expect(ticked()).toBe(0));
+    expect(m.frame().split("\n")[header.y]).toContain("[ ]");
   });
 
   it("y and N in a prompt answer it", async () => {

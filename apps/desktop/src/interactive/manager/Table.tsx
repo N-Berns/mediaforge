@@ -8,6 +8,8 @@ import {
   COLUMN_WIDTH,
   type Column,
   etaText,
+  jobKind,
+  KIND_LABELS,
   lastTryText,
   nameWidth,
   OVERRIDE_MARK,
@@ -51,6 +53,8 @@ function cellText(job: DownloadJob, column: Column, unit: SpeedUnit, now: number
   switch (column) {
     case "name":
       return rowName(job);
+    case "type":
+      return KIND_LABELS[jobKind(job)];
     case "size":
       return sizeText(job);
     case "status":
@@ -76,6 +80,10 @@ export interface TableProps {
   now: number;
   onRowClick?: (job: DownloadJob, click: MouseClick) => void;
   onHeaderClick?: (column: Column) => void;
+  /** Every visible row is ticked: the header box shows it. */
+  allTicked?: boolean;
+  /** A click on the header box: tick every visible row, or untick them all. */
+  onTickAllClick?: () => void;
   /** False while a panel or prompt is up: the table takes no clicks. */
   active?: boolean;
 }
@@ -92,13 +100,18 @@ export function Table({
   now,
   onRowClick,
   onHeaderClick,
+  allTicked = false,
+  onTickAllClick,
   active = true,
 }: TableProps) {
   const name = nameWidth(width, columns);
   return (
     <Box flexDirection="column" width={width} overflow="hidden">
       <Box width={width} overflow="hidden">
-        <Text color={COLORS.muted}>{" [ ] "}</Text>
+        <Text> </Text>
+        <Clickable flexShrink={0} active={active} onClick={() => onTickAllClick?.()}>
+          <HoverText color={COLORS.muted}>{allTicked ? "[•] " : "[ ] "}</HoverText>
+        </Clickable>
         {columns.map((column) => (
           <Clickable
             key={column}

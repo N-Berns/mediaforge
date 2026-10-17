@@ -31,6 +31,9 @@ export type DownloadStatus =
   | "failed"
   | "cancelled";
 
+/** What a download saves: picture and sound, picture only, sound only, or a subtitle file. */
+export type ContentKind = "video-audio" | "video" | "audio" | "subtitles";
+
 /** Where a download was started. */
 export type JobOrigin = "extension" | "manager" | "menu" | "cli";
 
@@ -77,4 +80,6 @@ export interface DownloadJob {
   errorKind?: number;
   /** This job's own speed cap, outside the global split. */
   limitOverride?: LimitPreset;
+  /** What the job saves. Missing on rows from before it was recorded. */
+  kind?: ContentKind;
 }

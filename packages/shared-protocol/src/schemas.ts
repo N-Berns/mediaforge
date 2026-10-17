@@ -74,6 +74,8 @@ export const DownloadStatusSchema = z.enum([
 
 export const JobOriginSchema = z.enum(["extension", "manager", "menu", "cli"]);
 
+export const ContentKindSchema = z.enum(["video-audio", "video", "audio", "subtitles"]);
+
 export const LimitPresetSchema = z.enum(["high", "med", "low", "custom"]);
 export const SpeedUnitSchema = z.enum(["bytes", "bits"]);
 /** Bytes per second per preset; null is unlimited. 1e15 is 1 PB/s. */
@@ -119,6 +121,7 @@ export const DownloadJobSchema = z.object({
   overallPercent: z.number().min(0).max(100).optional(),
   errorKind: z.number().int().optional(),
   limitOverride: LimitPresetSchema.optional(),
+  kind: ContentKindSchema.optional(),
 });
 
 export const NoticeSchema = z.object({

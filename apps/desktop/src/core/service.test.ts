@@ -291,6 +291,7 @@ describe("download.start", () => {
     const request = t.fake.submitted[0] as { outputDir?: string };
     expect(request.outputDir).toBe(join(defaultOutputDir(), KIND_FOLDERS.subtitles));
     expect(KIND_FOLDERS.subtitles).toBe("Subtitles");
+    expect(t.history.get("job-1")?.kind).toBe("subtitles");
   });
 
   it("treats an empty outputDir as unset when not sorting by type", async () => {
@@ -780,6 +781,24 @@ describe("media.probe and variantId", () => {
     expect((t.fake.submitted[0] as { profileId: string }).profileId).toBe("audio-m4a");
   });
 
+  it("records what a picked variant saves", async () => {
+    const both = { id: "22", label: "720p", hasVideo: true, hasAudio: true };
+    const t = await setup({ probe: async () => ({ ...media, formats: [...media.formats, both] }) });
+    await t.send("media.probe", { url: media.url });
+    for (const variantId of ["137", "140", "22"]) {
+      await t.send("download.start", {
+        candidate: { ...candidate, url: media.url, pageUrl: media.url },
+        profileId: "best",
+        variantId,
+      });
+    }
+    expect(["job-1", "job-2", "job-3"].map((id) => t.history.get(id)?.kind)).toEqual([
+      "video",
+      "audio",
+      "video-audio",
+    ]);
+  });
+
   it("rejects a variantId the core never returned", async () => {
     const t = await setup({ probe: async () => media });
     await t.send("download.start", {
@@ -903,6 +922,27 @@ describe("history", () => {
     expect(t.history.get("job-1")).toMatchObject({ origin: "menu", lastTryAt: expect.any(Number) });
   });
 
+  it("records the kind from the profile and keeps it through later updates", async () => {
+    const t = await setup();
+    await t.send("download.start", startPayload());
+    await t.send("download.start", startPayload({ profileId: "audio-mp3-320" }));
+    t.update("job-1", { status: "downloading" });
+    expect(t.history.get("job-1")?.kind).toBe("video-audio");
+    expect(t.history.get("job-2")?.kind).toBe("audio");
+    await t.send("jobs.list");
+    const snap = t.sent.find((m) => m.type === "jobs.snapshot");
+    expect(snap?.type === "jobs.snapshot" && snap.payload.jobs.map((j) => j.kind)).toEqual([
+      "video-audio",
+      "audio",
+    ]);
+  });
+
+  it("records the kind a terminal chose", async () => {
+    const t = await setup({ role: "terminal" });
+    await t.send("download.start", startPayload({ kind: "video", formatSelector: "bv" }));
+    expect(t.history.get("job-1")?.kind).toBe("video");
+  });
+
   it("forces origin extension for relay connections", async () => {
     const t = await setup();
     await t.send("download.start", startPayload({ origin: "cli" }));
@@ -961,12 +1001,14 @@ describe("history", () => {
 });
 
 describe("roles", () => {
-  it("refuses a format selector or plan from the relay", async () => {
+  it("refuses a format selector, plan or kind from the relay", async () => {
     const t = await setup();
     await t.send("download.start", startPayload({ formatSelector: "137" }));
     expect(t.sent[0]).toMatchObject({ type: "error", payload: { code: "forbidden" } });
     await t.send("download.start", startPayload({ plan: [{ kind: "download" }] }), "r2");
     expect(t.sent[1]).toMatchObject({ type: "error", payload: { code: "forbidden" } });
+    await t.send("download.start", startPayload({ kind: "video" }), "r3");
+    expect(t.sent[2]).toMatchObject({ type: "error", payload: { code: "forbidden" } });
     expect(t.fake.submitted).toHaveLength(0);
   });
 

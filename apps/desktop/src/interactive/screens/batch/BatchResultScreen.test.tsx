@@ -36,8 +36,20 @@ describe("BatchResultScreen", () => {
       <DepsContext.Provider value={deps}>
         <BatchResultScreen
           plans={[
-            { url: "https://a.com/1", title: "First", profileId: "best", outputDir: "/dl" },
-            { url: "https://a.com/2", title: "Second", profileId: "best", outputDir: "/dl" },
+            {
+              url: "https://a.com/1",
+              title: "First",
+              profileId: "best",
+              kind: "video-audio",
+              outputDir: "/dl",
+            },
+            {
+              url: "https://a.com/2",
+              title: "Second",
+              profileId: "best",
+              kind: "video-audio",
+              outputDir: "/dl",
+            },
           ]}
           jobs={[job("completed", "/dl/First.mp4"), job("paused")]}
           onAction={() => {}}
@@ -57,8 +69,20 @@ describe("BatchResultScreen", () => {
       <DepsContext.Provider value={deps}>
         <BatchResultScreen
           plans={[
-            { url: "https://a.com/1", title: "First", profileId: "best", outputDir: "/dl" },
-            { url: "https://a.com/2", title: "Second", profileId: "best", outputDir: "/dl" },
+            {
+              url: "https://a.com/1",
+              title: "First",
+              profileId: "best",
+              kind: "video-audio",
+              outputDir: "/dl",
+            },
+            {
+              url: "https://a.com/2",
+              title: "Second",
+              profileId: "best",
+              kind: "video-audio",
+              outputDir: "/dl",
+            },
           ]}
           jobs={[job("paused"), job("cancelled")]}
           onAction={() => {}}

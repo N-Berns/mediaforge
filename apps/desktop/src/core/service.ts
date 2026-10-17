@@ -7,7 +7,12 @@ import {
   type ProbedMedia,
   parseExtensionMessage,
 } from "@mediaforge/shared-protocol";
-import { DEFAULT_LIMITS, type DownloadJob, type JobOrigin } from "@mediaforge/shared-types";
+import {
+  type ContentKind,
+  DEFAULT_LIMITS,
+  type DownloadJob,
+  type JobOrigin,
+} from "@mediaforge/shared-types";
 import { contextError } from "../engine/args.ts";
 import type { DownloadEngine, EngineJob } from "../engine/index.ts";
 import { defaultOutputDir } from "../engine/paths.ts";
@@ -563,10 +568,14 @@ export class CoreService {
       origin: askedOrigin,
       formatSelector: terminalSelector,
       plan,
+      kind: terminalKind,
       ...request
     } = message.payload;
     const terminal = state.role === "terminal";
-    if (!terminal && (terminalSelector !== undefined || plan !== undefined)) {
+    if (
+      !terminal &&
+      (terminalSelector !== undefined || plan !== undefined || terminalKind !== undefined)
+    ) {
       this.#forbidden(state, message.id);
       return;
     }
@@ -587,6 +596,8 @@ export class CoreService {
     }
     let formatSelector: string | undefined;
     let profileId = request.profileId;
+    /** What a probed variant carries, when one was picked. */
+    let variantKind: ContentKind | undefined;
     if (request.subtitle) {
       const { lang, auto } = request.subtitle;
       if (!this.#subtitles.get(request.candidate.url)?.has(`${auto ? "auto" : "manual"}:${lang}`)) {
@@ -611,6 +622,7 @@ export class CoreService {
       }
       formatSelector = selectorFor(known);
       if (known.hasAudio && !known.hasVideo) profileId = "audio-m4a";
+      variantKind = !known.hasVideo ? "audio" : known.hasAudio ? "video-audio" : "video";
     }
     // The sort folder follows the profile actually used, which a variant may have changed.
     const profile = getProfile(profileId);
@@ -618,6 +630,9 @@ export class CoreService {
       this.#error(state, message.id, "unknown-profile", `Unknown profile: ${profileId}`);
       return;
     }
+    const kind: ContentKind = request.subtitle
+      ? "subtitles"
+      : (terminalKind ?? variantKind ?? kindOfProfile(profile));
     const settings = await this.#deps.settings.load();
     let outputDir: string | undefined;
     if (terminal) {
@@ -671,6 +686,7 @@ export class CoreService {
         {
           ...row,
           origin,
+          kind,
           ...(selector && { formatSelector: selector }),
           ...(plan && { plan }),
         },
@@ -741,6 +757,7 @@ export class CoreService {
       ...(before?.formatSelector && { formatSelector: before.formatSelector }),
       ...(before?.plan && { plan: before.plan }),
       ...(before?.limitOverride && { limitOverride: before.limitOverride }),
+      ...(before?.kind && { kind: before.kind }),
     };
     if (job.status === "completed" && sizeBytes && lastTryAt !== undefined) {
       const seconds = (this.#deps.now() - lastTryAt) / 1000;

@@ -155,7 +155,7 @@ Phase 2 has no buttons yet: send the requests with a small script through `CoreC
 ## Downloads manager (phase 3b)
 
 - [ ] `mediaforge --manager` opens the Downloads table; Esc goes to the home menu. Home → Downloads opens it too. `mediaforge --manager | more` (no terminal) prints `--manager needs a terminal.`
-- [ ] Press `2` (Size), quit, reopen: the table is still sorted by Size.
+- [ ] Press `3` (Size), quit, reopen: the table is still sorted by Size.
 - [ ] `/` with part of a title narrows the list and the header shows `search: "…"` and `x of N items`; `f` → Paused shows only paused rows; Esc clears both.
 - [ ] On a large real download: `p` pauses it, `r` resumes it from where it was, `c` then `y` cancels it.
 - [ ] `x` on a finished row removes it without asking (the file stays on disk); on a running row it asks first.
@@ -166,7 +166,9 @@ Phase 2 has no buttons yet: send the requests with a small script through `CoreC
 - [ ] Kill the core in Task Manager while the manager is open: the banner says `Reconnecting to MediaForge…`, the rows stay, and they come back live once the core restarts.
 - [ ] With a manager open, send `app.open` from the extension (or a test client): the window flashes and `Opened from browser` shows for a few seconds. Check in conhost, Windows Terminal and one Linux terminal.
 - [ ] Kill the core during a download, reopen the manager: the notice banner shows; `R` resumes the paused downloads, `z` dismisses the notice.
-- [ ] Narrow the window under 80 columns: Last try, ETA and Speed drop; the rows still fit on one line each.
+- [ ] Narrow the window from 120 to under 80 columns: Last try drops under 112, Type under 100, ETA under 90, Speed under 80; the rows still fit on one line each.
+- [ ] Type column: a download picked as Video only (menu or extension format list) reads `Video only`, an MP3 `Audio only`, a saved subtitle `Subtitle`, a plain download `Video`. `2` sorts by type; `f` → Type → Video only shows only those rows.
+- [ ] The key bar starts with `Space Tick  ^A All`; clicking `^A All`, or the `[ ]` above the rows, ticks every visible row and shows `[•]` there; again unticks them.
 
 ## Mouse (phase 3c)
 

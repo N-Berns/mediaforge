@@ -1,5 +1,6 @@
 import { z } from "zod";
 import {
+  ContentKindSchema,
   DownloadJobSchema,
   DownloadProgressSchema,
   DownloadRequestSchema,
@@ -52,6 +53,8 @@ export const DownloadStartMessage = message(
     formatSelector: z.string().min(1).max(200).optional(),
     /** Terminal connections only: the steps expected for the chosen format. */
     plan: z.array(PlannedStepSchema).max(MAX_STEPS).optional(),
+    /** Terminal connections only: what the chosen format saves; a subtitle request says so itself. */
+    kind: ContentKindSchema.exclude(["subtitles"]).optional(),
   }),
 );
 /** Terminal connections only: re-read the settings file and apply "downloads at once". */
