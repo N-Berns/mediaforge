@@ -172,7 +172,7 @@ Phase 2 has no buttons yet: send the requests with a small script through `CoreC
 
 Run each item in the classic console (cmd), Windows Terminal, the VS Code terminal and one Linux terminal.
 
-- [ ] Home: click a menu item highlights it; double-click opens it; the wheel moves the highlight. Clicking `Esc Back` on a sub-screen goes back.
+- [ ] Home: click a menu item highlights it; double-click opens it; the wheel moves the highlight, with the pointer anywhere on the screen. Clicking `Esc Back` on a sub-screen goes back.
 - [ ] Clicking `Ctrl+C Quit` shows `y/N  Quit MediaForge?`; `n` stays, `y` quits. On a download, `Ctrl+C Cancel` asks `Cancel the download?`. Pressing Ctrl+C on the keyboard still acts at once.
 - [ ] Link screen: a click in the field moves the text cursor there.
 - [ ] Folder picker: a click highlights a folder, a double-click opens it, the wheel moves.

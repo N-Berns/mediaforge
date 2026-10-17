@@ -132,6 +132,46 @@ describe("MouseProvider", () => {
     expect(onClick).not.toHaveBeenCalled();
   });
 
+  it("off every list, sends the wheel to the newest list", async () => {
+    const older = vi.fn();
+    const newer = vi.fn();
+    const app = mount(
+      <Box flexDirection="column">
+        <Text>title</Text>
+        <Clickable onWheel={older}>
+          <Text>old list</Text>
+        </Clickable>
+        <Clickable onWheel={newer}>
+          <Text>new list</Text>
+        </Clickable>
+      </Box>,
+    );
+    await tick();
+    app.stdin.write(wheelAt(0, 0, 1));
+    await vi.waitFor(() => expect(newer.mock.calls).toEqual([[1]]));
+    expect(older).not.toHaveBeenCalled();
+  });
+
+  it("while a modal box is up, the wheel off it reaches no list behind", async () => {
+    const behind = vi.fn();
+    const app = mount(
+      <Box flexDirection="column">
+        <Text>title</Text>
+        <Clickable onWheel={behind}>
+          <Text>list</Text>
+        </Clickable>
+        <Clickable modal onClick={() => {}}>
+          <Text>y</Text>
+        </Clickable>
+      </Box>,
+    );
+    await tick();
+    app.stdin.write(wheelAt(0, 0, 1));
+    app.stdin.write(wheelAt(0, 1, 1));
+    await tick();
+    expect(behind).not.toHaveBeenCalled();
+  });
+
   it("while a modal box is up, only modal boxes take presses", async () => {
     const behind = vi.fn();
     const yes = vi.fn();

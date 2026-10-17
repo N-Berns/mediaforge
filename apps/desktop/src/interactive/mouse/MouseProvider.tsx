@@ -80,25 +80,34 @@ export function MouseProvider({
   const pointer = useRef<{ x: number; y: number }>(undefined);
   const hovered = useRef<Entry>(undefined);
 
-  /** Registered boxes under the point that have `need`, smallest first, then newest. */
-  const hits = useCallback((r: { x: number; y: number }, need: keyof ClickHandlers) => {
+  /** Mounted boxes that have `need`; only modal ones while a modal box is up. */
+  const reachable = useCallback((need: keyof ClickHandlers) => {
     const all = [...entries.current];
     const modal = all.filter((e) => e.modal);
-    const scope = modal.length > 0 ? modal : all;
-    return scope
-      .flatMap((entry) => {
-        const node = entry.ref.current;
-        if (!node?.yogaNode || !entry.handlers.current[need]) return [];
-        const box = measureElement(node);
-        const inside =
-          r.x >= box.x && r.x < box.x + box.width && r.y >= box.y && r.y < box.y + box.height;
-        return inside ? [{ entry, box }] : [];
-      })
-      .sort(
-        (a, b) =>
-          a.box.width * a.box.height - b.box.width * b.box.height || b.entry.order - a.entry.order,
-      );
+    return (modal.length > 0 ? modal : all).filter(
+      (entry) => entry.ref.current?.yogaNode && entry.handlers.current[need],
+    );
   }, []);
+
+  /** Registered boxes under the point that have `need`, smallest first, then newest. */
+  const hits = useCallback(
+    (r: { x: number; y: number }, need: keyof ClickHandlers) =>
+      reachable(need)
+        .flatMap((entry) => {
+          const node = entry.ref.current;
+          if (!node) return [];
+          const box = measureElement(node);
+          const inside =
+            r.x >= box.x && r.x < box.x + box.width && r.y >= box.y && r.y < box.y + box.height;
+          return inside ? [{ entry, box }] : [];
+        })
+        .sort(
+          (a, b) =>
+            a.box.width * a.box.height - b.box.width * b.box.height ||
+            b.entry.order - a.entry.order,
+        ),
+    [reachable],
+  );
 
   /** The box a click at the pointer would reach shows as hovered; only changes re-render. */
   const rehover = useCallback(() => {
@@ -118,7 +127,10 @@ export function MouseProvider({
         return;
       }
       if (r.kind === "wheel") {
-        hits(r, "onWheel")[0]?.entry.handlers.current.onWheel?.(r.button < 0 ? -1 : 1);
+        // Off every list, the wheel scrolls the newest one, so it works anywhere on the screen.
+        const target =
+          hits(r, "onWheel")[0]?.entry ?? reachable("onWheel").sort((a, b) => b.order - a.order)[0];
+        target?.handlers.current.onWheel?.(r.button < 0 ? -1 : 1);
         return;
       }
       if (r.kind !== "press" || r.button !== 0) return;
@@ -149,7 +161,7 @@ export function MouseProvider({
         double,
       });
     });
-  }, [hub, now, hits, rehover]);
+  }, [hub, now, hits, rehover, reachable]);
 
   const api = useMemo<MouseApi>(
     () => ({
