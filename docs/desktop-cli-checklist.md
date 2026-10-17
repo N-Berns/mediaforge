@@ -167,3 +167,19 @@ Phase 2 has no buttons yet: send the requests with a small script through `CoreC
 - [ ] With a manager open, send `app.open` from the extension (or a test client): the window flashes and `Opened from browser` shows for a few seconds. Check in conhost, Windows Terminal and one Linux terminal.
 - [ ] Kill the core during a download, reopen the manager: the notice banner shows; `R` resumes the paused downloads, `z` dismisses the notice.
 - [ ] Narrow the window under 80 columns: Last try, ETA and Speed drop; the rows still fit on one line each.
+
+## Mouse (phase 3c)
+
+Run each item in the classic console (cmd), Windows Terminal, the VS Code terminal and one Linux terminal.
+
+- [ ] Home: click a menu item highlights it; double-click opens it; the wheel moves the highlight. Clicking `Esc Back` on a sub-screen goes back.
+- [ ] Clicking `Ctrl+C Quit` shows `y/N  Quit MediaForge?`; `n` stays, `y` quits. On a download, `Ctrl+C Cancel` asks `Cancel the download?`. Pressing Ctrl+C on the keyboard still acts at once.
+- [ ] Link screen: a click in the field moves the text cursor there.
+- [ ] Folder picker: a click highlights a folder, a double-click opens it, the wheel moves.
+- [ ] Manager: click a row (cursor), its `[ ]` (tick), Ctrl+click another row (range), double-click (details), a header (sort, again reverses), the wheel (3 rows), `p Pause` in the key bar, `y` / `N` in a prompt.
+- [ ] Manager: with the filter, details or keys panel open, clicks on the list area do nothing; with a y/N prompt open, only `y` and `N` react.
+- [ ] Details: `y` copies the link, `Y` the path; paste them into Notepad or a text editor. Clicking the URL line copies it too.
+- [ ] Shift+drag selects text in Windows Terminal, VS Code and Linux.
+- [ ] Quit, then in the same window: clicking prints nothing, and in cmd ↑ still recalls the last command (the console input mode was restored).
+- [ ] Windows: right after start the keys work; within about a second clicks work too.
+- [ ] Windows: quit within one second of starting, then in cmd press ↑: it still recalls the last command.

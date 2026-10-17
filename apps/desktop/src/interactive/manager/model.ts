@@ -296,3 +296,23 @@ export function scrollWindow(cursor: number, total: number, size: number, top: n
   if (cursor >= next + size) next = cursor - size + 1;
   return Math.max(0, next);
 }
+
+/**
+ * Ctrl+click: tick every visible row from the anchor to `targetId`, keeping the other ticks.
+ * The anchor is the most recently ticked visible row, else the cursor row, else the target.
+ */
+export function tickRange(
+  ticks: string[],
+  visibleIds: string[],
+  cursorId: string | undefined,
+  targetId: string,
+): string[] {
+  const anchor = [...ticks].reverse().find((id) => visibleIds.includes(id)) ?? cursorId ?? targetId;
+  const from = visibleIds.indexOf(anchor);
+  const to = visibleIds.indexOf(targetId);
+  if (to < 0) return ticks;
+  const start = from < 0 ? to : Math.min(from, to);
+  const end = from < 0 ? to : Math.max(from, to);
+  const added = visibleIds.slice(start, end + 1).filter((id) => !ticks.includes(id));
+  return [...ticks, ...added];
+}

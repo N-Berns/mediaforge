@@ -1,5 +1,6 @@
 import { Box, Text, useInput } from "ink";
 import { useEffect, useState } from "react";
+import { Clickable } from "../mouse/MouseProvider.tsx";
 import { COLORS, ICONS } from "../theme.ts";
 import { useEnterLock } from "./use-enter-lock.ts";
 
@@ -115,7 +116,11 @@ export function Menu<T>({
   const labelWidth = Math.min(LABEL_CAP, Math.max(...items.map((i) => i.label.length), 0));
 
   return (
-    <Box flexDirection="column">
+    <Clickable
+      flexDirection="column"
+      active={isActive}
+      onWheel={(step) => setIndex((i) => stepIndex(items, i, step))}
+    >
       {start > 0 && (
         <Text color={COLORS.muted}>
           {"  "}
@@ -143,7 +148,17 @@ export function Menu<T>({
               ? COLORS.accent
               : undefined;
         return (
-          <Box key={position}>
+          <Clickable
+            key={position}
+            active={isActive}
+            onClick={(click) => {
+              if (item.disabled) return;
+              // The first click can scroll the list, so the second press of a double-click
+              // may land on another row: only the row already highlighted is picked.
+              if (click.double && position === index) select(item);
+              else setIndex(position);
+            }}
+          >
             <Text color={COLORS.accent}>{selected ? `${ICONS.pointer} ` : "  "}</Text>
             {numbered ? (
               <Text color={selected ? COLORS.accent : COLORS.muted}>
@@ -159,7 +174,7 @@ export function Menu<T>({
               {item.label.padEnd(labelWidth)}
             </Text>
             {item.hint ? <Text color={COLORS.muted}>{`  ${item.hint}`}</Text> : null}
-          </Box>
+          </Clickable>
         );
       })}
       {end < items.length && (
@@ -168,6 +183,6 @@ export function Menu<T>({
           {ICONS.download} {items.length - end} more below
         </Text>
       )}
-    </Box>
+    </Clickable>
   );
 }

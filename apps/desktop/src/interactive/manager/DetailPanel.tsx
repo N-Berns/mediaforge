@@ -6,6 +6,7 @@ import {
 } from "@mediaforge/shared-types";
 import { Box, Text, useInput } from "ink";
 import { useState } from "react";
+import { Clickable } from "../mouse/MouseProvider.tsx";
 import { COLORS } from "../theme.ts";
 import { PRESET_NAMES } from "./LimitPicker.tsx";
 import { ORIGIN_LABELS, rowName, statusText } from "./model.ts";
@@ -46,10 +47,20 @@ export interface DetailPanelProps {
   height: number;
   width: number;
   onClose: () => void;
+  /** The link or the path to the clipboard. */
+  onCopy: (field: "url" | "path") => void;
 }
 
 /** Everything the table cuts short: full name, link, path, origin, override and error. */
-export function DetailPanel({ job, unit, limits, height, width, onClose }: DetailPanelProps) {
+export function DetailPanel({
+  job,
+  unit,
+  limits,
+  height,
+  width,
+  onClose,
+  onCopy,
+}: DetailPanelProps) {
   const override = job.limitOverride;
   const limit = override
     ? `${PRESET_NAMES[override]} · ${formatLimit(limits?.[override] ?? null, unit)}`
@@ -67,6 +78,7 @@ export function DetailPanel({ job, unit, limits, height, width, onClose }: Detai
   const lines = fields.flatMap(([label, value]) =>
     wrapText(value, textWidth).map((text, i) => ({
       id: `${label}-${i}`,
+      field: label,
       label: i === 0 ? label : "",
       text,
     })),
@@ -75,8 +87,10 @@ export function DetailPanel({ job, unit, limits, height, width, onClose }: Detai
   const maxTop = Math.max(0, lines.length - size);
   const [top, setTop] = useState(0);
 
-  useInput((_input, key) => {
+  useInput((input, key) => {
     if (key.escape || key.return) onClose();
+    else if (input === "y") onCopy("url");
+    else if (input === "Y") onCopy("path");
     else if (key.upArrow) setTop((t) => Math.max(0, t - 1));
     else if (key.downArrow) setTop((t) => Math.min(maxTop, t + 1));
     else if (key.pageUp) setTop((t) => Math.max(0, t - size));
@@ -89,22 +103,32 @@ export function DetailPanel({ job, unit, limits, height, width, onClose }: Detai
     ...(first > 0 ? ["↑ more"] : []),
     ...(first < maxTop ? ["↓ more"] : []),
     ...(maxTop > 0 ? ["↑↓ scroll"] : []),
+    "y copy link · Y copy path",
     "Esc close",
   ].join(" · ");
   return (
-    <Box flexDirection="column" paddingX={1}>
+    <Clickable
+      flexDirection="column"
+      paddingX={1}
+      onWheel={(step) => setTop((t) => Math.max(0, Math.min(maxTop, t + step)))}
+    >
       <Text bold color={COLORS.accent}>
         Details
       </Text>
       {shown.map((line) => (
-        <Box key={line.id}>
+        <Clickable
+          key={line.id}
+          {...((line.field === "URL" || line.field === "Path") && {
+            onClick: () => onCopy(line.field === "URL" ? "url" : "path"),
+          })}
+        >
           <Box width={LABEL_WIDTH} flexShrink={0}>
             <Text color={COLORS.muted}>{line.label}</Text>
           </Box>
           <Text wrap="truncate-end">{line.text}</Text>
-        </Box>
+        </Clickable>
       ))}
       <Text color={COLORS.muted}>{hint}</Text>
-    </Box>
+    </Clickable>
   );
 }

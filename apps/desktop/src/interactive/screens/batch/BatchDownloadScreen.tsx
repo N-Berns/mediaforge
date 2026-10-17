@@ -164,6 +164,7 @@ export function BatchDownloadScreen({ plans, onDone }: BatchDownloadScreenProps)
       title={`Downloading ${plans.length} links`}
       hints={[["Esc", "Cancel all"]]}
       ctrlC="Cancel"
+      ctrlCQuestion="Cancel all downloads?"
     >
       <Spinner label={summary} />
       <Box marginTop={1}>

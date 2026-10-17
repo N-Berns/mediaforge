@@ -151,6 +151,7 @@ function setup(options: Options = {}) {
         updated.push(info.latest);
       }),
     readClipboard: async () => ("clipboard" in options ? options.clipboard : URL),
+    writeClipboard: vi.fn(async () => true),
     openFolder: async (p) => void opened.push(p),
     fileSize: async () => 5 * 1024 * 1024,
     folders:

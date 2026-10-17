@@ -3,8 +3,9 @@ import { describe, expect, it } from "vitest";
 import { run } from "../cli.ts";
 import type { EngineJob } from "../engine/index.ts";
 import { ExitCode } from "../exit-codes.ts";
+import { powershellPath } from "../powershell.ts";
 import { DEFAULT_SETTINGS } from "../settings.ts";
-import { clipboardCommands, readClipboard } from "./clipboard.ts";
+import { clipboardCommands, copyCommands, readClipboard, writeClipboard } from "./clipboard.ts";
 import { clipboardHint, shorten } from "./clipboard-hint.ts";
 import { stepIndex, visibleWindow } from "./components/Menu.tsx";
 import { renderBar } from "./components/ProgressBar.tsx";
@@ -76,7 +77,7 @@ describe("progress bar", () => {
 
 describe("clipboard", () => {
   it("picks the right tool per platform", () => {
-    expect(clipboardCommands("win32", {})[0]?.command).toBe("powershell.exe");
+    expect(clipboardCommands("win32", {})[0]?.command).toBe(powershellPath({}));
     expect(clipboardCommands("linux", { WAYLAND_DISPLAY: "w" })[0]?.command).toBe("wl-paste");
     expect(clipboardCommands("linux", {})[0]?.command).toBe("xclip");
   });
@@ -104,6 +105,55 @@ describe("clipboard", () => {
         {},
       ),
     ).toBeUndefined();
+  });
+
+  it("copies with Set-Clipboard on Windows, the text on stdin", () => {
+    const [first] = copyCommands("win32", {});
+    expect(first?.command).toBe(powershellPath({}));
+    expect(first?.args.join(" ")).toContain("Set-Clipboard");
+    expect(first?.args.join(" ")).toContain("[Console]::OpenStandardInput()");
+  });
+
+  it("leaves the shared console's code pages alone on Windows", () => {
+    for (const { args } of [...clipboardCommands("win32", {}), ...copyCommands("win32", {})]) {
+      expect(args.join(" ")).not.toContain("InputEncoding");
+      expect(args.join(" ")).not.toContain("OutputEncoding");
+    }
+    expect(clipboardCommands("win32", {})[0]?.args.join(" ")).toContain(
+      "[Console]::OpenStandardOutput()",
+    );
+  });
+
+  it("copies with wl-copy, then xclip, then xsel on Linux", () => {
+    expect(copyCommands("linux").map((c) => c.command)).toEqual(["wl-copy", "xclip", "xsel"]);
+  });
+
+  it("writeClipboard tries the tools in order and passes the text on stdin", async () => {
+    const calls: [string, string][] = [];
+    const ok = await writeClipboard(
+      "https://example.com/v",
+      async (command, _args, input) => {
+        calls.push([command, input]);
+        if (command === "wl-copy") throw new Error("no wayland");
+      },
+      "linux",
+    );
+    expect(ok).toBe(true);
+    expect(calls).toEqual([
+      ["wl-copy", "https://example.com/v"],
+      ["xclip", "https://example.com/v"],
+    ]);
+  });
+
+  it("writeClipboard is false when no tool works", async () => {
+    const ok = await writeClipboard(
+      "x",
+      async () => {
+        throw new Error("missing");
+      },
+      "linux",
+    );
+    expect(ok).toBe(false);
   });
 
   it("finds every link in clipboard text, ignoring prose and punctuation", () => {

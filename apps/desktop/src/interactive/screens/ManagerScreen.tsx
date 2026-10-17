@@ -1,5 +1,6 @@
 import type { ExtensionToHostMessage, HostToExtensionMessage } from "@mediaforge/shared-protocol";
 import {
+  type DownloadJob,
   formatLimit,
   LIMIT_PRESETS,
   type LimitPreset,
@@ -34,10 +35,13 @@ import {
   nextSort,
   scrollWindow,
   sortJobs,
+  tickRange,
   visibleColumns,
 } from "../manager/model.ts";
 import { useCoreSession } from "../manager/session.ts";
-import { Table } from "../manager/Table.tsx";
+import { BOX_COLUMNS, Table, WHEEL_ROWS } from "../manager/Table.tsx";
+import { keySequence } from "../mouse/input.ts";
+import { Clickable, type MouseClick, useMouse } from "../mouse/MouseProvider.tsx";
 import { useSpeedUnit } from "../speed-unit.ts";
 import { COLORS } from "../theme.ts";
 
@@ -95,13 +99,15 @@ const KEY_BAR: [string, string][] = [
   ["f", "Filter"],
   ["l", "Limit"],
 ];
-const KEYS_HINT = "? Keys";
 
 /** As many key hints as fit, always ending with `? Keys`. */
-function keyBar(width: number): string {
-  const parts = KEY_BAR.map(([key, label]) => `${key} ${label}`);
-  while (parts.length > 0 && ` ${[...parts, KEYS_HINT].join("  ")}`.length > width) parts.pop();
-  return ` ${[...parts, KEYS_HINT].join("  ")}`;
+function keyBar(width: number): [string, string][] {
+  const keys: [string, string] = ["?", "Keys"];
+  const parts: [string, string][] = [...KEY_BAR];
+  const length = (list: [string, string][]) =>
+    ` ${[...list, keys].map(([k, l]) => `${k} ${l}`).join("  ")}`.length;
+  while (parts.length > 0 && length(parts) > width) parts.pop();
+  return [...parts, keys];
 }
 
 type Failed = { jobId: string; message: string; code?: string }[];
@@ -224,6 +230,7 @@ export function ManagerScreen({
   if (cursor >= 0) lastIndex.current = cursor;
   const cursorJob = cursor >= 0 ? shown[cursor] : undefined;
   const ticks = new Set(view.ticks);
+  const visibleIds = shown.map((job) => job.id);
 
   // After Add link, put the cursor on the new row as soon as it shows up, unless the search or
   // the filter hides it: a cursor on an invisible row helps nobody.
@@ -255,6 +262,46 @@ export function ManagerScreen({
   const moveTo = (index: number) => {
     const target = shown[Math.max(0, Math.min(shown.length - 1, index))];
     if (target) setView((v) => ({ ...v, cursorId: target.id }));
+  };
+
+  /**
+   * Moves from the cursor the view holds by then, not the one this render drew: several
+   * notches in one read of the terminal arrive before the next render, and each one counts.
+   */
+  const wheelBy = (step: -1 | 1) => {
+    if (shown.length === 0) return;
+    setView((v) => {
+      const at = shown.findIndex((job) => job.id === v.cursorId);
+      const from = at >= 0 ? at : Math.max(0, cursor);
+      const target = shown[Math.max(0, Math.min(shown.length - 1, from + step * WHEEL_ROWS))];
+      return target ? { ...v, cursorId: target.id } : v;
+    });
+  };
+
+  const mouse = useMouse();
+  /** Clicks reach the list only while nothing is drawn over it. */
+  const listMode = mode.name === "list" || mode.name === "search";
+
+  const clickRow = (job: DownloadJob, click: MouseClick) => {
+    if (click.ctrl) {
+      setView((v) => ({
+        ...v,
+        ticks: tickRange(v.ticks, visibleIds, cursorJob?.id, job.id),
+        cursorId: job.id,
+      }));
+      return;
+    }
+    const onBox = BOX_COLUMNS.includes(click.localX);
+    setView((v) => ({
+      ...v,
+      cursorId: job.id,
+      ...(onBox && {
+        ticks: v.ticks.includes(job.id)
+          ? v.ticks.filter((id) => id !== job.id)
+          : [...v.ticks, job.id],
+      }),
+    }));
+    if (click.double && !onBox) setMode({ name: "detail", id: job.id });
   };
 
   /**
@@ -414,7 +461,11 @@ export function ManagerScreen({
     });
   };
 
-  const visibleIds = shown.map((job) => job.id);
+  const answer = (yes: boolean) => {
+    if (mode.name !== "confirm") return;
+    setMode({ name: "list" });
+    if (yes) send(mode.run);
+  };
 
   const detailJob = mode.name === "detail" ? session.jobs.get(mode.id) : undefined;
   // The row in the detail panel went away (removed elsewhere), or the picker has no values to
@@ -424,14 +475,30 @@ export function ManagerScreen({
     if (orphaned) setMode({ name: "list" });
   }, [orphaned]);
 
+  const copy = (field: "url" | "path") => {
+    if (!detailJob) return;
+    const text = field === "url" ? detailJob.request.candidate.url : detailJob.outputPath;
+    if (!text) return say("No file yet.");
+    void deps
+      .writeClipboard(text)
+      .then((ok) =>
+        say(
+          ok
+            ? field === "url"
+              ? "Copied the link."
+              : "Copied the path."
+            : "Could not copy to the clipboard.",
+        ),
+      );
+  };
+
   useInput((input, key) => {
     // An orphaned panel is not drawn: its keys belong to the list again.
     if (!orphaned && mode.name !== "list" && mode.name !== "confirm" && mode.name !== "search") {
       return;
     }
     if (mode.name === "confirm") {
-      setMode({ name: "list" });
-      if (input === "y" || input === "Y") send(mode.run);
+      answer(input === "y" || input === "Y");
       return;
     }
     if (mode.name === "search") {
@@ -536,6 +603,7 @@ export function ManagerScreen({
         height={listRows + 1}
         width={width}
         onClose={() => setMode({ name: "list" })}
+        onCopy={copy}
       />
     ) : mode.name === "limit" && limits ? (
       <LimitPicker
@@ -564,6 +632,9 @@ export function ManagerScreen({
           sort={sort}
           unit={unit}
           now={now}
+          active={listMode}
+          onRowClick={clickRow}
+          onHeaderClick={(column) => saveSort(nextSort(sort, column))}
         />
         {shown.length === 0 && all.length > 0 ? (
           <Text color={COLORS.muted}> No downloads match. Esc clears the filter.</Text>
@@ -573,10 +644,24 @@ export function ManagerScreen({
 
   const footer =
     mode.name === "confirm" ? (
-      // Wraps rather than cuts: the whole question must be readable.
-      <Text color={COLORS.warn} wrap="wrap">
-        {` ${mode.text}`}
-      </Text>
+      <Box width={width}>
+        <Text> </Text>
+        <Clickable modal onClick={() => answer(true)}>
+          <Text bold color={COLORS.warn}>
+            y
+          </Text>
+        </Clickable>
+        <Text color={COLORS.warn}>/</Text>
+        <Clickable modal onClick={() => answer(false)}>
+          <Text color={COLORS.warn}>N</Text>
+        </Clickable>
+        <Box flexShrink={1}>
+          {/* Wraps rather than cuts: the whole question must be readable. */}
+          <Text color={COLORS.warn} wrap="wrap">
+            {mode.text.replace(/^y\/N/, "")}
+          </Text>
+        </Box>
+      </Box>
     ) : mode.name === "search" ? (
       <Text wrap="truncate-end">
         <Text color={COLORS.accent}>{" / "}</Text>
@@ -585,13 +670,26 @@ export function ManagerScreen({
         <Text color={COLORS.muted}>{"   Enter keep · Esc clear"}</Text>
       </Text>
     ) : (
-      <Text color={COLORS.muted} wrap="truncate-end">
-        {keyBar(width)}
-      </Text>
+      <Box width={width} overflow="hidden">
+        <Text> </Text>
+        {keyBar(width).map(([key, label], i) => (
+          <Clickable
+            key={key}
+            flexShrink={0}
+            active={mode.name === "list"}
+            onClick={() => {
+              const sequence = keySequence(key);
+              if (sequence) mouse.inject(sequence);
+            }}
+          >
+            <Text color={COLORS.muted}>{`${i > 0 ? "  " : ""}${key} ${label}`}</Text>
+          </Clickable>
+        ))}
+      </Box>
     );
 
   return (
-    <Box flexDirection="column" width={width}>
+    <Clickable flexDirection="column" width={width} active={listMode} onWheel={wheelBy}>
       <Box width={width} justifyContent="space-between">
         <Text bold color={COLORS.accent} wrap="truncate-end">
           {" MediaForge · Downloads"}
@@ -609,6 +707,6 @@ export function ManagerScreen({
       </Text>
       <Text wrap="truncate-end">{status ? ` ${status}` : " "}</Text>
       {footer}
-    </Box>
+    </Clickable>
   );
 }

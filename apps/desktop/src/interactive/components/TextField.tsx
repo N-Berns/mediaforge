@@ -1,5 +1,6 @@
 import { Box, Text, useInput } from "ink";
 import { useEffect, useRef, useState } from "react";
+import { Clickable } from "../mouse/MouseProvider.tsx";
 import { COLORS, ICONS } from "../theme.ts";
 import { useEnterLock } from "./use-enter-lock.ts";
 import { useTerminalSize } from "./use-terminal-size.ts";
@@ -42,6 +43,9 @@ export function splitUrls(text: string): string {
  * Enter. An Enter followed this quickly by more text is part of a paste, not a submit.
  */
 const PASTE_GAP_MS = 40;
+
+/** Border, padding and the pointer come before the text in a one-line field. */
+const TEXT_OFFSET = 4;
 
 /** The part of a long value to show so the cursor stays visible. */
 export function visibleSlice(value: string, cursor: number, width: number) {
@@ -202,7 +206,18 @@ export function TextField({
 
   return (
     <Box flexDirection="column">
-      <Box borderStyle="single" borderColor={error ? COLORS.error : COLORS.accent} paddingX={1}>
+      <Clickable
+        borderStyle="single"
+        borderColor={error ? COLORS.error : COLORS.accent}
+        paddingX={1}
+        onClick={(click) => {
+          // Border, padding and "► " come before the text.
+          const column = click.localX - TEXT_OFFSET;
+          if (column < 0) return;
+          const start = cursor - shown.cursor;
+          setCursor(Math.min(value.length, start + column));
+        }}
+      >
         <Text color={COLORS.accent}>{ICONS.pointer} </Text>
         {value.length === 0 && placeholder ? (
           <>
@@ -216,7 +231,7 @@ export function TextField({
             {after}
           </Text>
         )}
-      </Box>
+      </Clickable>
       {error ? (
         <Text color={COLORS.error}>
           {" "}

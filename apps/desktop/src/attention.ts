@@ -1,4 +1,5 @@
 import { spawn as spawnChild } from "node:child_process";
+import { powershellPath } from "./powershell.ts";
 
 export interface FlashDeps {
   platform: NodeJS.Platform;
@@ -45,7 +46,12 @@ export function flashWindow(overrides: Partial<FlashDeps> = {}): void {
     if (deps.platform === "win32" && !deps.env.WT_SESSION) {
       // Encoded, so Windows argument quoting cannot touch the quotes in the C# source.
       const encoded = Buffer.from(FLASH_SCRIPT, "utf16le").toString("base64");
-      deps.spawn("powershell", ["-NoProfile", "-NonInteractive", "-EncodedCommand", encoded]);
+      deps.spawn(powershellPath(deps.env), [
+        "-NoProfile",
+        "-NonInteractive",
+        "-EncodedCommand",
+        encoded,
+      ]);
     } else {
       // Windows Terminal and most Linux terminals mark the window on a bell.
       deps.write("\x07");

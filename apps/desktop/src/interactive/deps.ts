@@ -25,6 +25,8 @@ export interface AppDeps {
     onProgress: (progress: UpdateProgress) => void,
   ) => Promise<void>;
   readClipboard: () => Promise<string | undefined>;
+  /** Puts text on the clipboard; false when no clipboard tool works. Never rejects. */
+  writeClipboard: (text: string) => Promise<boolean>;
   openFolder: (path: string) => Promise<void>;
   /** Size of a finished file in bytes, if it can be read. */
   fileSize: (path: string) => Promise<number | undefined>;

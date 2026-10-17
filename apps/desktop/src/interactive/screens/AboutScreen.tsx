@@ -4,7 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { isRequired, type ToolReport } from "../../doctor.ts";
 import type { UpdateInfo, UpdateProgress } from "../../self-update.ts";
 import { SUPPORTED_SITES_URL } from "../../sites.ts";
-import { aboutRows, developerRows, NOTICES } from "../about.ts";
+import { aboutRows, developerRows, NOTICES, SELECT_TIP } from "../about.ts";
 import { Card } from "../components/Card.tsx";
 import { Frame } from "../components/Frame.tsx";
 import { Menu, type MenuItem } from "../components/Menu.tsx";
@@ -148,6 +148,7 @@ export function AboutScreen({ onBack, onSetup }: { onBack: () => void; onSetup: 
             {n.name}: {n.license}. {n.url}
           </Text>
         ))}
+        <Text color={COLORS.muted}>{SELECT_TIP}</Text>
       </Box>
       {update.kind === "installing" ? null : (
         <Menu<Choice>

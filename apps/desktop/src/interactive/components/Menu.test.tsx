@@ -1,5 +1,9 @@
 import { render } from "ink-testing-library";
+import type { ReactElement } from "react";
 import { describe, expect, it, vi } from "vitest";
+import { InputHub } from "../mouse/input.ts";
+import { MouseProvider } from "../mouse/MouseProvider.tsx";
+import { attachTestStdin, clickAt, wheelAt } from "../mouse/testing.ts";
 import { dividerItem, Menu, type MenuItem } from "./Menu.tsx";
 import { TextField } from "./TextField.tsx";
 import { ENTER_LOCK_MS } from "./use-enter-lock.ts";
@@ -149,5 +153,103 @@ describe("double Enter", () => {
     expect(onSubmit).toHaveBeenCalledTimes(1);
     expect(onSubmit).toHaveBeenCalledWith("hello");
     app.unmount();
+  });
+});
+
+/** `now` is the clock the double-click check reads; tests move it by hand. */
+function withMouse(tree: ReactElement, now: () => number = () => 0) {
+  const hub = new InputHub();
+  const app = render(
+    <MouseProvider hub={hub} now={now}>
+      {tree}
+    </MouseProvider>,
+  );
+  attachTestStdin(hub, app.stdin);
+  return app;
+}
+
+describe("Menu mouse", () => {
+  const four: MenuItem<string>[] = [
+    { value: "a", label: "Alpha" },
+    { value: "b", label: "Bravo" },
+    { value: "c", label: "Charlie", disabled: true },
+    { value: "d", label: "Delta" },
+  ];
+
+  it("a click highlights, a double-click picks", async () => {
+    const onSelect = vi.fn();
+    const app = withMouse(<Menu items={four} onSelect={onSelect} />);
+    await tick();
+    app.stdin.write(clickAt(4, 1));
+    await vi.waitFor(() => expect(app.lastFrame()).toMatch(/► 2 Bravo/));
+    expect(onSelect).not.toHaveBeenCalled();
+    app.stdin.write(clickAt(4, 1));
+    await vi.waitFor(() => expect(onSelect).toHaveBeenCalledWith("b"));
+  });
+
+  it("two slow clicks are two single clicks", async () => {
+    let clock = 0;
+    const onSelect = vi.fn();
+    const app = withMouse(<Menu items={four} onSelect={onSelect} />, () => clock);
+    await tick();
+    app.stdin.write(clickAt(4, 1));
+    await vi.waitFor(() => expect(app.lastFrame()).toMatch(/► 2 Bravo/));
+    clock = 1000;
+    app.stdin.write(clickAt(4, 1));
+    await tick();
+    expect(onSelect).not.toHaveBeenCalled();
+  });
+
+  it("a double-click that scrolls the list picks nothing it did not first highlight", async () => {
+    const ten: MenuItem<string>[] = [..."abcdefghij"].map((value) => ({
+      value,
+      label: value.toUpperCase(),
+    }));
+    const onSelect = vi.fn();
+    const app = withMouse(<Menu items={ten} onSelect={onSelect} maxVisible={5} />);
+    await tick();
+    // Rows 0-4 show a-e. The first click highlights e and scrolls the window, so the second
+    // press of the double-click lands on f.
+    app.stdin.write(clickAt(2, 4));
+    await vi.waitFor(() => expect(app.lastFrame()).toMatch(/more above[\s\S]*► E/));
+    app.stdin.write(clickAt(2, 4));
+    await vi.waitFor(() => expect(app.lastFrame()).toMatch(/► F/));
+    await tick();
+    expect(onSelect).not.toHaveBeenCalled();
+    // A double-click on the row that is already highlighted picks it.
+    const at = (app.lastFrame() ?? "").split("\n").findIndex((line) => line.includes("► F"));
+    app.stdin.write(clickAt(2, at));
+    app.stdin.write(clickAt(2, at));
+    await vi.waitFor(() => expect(onSelect).toHaveBeenCalledWith("f"));
+    expect(onSelect).toHaveBeenCalledTimes(1);
+  });
+
+  it("ignores clicks on disabled rows", async () => {
+    const app = withMouse(<Menu items={four} onSelect={() => {}} />);
+    await tick();
+    app.stdin.write(clickAt(4, 2));
+    await tick();
+    expect(app.lastFrame()).toMatch(/► 1 Alpha/);
+  });
+
+  it("the wheel moves the highlight, skipping disabled rows", async () => {
+    const app = withMouse(<Menu items={four} onSelect={() => {}} />);
+    await tick();
+    app.stdin.write(wheelAt(4, 0, 1));
+    app.stdin.write(wheelAt(4, 0, 1));
+    await vi.waitFor(() => expect(app.lastFrame()).toMatch(/► 4 Delta/));
+  });
+});
+
+describe("TextField mouse", () => {
+  it("a click puts the cursor on the clicked character", async () => {
+    const onSubmit = vi.fn();
+    const app = withMouse(<TextField initial="abcdef" onSubmit={onSubmit} onCancel={() => {}} />);
+    await tick();
+    // Border (1) + padding (1) + "► " (2): the text starts at column 4. Column 6 is "c".
+    app.stdin.write(clickAt(6, 1));
+    await tick();
+    app.stdin.write("X");
+    await vi.waitFor(() => expect(app.lastFrame()).toContain("abXcdef"));
   });
 });

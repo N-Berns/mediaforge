@@ -1,6 +1,16 @@
 import { Box, Text } from "ink";
-import { type ReactNode, useContext, useEffect } from "react";
+import {
+  type ReactNode,
+  useCallback,
+  useContext,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+} from "react";
 import { useDeps } from "../deps.ts";
+import { keySequence } from "../mouse/input.ts";
+import { Clickable, useMouse } from "../mouse/MouseProvider.tsx";
 import { NoticeContext } from "../notice.tsx";
 import { COLORS, ICONS, LOGO } from "../theme.ts";
 import { useTerminalSize } from "./use-terminal-size.ts";
@@ -17,11 +27,15 @@ export interface FrameProps {
   tone?: "accent" | "ok" | "error" | "warn";
   /** What Ctrl+C does here. It cancels the running download on the download screens. */
   ctrlC?: "Quit" | "Cancel";
+  /** The y/N question a click on the Ctrl+C hint asks. Defaults by `ctrlC`. */
+  ctrlCQuestion?: string;
   /** Screens that already report the outcome (the result pages) do not repeat the notice. */
   hideNotice?: boolean;
   children: ReactNode;
 }
 
+const CTRL_C_QUESTION = { Quit: "Quit MediaForge?", Cancel: "Cancel the download?" } as const;
+const CTRL_C = String.fromCharCode(3);
 const MAX_WIDTH = 100;
 /** The wordmark is 39 columns wide; below this the plain name is shown instead. */
 const LOGO_MIN_WIDTH = 52;
@@ -34,6 +48,7 @@ export function Frame({
   hints,
   tone = "accent",
   ctrlC = "Quit",
+  ctrlCQuestion,
   hideNotice = false,
   children,
 }: FrameProps) {
@@ -49,6 +64,25 @@ export function Frame({
   const color = COLORS[tone === "accent" ? "accent" : tone];
   // Ctrl+C works on every screen, so it is always the last key hint.
   const shownHints: Hint[] = [...hints.filter(([key]) => key !== "Ctrl+C"), ["Ctrl+C", ctrlC]];
+  const mouse = useMouse();
+  const [asking, setAsking] = useState(false);
+  const answered = useRef(false);
+  const answer = useCallback(
+    (yes: boolean) => {
+      if (answered.current) return;
+      answered.current = true;
+      setAsking(false);
+      if (yes) mouse.inject(CTRL_C);
+    },
+    [mouse],
+  );
+  // While the question shows, keys answer it and reach no screen. Ctrl+C itself still quits.
+  useLayoutEffect(() => {
+    if (!asking) return;
+    answered.current = false;
+    return mouse.capture((text) => answer(/^[yY]$/.test(text) || text.includes(CTRL_C)));
+  }, [asking, mouse, answer]);
+  const question = ctrlCQuestion ?? CTRL_C_QUESTION[ctrlC];
 
   return (
     <Box flexDirection="column" width={width} height={rows ? rows - 1 : undefined}>
@@ -93,16 +127,42 @@ export function Frame({
         <Text color={COLORS.muted}>{"─".repeat(Math.max(0, width - 2))}</Text>
       </Box>
       <Box paddingX={1} justifyContent="space-between">
-        <Box gap={2}>
-          {shownHints.map(([key, label]) => (
-            <Text key={key}>
-              <Text bold color={COLORS.accent}>
-                {key}
+        {asking ? (
+          <Clickable modal onOutside={() => answer(false)}>
+            <Clickable modal onClick={() => answer(true)}>
+              <Text bold color={COLORS.warn}>
+                y
               </Text>
-              <Text color={COLORS.muted}> {label}</Text>
-            </Text>
-          ))}
-        </Box>
+            </Clickable>
+            <Text color={COLORS.warn}>/</Text>
+            <Clickable modal onClick={() => answer(false)}>
+              <Text color={COLORS.warn}>N</Text>
+            </Clickable>
+            <Text color={COLORS.warn}>{`  ${question}`}</Text>
+          </Clickable>
+        ) : (
+          <Box gap={2}>
+            {shownHints.map(([key, label]) => {
+              const sequence = keySequence(key);
+              return (
+                <Clickable
+                  key={key}
+                  active={sequence !== undefined}
+                  onClick={() =>
+                    key === "Ctrl+C" ? setAsking(true) : sequence && mouse.inject(sequence)
+                  }
+                >
+                  <Text>
+                    <Text bold color={COLORS.accent}>
+                      {key}
+                    </Text>
+                    <Text color={COLORS.muted}> {label}</Text>
+                  </Text>
+                </Clickable>
+              );
+            })}
+          </Box>
+        )}
         <Text color={COLORS.muted}>v{version}</Text>
       </Box>
     </Box>

@@ -2,6 +2,12 @@ import { stat } from "node:fs/promises";
 import { render } from "ink";
 import { flashWindow } from "../attention.ts";
 import { defaultBinDir } from "../binaries.ts";
+import {
+  enableVtInput,
+  resetConsoleInput,
+  settleVtInput,
+  type VtInputHandle,
+} from "../console-mode.ts";
 import { applyAutostart } from "../core/autostart.ts";
 import { defaultCoreConnector } from "../core/connect.ts";
 import { inspectTools } from "../doctor.ts";
@@ -14,13 +20,48 @@ import { settingsPath } from "../settings.ts";
 import { defaultToolRuntime } from "../tool-runtime.ts";
 import { VERSION } from "../version.ts";
 import { App } from "./App.tsx";
-import { readClipboard } from "./clipboard.ts";
+import { readClipboard, writeClipboard } from "./clipboard.ts";
 import type { AppDeps } from "./deps.ts";
 import { realFolderFs } from "./folder-fs.ts";
+import { InputHub } from "./mouse/input.ts";
+import { MouseProvider } from "./mouse/MouseProvider.tsx";
+import { terminalStdin } from "./mouse/terminal-stdin.ts";
 import { openFolder } from "./open-folder.ts";
 
 const ENTER_SCREEN = "\x1b[?1049h\x1b[H";
 const LEAVE_SCREEN = "\x1b[?1049l";
+
+/** Mouse reporting: presses, releases and the wheel, in SGR encoding. */
+export const MOUSE_ON = "\x1b[?1000h\x1b[?1006h";
+export const MOUSE_OFF = "\x1b[?1000l\x1b[?1006l";
+
+/**
+ * Leaves the terminal usable if the process ends without unmounting (a crash): mouse off,
+ * normal screen, raw mode off. Raw mode off also resets the Windows console input mode; a
+ * Windows mouse child still running (`vt`) could set the mouse bit again later, so it is
+ * killed and the input mode reset once more (`resetConsoleInput`).
+ */
+export function mouseExitHook(
+  write: (text: string) => void,
+  stdin: { isTTY?: boolean; setRawMode?: (on: boolean) => unknown },
+  vt: () => VtInputHandle | undefined = () => undefined,
+  platform: NodeJS.Platform = process.platform,
+): () => void {
+  return () => {
+    write(MOUSE_OFF + LEAVE_SCREEN);
+    const handle = vt();
+    if (platform === "win32" && handle?.running) {
+      handle.stop();
+      resetConsoleInput(stdin);
+    } else if (stdin.isTTY) {
+      try {
+        stdin.setRawMode?.(false);
+      } catch {
+        // Not a console any more.
+      }
+    }
+  };
+}
 
 export function realDeps(): AppDeps {
   // The startup notice and the About page share one check, kept once it works.
@@ -40,6 +81,7 @@ export function realDeps(): AppDeps {
     },
     installUpdate: (info, onProgress) => installUpdate(info, undefined, onProgress),
     readClipboard: () => readClipboard(),
+    writeClipboard: (text) => writeClipboard(text),
     openFolder,
     fileSize: async (path) => {
       try {
@@ -77,15 +119,34 @@ export function realDeps(): AppDeps {
  * terminal's alternate screen, so quitting restores whatever was on screen before.
  */
 export async function startInteractive(options: { manager?: boolean } = {}): Promise<ExitCode> {
-  process.stdout.write(ENTER_SCREEN);
+  const hub = new InputHub();
+  // Raw mode can go on more than once; only the latest child can still be running.
+  let vt: VtInputHandle | undefined;
+  const input = terminalStdin(hub, process.stdin, () => {
+    vt?.stop();
+    vt = enableVtInput();
+  });
+  const onExit = mouseExitHook(
+    (text) => void process.stdout.write(text),
+    process.stdin,
+    () => vt,
+  );
+  process.once("exit", onExit);
+  process.stdout.write(ENTER_SCREEN + MOUSE_ON);
   try {
     const app = render(
-      <App deps={realDeps()} {...(options.manager && { start: "manager" as const })} />,
-      { exitOnCtrlC: false },
+      <MouseProvider hub={hub}>
+        <App deps={realDeps()} {...(options.manager && { start: "manager" as const })} />
+      </MouseProvider>,
+      { exitOnCtrlC: false, stdin: input.stream },
     );
     await app.waitUntilExit();
   } finally {
-    process.stdout.write(LEAVE_SCREEN);
+    process.stdout.write(MOUSE_OFF + LEAVE_SCREEN);
+    process.removeListener("exit", onExit);
+    input.close();
+    // On process.stdin itself: the Ink stream would start a new child on raw mode.
+    await settleVtInput(vt, process.platform, process.stdin);
   }
   return ExitCode.Ok;
 }

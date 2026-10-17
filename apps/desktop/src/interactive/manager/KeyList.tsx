@@ -1,4 +1,5 @@
 import { Box, Text, useInput } from "ink";
+import { SELECT_TIP } from "../about.ts";
 import { COLORS } from "../theme.ts";
 
 const KEYS: [string, string][] = [
@@ -21,6 +22,8 @@ const KEYS: [string, string][] = [
   ["1-6", "Sort by Name, Size, Status, Speed, ETA, Last try"],
   ["R", "Resume the downloads in the notice"],
   ["z", "Dismiss the session notice"],
+  ["y, Y", "Copy the link, the path (in Details)"],
+  ["Mouse", "Click moves, [ ] ticks, Ctrl+click ticks a range, double-click opens"],
   ["Esc", "Close, clear search and filters, or go back"],
   ["Ctrl+C", "Quit"],
 ];
@@ -45,6 +48,7 @@ export function KeyList({ onClose }: { onClose: () => void }) {
           <Text>{what}</Text>
         </Box>
       ))}
+      <Text color={COLORS.muted}>{SELECT_TIP}</Text>
     </Box>
   );
 }

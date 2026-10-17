@@ -1,5 +1,6 @@
 import { Box, Text, useInput } from "ink";
 import { useState } from "react";
+import { Clickable } from "../mouse/MouseProvider.tsx";
 import { COLORS } from "../theme.ts";
 import {
   type Filters,
@@ -90,23 +91,29 @@ export function FilterPanel({ filters, onChange, onClose }: FilterPanelProps) {
         Filter
       </Text>
       {GROUPS.map((g, gi) => (
-        <Box key={g.name}>
-          <Box width={GROUP_WIDTH} flexShrink={0}>
+        <Box key={g.name} overflow="hidden">
+          <Clickable width={GROUP_WIDTH} flexShrink={0} onClick={() => setRow(gi)}>
             <Text color={gi === row ? COLORS.accent : COLORS.muted}>{g.name}</Text>
-          </Box>
-          <Text wrap="truncate-end">
-            {g.options.map((option, oi) => {
-              const on = option.on(filters);
-              const mark = g.radio ? (on ? "(•)" : "( )") : on ? "[x]" : "[ ]";
-              const here = gi === row && oi === (cols[gi] ?? 0);
-              return (
-                <Text key={option.label} {...(here && { inverse: true })}>
-                  {`${mark} ${option.label}`}
-                  {oi < g.options.length - 1 ? "  " : ""}
-                </Text>
-              );
-            })}
-          </Text>
+          </Clickable>
+          {g.options.map((option, oi) => {
+            const on = option.on(filters);
+            const mark = g.radio ? (on ? "(•)" : "( )") : on ? "[x]" : "[ ]";
+            const here = gi === row && oi === (cols[gi] ?? 0);
+            return (
+              <Clickable
+                key={option.label}
+                flexShrink={0}
+                onClick={() => {
+                  setRow(gi);
+                  setCols((c) => c.map((v, i) => (i === gi ? oi : v)));
+                  onChange(option.toggle(filters));
+                }}
+              >
+                <Text {...(here && { inverse: true })}>{`${mark} ${option.label}`}</Text>
+                {oi < g.options.length - 1 ? <Text>{"  "}</Text> : null}
+              </Clickable>
+            );
+          })}
         </Box>
       ))}
       <Text color={COLORS.muted}>↑↓ group · ←→ option · Space toggle · Enter or Esc close</Text>

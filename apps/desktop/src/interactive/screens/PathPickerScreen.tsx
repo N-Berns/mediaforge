@@ -18,6 +18,7 @@ import {
   startFolder,
   suggestions,
 } from "../folder-browser.ts";
+import { Clickable } from "../mouse/MouseProvider.tsx";
 import { COLORS, ICONS } from "../theme.ts";
 
 export interface PathPickerProps {
@@ -173,23 +174,39 @@ export function PathPickerScreen({ crumbs, startDir, onPick: pick, onCancel }: P
         ) : names.length === 0 ? (
           <Text color={COLORS.muted}>{ICONS.info} No folders match.</Text>
         ) : (
-          <>
+          <Clickable
+            flexDirection="column"
+            onWheel={(step) =>
+              setIndex((i) => (names.length ? (i + step + names.length) % names.length : 0))
+            }
+          >
             {start > 0 ? <Text color={COLORS.muted}>{`  ${start} more above`}</Text> : null}
             {names.slice(start, end).map((name, offset) => {
               const selected = start + offset === index;
               return (
-                <Text key={name}>
-                  <Text color={COLORS.accent}>{selected ? `${ICONS.pointer} ` : "  "}</Text>
-                  <Text color={selected ? COLORS.accent : undefined} bold={selected}>
-                    {ICONS.folder} {name}
+                <Clickable
+                  key={name}
+                  onClick={(click) => {
+                    // The first click can scroll the list: a double-click opens only the
+                    // folder that is already highlighted.
+                    if (click.double && start + offset === index) {
+                      edit((current) => completeWith(platform, current, name));
+                    } else setIndex(start + offset);
+                  }}
+                >
+                  <Text>
+                    <Text color={COLORS.accent}>{selected ? `${ICONS.pointer} ` : "  "}</Text>
+                    <Text color={selected ? COLORS.accent : undefined} bold={selected}>
+                      {ICONS.folder} {name}
+                    </Text>
                   </Text>
-                </Text>
+                </Clickable>
               );
             })}
             {end < names.length ? (
               <Text color={COLORS.muted}>{`  ${names.length - end} more below`}</Text>
             ) : null}
-          </>
+          </Clickable>
         )}
       </Box>
       <Text color={COLORS.muted}>

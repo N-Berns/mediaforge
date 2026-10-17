@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { FLASH_SCRIPT, flashWindow } from "./attention.ts";
+import { powershellPath } from "./powershell.ts";
 
 const deps = (platform: NodeJS.Platform, env: Record<string, string | undefined> = {}) => ({
   platform,
@@ -26,13 +27,21 @@ describe("flashWindow", () => {
   it("flashes the console window in conhost", () => {
     const d = deps("win32");
     flashWindow(d);
-    expect(d.spawn).toHaveBeenCalledWith("powershell", [
+    expect(d.spawn).toHaveBeenCalledWith(powershellPath({}), [
       "-NoProfile",
       "-NonInteractive",
       "-EncodedCommand",
       Buffer.from(FLASH_SCRIPT, "utf16le").toString("base64"),
     ]);
     expect(d.write).not.toHaveBeenCalled();
+  });
+
+  it("runs PowerShell from SystemRoot", () => {
+    const d = deps("win32", { SystemRoot: "D:\\Win" });
+    flashWindow(d);
+    expect(d.spawn.mock.calls[0]?.[0]).toBe(
+      "D:\\Win\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
+    );
   });
 
   it("the script is constant and does not hide the window", () => {

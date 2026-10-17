@@ -4,6 +4,9 @@ export const DEVELOPER = "N-Berns";
 /** Shown on the About page. Leave it undefined to hide the row. */
 export const REPO_URL: string | undefined = "https://github.com/N-Berns/mediaforge";
 
+/** Mouse capture is always on; this is how text is selected anyway. */
+export const SELECT_TIP = "Shift+drag selects text in Windows Terminal and most Linux terminals.";
+
 /** The tools MediaForge downloads and runs, with the license each one is distributed under. */
 export const NOTICES = [
   { name: "yt-dlp", license: "Unlicense (public domain)", url: "https://github.com/yt-dlp/yt-dlp" },

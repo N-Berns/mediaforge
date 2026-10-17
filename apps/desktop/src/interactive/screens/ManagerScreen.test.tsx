@@ -10,6 +10,9 @@ import { memorySettingsStore, type Settings } from "../../settings.ts";
 import type { AppDeps } from "../deps.ts";
 import { DepsContext } from "../deps.ts";
 import { NO_FILTERS } from "../manager/model.ts";
+import { InputHub } from "../mouse/input.ts";
+import { MouseProvider } from "../mouse/MouseProvider.tsx";
+import { attachTestStdin, clickAt, wheelAt } from "../mouse/testing.ts";
 import { SpeedUnitContext } from "../speed-unit.ts";
 import { ManagerScreen, type ManagerScreenProps } from "./ManagerScreen.tsx";
 
@@ -94,7 +97,20 @@ interface MountOptions {
   trash?: TrashFn;
   columns?: number;
   props?: Partial<ManagerScreenProps>;
+  /**
+   * The double-click clock. By default it moves 1 s on every read, so no two clicks are a
+   * double-click however fast the test machine runs; `() => 0` makes every repeat one.
+   */
+  now?: () => number;
 }
+
+const neverDouble = () => {
+  let time = 0;
+  return () => {
+    time += 1000;
+    return time;
+  };
+};
 
 async function mount(options: MountOptions = {}) {
   const store = memorySettingsStore(options.settings);
@@ -125,6 +141,7 @@ async function mount(options: MountOptions = {}) {
       }),
   });
   const flash = vi.fn();
+  const writeClipboard = vi.fn(async () => true);
   const deps = {
     download: {
       env: {},
@@ -135,6 +152,7 @@ async function mount(options: MountOptions = {}) {
     },
     managerCore: core.connectAs("manager"),
     flash,
+    writeClipboard,
     version: "1.0.0",
   } as unknown as AppDeps;
   const props: ManagerScreenProps = {
@@ -145,13 +163,17 @@ async function mount(options: MountOptions = {}) {
     retryMs: 300,
     ...options.props,
   };
+  const hub = new InputHub();
   const app = render(
-    <DepsContext.Provider value={deps}>
-      <SpeedUnitContext.Provider value={options.settings?.speedUnit ?? "bytes"}>
-        <ManagerScreen {...props} />
-      </SpeedUnitContext.Provider>
-    </DepsContext.Provider>,
+    <MouseProvider hub={hub} now={options.now ?? neverDouble()}>
+      <DepsContext.Provider value={deps}>
+        <SpeedUnitContext.Provider value={options.settings?.speedUnit ?? "bytes"}>
+          <ManagerScreen {...props} />
+        </SpeedUnitContext.Provider>
+      </DepsContext.Provider>
+    </MouseProvider>,
   );
+  attachTestStdin(hub, app.stdin);
   if (options.columns) {
     Object.defineProperty(app.stdout, "columns", { value: options.columns, configurable: true });
     (app.stdout as unknown as NodeJS.EventEmitter).emit("resize");
@@ -166,7 +188,36 @@ async function mount(options: MountOptions = {}) {
   const count = (options.jobs ?? []).length;
   await vi.waitFor(() => expect(frame()).toContain(` ${count} item${count === 1 ? "" : "s"}`));
   await vi.waitFor(() => expect(frame()).not.toContain("Connecting to MediaForge"));
-  return { app, frame, press, store, core, history, props, flash, openPath };
+  /** Row of the screen whose text contains `text`, and the column where it starts. */
+  const find = (text: string) => {
+    const lines = frame().split("\n");
+    const y = lines.findIndex((line) => line.includes(text));
+    return { x: lines[y]?.indexOf(text) ?? -1, y };
+  };
+  const click = async (x: number, y: number, mods: { ctrl?: boolean } = {}) => {
+    app.stdin.write(clickAt(x, y, mods));
+    await new Promise((r) => setTimeout(r, 30));
+  };
+  const wheel = async (step: -1 | 1) => {
+    app.stdin.write(wheelAt(10, 3, step));
+    await new Promise((r) => setTimeout(r, 30));
+  };
+  return {
+    app,
+    frame,
+    press,
+    store,
+    core,
+    history,
+    props,
+    flash,
+    openPath,
+    writeClipboard,
+    find,
+    click,
+    wheel,
+    hub,
+  };
 }
 
 /** The table lines (those starting with the cursor column), in screen order. */
@@ -883,5 +934,180 @@ describe("ManagerScreen prompts, focus, clear and banners", () => {
     expect(m.frame()).toContain("R resume all · z dismiss");
     await m.press("R");
     await vi.waitFor(() => expect(statusOf(m, "n1")).not.toBe("paused"));
+  });
+});
+
+const ten = () =>
+  Array.from({ length: 10 }, (_, i) =>
+    row(`j${i}`, { title: `Clip ${i}`, lastTryAt: Date.now() - i * 1000 }),
+  );
+const cursorRow = (frame: string) => tableRows(frame).findIndex((line) => line.startsWith(">"));
+const settle = () => new Promise((r) => setTimeout(r, 80));
+
+describe("ManagerScreen mouse", () => {
+  it("a click on a row moves the cursor there", async () => {
+    const m = await mount({ jobs: ten() });
+    const { y } = m.find("Clip 3");
+    await m.click(10, y);
+    await vi.waitFor(() => expect(cursorRow(m.frame())).toBe(3));
+  });
+
+  it("a click on the box ticks the row and moves the cursor", async () => {
+    const m = await mount({ jobs: ten() });
+    const { y } = m.find("Clip 2");
+    await m.click(2, y);
+    await vi.waitFor(() => expect(tableRows(m.frame())[2]).toMatch(/^>\[•\]/));
+    await m.click(2, y);
+    await vi.waitFor(() => expect(tableRows(m.frame())[2]).toMatch(/^>\[ \]/));
+  });
+
+  it("Ctrl+click ticks a range from the cursor row", async () => {
+    const m = await mount({ jobs: ten() });
+    await m.click(10, m.find("Clip 1").y);
+    await vi.waitFor(() => expect(cursorRow(m.frame())).toBe(1));
+    await m.click(10, m.find("Clip 4").y, { ctrl: true });
+    await vi.waitFor(() => {
+      const ticked = tableRows(m.frame()).map((line) => line.includes("[•]"));
+      expect(ticked).toEqual([false, true, true, true, true, false, false, false, false, false]);
+    });
+    expect(cursorRow(m.frame())).toBe(4);
+  });
+
+  it("a double-click on a row opens its details", async () => {
+    const m = await mount({ jobs: ten(), now: () => 0 });
+    const { y } = m.find("Clip 5");
+    await m.click(10, y);
+    await vi.waitFor(() => expect(cursorRow(m.frame())).toBe(5));
+    await m.click(10, y);
+    await vi.waitFor(() => expect(m.frame()).toContain("Details"));
+    expect(m.frame()).toContain("Clip 5");
+  });
+
+  it("a click on a column header sorts by it; again reverses", async () => {
+    const m = await mount({ jobs: three() });
+    const header = m.find("Size");
+    await m.click(header.x, header.y);
+    await vi.waitFor(() => expect(m.frame()).toContain("Size ▼"));
+    expect(tableRows(m.frame())[0]).toContain("Big Buck Bunny");
+    await m.click(header.x, header.y);
+    await vi.waitFor(() => expect(m.frame()).toContain("Size ▲"));
+  });
+
+  it("the wheel moves the cursor 3 rows", async () => {
+    const m = await mount({ jobs: ten() });
+    await m.wheel(1);
+    await vi.waitFor(() => expect(cursorRow(m.frame())).toBe(3));
+    await m.wheel(-1);
+    await vi.waitFor(() => expect(cursorRow(m.frame())).toBe(0));
+  });
+
+  it("several wheel notches in one read all count", async () => {
+    const m = await mount({ jobs: ten() });
+    m.app.stdin.write(wheelAt(10, 3, 1) + wheelAt(10, 3, 1));
+    await vi.waitFor(() => expect(cursorRow(m.frame())).toBe(6));
+  });
+
+  it("a key-bar word runs its key", async () => {
+    const m = await mount({ jobs: three() });
+    const word = m.find("? Keys");
+    await m.click(word.x, word.y);
+    await vi.waitFor(() => expect(m.frame()).toContain("Move the cursor"));
+  });
+
+  it("y and N in a prompt answer it", async () => {
+    const jobs = [row("run", { title: "Live", status: "downloading", lastTryAt: Date.now() })];
+    const m = await mount({ jobs });
+    await m.press("c");
+    await vi.waitFor(() => expect(m.find("y/N").y).toBeGreaterThan(0));
+    const prompt = m.find("y/N");
+    await m.click(prompt.x + 2, prompt.y);
+    await vi.waitFor(() => expect(m.frame()).not.toContain("y/N"));
+    await m.press("c");
+    await vi.waitFor(() => expect(m.find("y/N").y).toBeGreaterThan(0));
+    await m.click(m.find("y/N").x, m.find("y/N").y);
+    await vi.waitFor(() => expect(m.frame()).toContain("Cancelled 1"));
+  });
+
+  it("ignores clicks behind a prompt", async () => {
+    const m = await mount({ jobs: ten() });
+    // Del always asks (x on a completed row would remove it at once).
+    await m.press(KEY.del);
+    await vi.waitFor(() => expect(m.frame()).toContain("y/N"));
+    await m.click(10, m.find("Clip 4").y);
+    await m.wheel(1);
+    await settle();
+    expect(m.frame()).toContain("y/N");
+    expect(cursorRow(m.frame())).toBe(0);
+  });
+
+  it("ignores clicks on the key bar and the wheel while a panel is open", async () => {
+    const m = await mount({ jobs: ten() });
+    const keys = m.find("? Keys");
+    const add = m.find("a Add");
+    await m.press("f");
+    await vi.waitFor(() => expect(m.frame()).toContain("[ ] Paused"));
+    const before = m.frame();
+    await m.click(keys.x, keys.y);
+    await m.click(add.x, add.y);
+    await m.wheel(1);
+    await settle();
+    expect(m.frame()).toBe(before);
+    expect(m.frame()).not.toContain("Move the cursor");
+    expect(m.props.onAdd).not.toHaveBeenCalled();
+    await m.press(KEY.esc);
+    await vi.waitFor(() => expect(tableRows(m.frame())).toHaveLength(10));
+    expect(cursorRow(m.frame())).toBe(0);
+  });
+});
+
+describe("ManagerScreen panels and copy", () => {
+  it("a click on a filter option toggles it", async () => {
+    const m = await mount({ jobs: three() });
+    await m.press("f");
+    await vi.waitFor(() => expect(m.frame()).toContain("[ ] Paused"));
+    const option = m.find("[ ] Paused");
+    await m.click(option.x + 1, option.y);
+    await vi.waitFor(() => expect(m.frame()).toContain("[x] Paused"));
+    await vi.waitFor(() => expect(m.frame()).toContain("1 of 3 items"));
+  });
+
+  it("y and Y copy the link and the path from the details", async () => {
+    const jobs = [
+      row("a", { title: "Clip", outputPath: "/videos/Clip.mp4", lastTryAt: Date.now() }),
+    ];
+    const m = await mount({ jobs });
+    await m.press(KEY.enter, "y");
+    await vi.waitFor(() => expect(m.frame()).toContain("Copied the link."));
+    expect(m.writeClipboard).toHaveBeenLastCalledWith(URL);
+    await m.press("Y");
+    await vi.waitFor(() => expect(m.frame()).toContain("Copied the path."));
+    expect(m.writeClipboard).toHaveBeenLastCalledWith("/videos/Clip.mp4");
+  });
+
+  it("a click on the Path line copies it; no file yet says so", async () => {
+    // Failed, so the core does not start it; it has no output path.
+    const jobs = [row("a", { title: "Clip", status: "failed", lastTryAt: Date.now() })];
+    const m = await mount({ jobs });
+    await m.press(KEY.enter);
+    await vi.waitFor(() => expect(m.frame()).toContain("Details"));
+    const path = m.find("Path");
+    await m.click(path.x + 10, path.y);
+    await vi.waitFor(() => expect(m.frame()).toContain("No file yet."));
+    expect(m.writeClipboard).not.toHaveBeenCalled();
+  });
+
+  it("says so when the clipboard cannot be written", async () => {
+    const jobs = [row("a", { title: "Clip", lastTryAt: Date.now() })];
+    const m = await mount({ jobs });
+    m.writeClipboard.mockResolvedValue(false);
+    await m.press(KEY.enter, "y");
+    await vi.waitFor(() => expect(m.frame()).toContain("Could not copy to the clipboard."));
+  });
+
+  it("the key list explains the mouse and Shift+drag", async () => {
+    const m = await mount({ jobs: three() });
+    await m.press("?");
+    await vi.waitFor(() => expect(m.frame()).toContain("Ctrl+click"));
+    expect(m.frame()).toContain("Shift+drag selects text");
   });
 });

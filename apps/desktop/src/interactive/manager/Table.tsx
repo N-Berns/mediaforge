@@ -1,6 +1,7 @@
 import type { DownloadJob, DownloadStatus, SpeedUnit } from "@mediaforge/shared-types";
 import { Box, Text } from "ink";
 import type { ManagerSort } from "../../settings.ts";
+import { Clickable, type MouseClick } from "../mouse/MouseProvider.tsx";
 import { COLORS } from "../theme.ts";
 import {
   COLUMN_LABELS,
@@ -15,6 +16,11 @@ import {
   speedText,
   statusText,
 } from "./model.ts";
+
+/** Cells of the `[ ]` box in a row: column 0 is the cursor mark. */
+export const BOX_COLUMNS = [1, 2, 3];
+/** Rows the cursor moves per wheel notch. */
+export const WHEEL_ROWS = 3;
 
 const STATUS_COLOR: Partial<Record<DownloadStatus, string>> = {
   downloading: COLORS.accent,
@@ -68,30 +74,58 @@ export interface TableProps {
   sort: ManagerSort;
   unit: SpeedUnit;
   now: number;
+  onRowClick?: (job: DownloadJob, click: MouseClick) => void;
+  onHeaderClick?: (column: Column) => void;
+  /** False while a panel or prompt is up: the table takes no clicks. */
+  active?: boolean;
 }
 
 /** The column header and the visible rows. `rows` is already the scrolled window. */
-export function Table({ rows, columns, width, cursor, ticks, sort, unit, now }: TableProps) {
+export function Table({
+  rows,
+  columns,
+  width,
+  cursor,
+  ticks,
+  sort,
+  unit,
+  now,
+  onRowClick,
+  onHeaderClick,
+  active = true,
+}: TableProps) {
   const name = nameWidth(width, columns);
   return (
     <Box flexDirection="column" width={width} overflow="hidden">
       <Box width={width} overflow="hidden">
         <Text color={COLORS.muted}>{" [ ] "}</Text>
         {columns.map((column) => (
-          <Cell
+          <Clickable
             key={column}
-            width={widthOf(column, name)}
-            color={COLORS.muted}
-            text={
-              column === sort.column
-                ? `${COLUMN_LABELS[column]} ${sort.descending ? "▼" : "▲"}`
-                : COLUMN_LABELS[column]
-            }
-          />
+            flexShrink={0}
+            active={active}
+            onClick={() => onHeaderClick?.(column)}
+          >
+            <Cell
+              width={widthOf(column, name)}
+              color={COLORS.muted}
+              text={
+                column === sort.column
+                  ? `${COLUMN_LABELS[column]} ${sort.descending ? "▼" : "▲"}`
+                  : COLUMN_LABELS[column]
+              }
+            />
+          </Clickable>
         ))}
       </Box>
       {rows.map((job, i) => (
-        <Box key={job.id} width={width} overflow="hidden">
+        <Clickable
+          key={job.id}
+          width={width}
+          overflow="hidden"
+          active={active}
+          onClick={(click) => onRowClick?.(job, click)}
+        >
           <Text color={COLORS.accent}>{i === cursor ? ">" : " "}</Text>
           <Text>{ticks.has(job.id) ? "[•] " : "[ ] "}</Text>
           {columns.map((column) =>
@@ -110,7 +144,7 @@ export function Table({ rows, columns, width, cursor, ticks, sort, unit, now }: 
               />
             ),
           )}
-        </Box>
+        </Clickable>
       ))}
     </Box>
   );

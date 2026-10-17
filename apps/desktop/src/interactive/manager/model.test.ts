@@ -15,6 +15,7 @@ import {
   sortJobs,
   speedText,
   statusText,
+  tickRange,
   visibleColumns,
 } from "./model.ts";
 
@@ -265,5 +266,25 @@ describe("layout", () => {
     expect(scrollWindow(5, 50, 10, 2)).toBe(2);
     expect(scrollWindow(4, 5, 10, 3)).toBe(0);
     expect(scrollWindow(49, 50, 10, 0)).toBe(40);
+  });
+});
+
+describe("tickRange", () => {
+  const ids = ["a", "b", "c", "d", "e"];
+
+  it("ticks from the last ticked visible row to the target", () => {
+    expect(tickRange(["b"], ids, "a", "d")).toEqual(["b", "c", "d"]);
+  });
+
+  it("starts at the cursor row when nothing visible is ticked", () => {
+    expect(tickRange(["hidden"], ids, "d", "b")).toEqual(["hidden", "b", "c", "d"]);
+  });
+
+  it("uses the most recently ticked row as the anchor", () => {
+    expect(tickRange(["a", "e"], ids, undefined, "c")).toEqual(["a", "e", "c", "d"]);
+  });
+
+  it("ticks the target alone with no anchor", () => {
+    expect(tickRange([], ids, undefined, "c")).toEqual(["c"]);
   });
 });
