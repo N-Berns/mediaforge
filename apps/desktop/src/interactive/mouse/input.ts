@@ -15,6 +15,8 @@ const ESC = String.fromCharCode(27);
 const SGR = new RegExp(`${ESC}\\[<(\\d+);(\\d+);(\\d+)([Mm])`, "g");
 /** The start of a report whose end is still on the way. */
 const PARTIAL = new RegExp(`${ESC}\\[<[\\d;]*$`);
+/** The end of a report whose start was dropped: what follows `ESC [ <`. */
+const ORPHAN = /^[\d;]*[Mm]/;
 const MOTION = 32;
 const WHEEL = 64;
 
@@ -82,7 +84,7 @@ export function keySequence(label: string): string | undefined {
   return [...key].length === 1 ? key : undefined;
 }
 
-/** How long a cut-off report may wait for its end before it counts as typed text. */
+/** How long a cut-off report may wait for its end before it is dropped. */
 const PARTIAL_WAIT_MS = 50;
 
 /**
@@ -95,18 +97,23 @@ export class InputHub {
   private readonly listeners = new Set<(report: MouseReport) => void>();
   private captor: ((text: string) => void) | undefined;
   private held = "";
+  /** A cut-off report was dropped: the next chunk may start with its end. */
+  private dropped = false;
   private timer: ReturnType<typeof setTimeout> | undefined;
 
   /** Raw input from the terminal. */
   feed(chunk: string): void {
     clearTimeout(this.timer);
-    const { text, reports, rest } = splitInput(this.held + chunk);
+    // The end of a dropped report would reach a text field as typed text, e.g. `10;5M`.
+    const fresh = this.dropped ? chunk.replace(ORPHAN, "") : chunk;
+    this.dropped = false;
+    const { text, reports, rest } = splitInput(this.held + fresh);
     this.held = rest;
     if (rest) {
+      // Never typed: the start of a report is no key the user pressed.
       this.timer = setTimeout(() => {
-        const late = this.held;
         this.held = "";
-        this.keys(late);
+        this.dropped = true;
       }, PARTIAL_WAIT_MS);
     }
     if (text) this.keys(text);

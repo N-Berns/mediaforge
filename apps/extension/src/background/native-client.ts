@@ -16,7 +16,8 @@ export type ConnectionState =
   | { kind: "connecting" }
   | { kind: "not-installed" }
   | { kind: "unavailable"; message: string }
-  | { kind: "incompatible" }
+  /** `outdated`: the side that speaks the older protocol and needs the update. */
+  | { kind: "incompatible"; outdated: "app" | "extension" }
   | { kind: "setting-up"; tool?: string; percent?: number }
   | { kind: "ready" };
 
@@ -208,26 +209,32 @@ export function createNativeClient(options: NativeClientOptions): NativeClient {
     send("jobs.list", {});
   }
 
-  function isIncompatibleFrame(raw: unknown): boolean {
-    if (typeof raw !== "object" || raw === null) return false;
+  /** The side to update when the core answered hello in another protocol version. */
+  function incompatibleSide(raw: unknown): "app" | "extension" | undefined {
+    if (typeof raw !== "object" || raw === null) return undefined;
     const f = raw as { v?: unknown; id?: unknown; type?: unknown; payload?: unknown };
     const payload = (typeof f.payload === "object" && f.payload !== null ? f.payload : {}) as {
       replyTo?: unknown;
       code?: unknown;
     };
+    // A core that does not know this hello is older; one that answers in a newer version is newer.
+    const side = () => (typeof f.v === "number" && f.v > PROTOCOL_VERSION ? "extension" : "app");
     if (f.type === "error" && payload.replyTo === helloId) {
-      return f.v !== PROTOCOL_VERSION || payload.code === "invalid-message";
+      return f.v !== PROTOCOL_VERSION || payload.code === "invalid-message" ? side() : undefined;
     }
-    return f.type === "hello.ack" && f.id === helloId && f.v !== PROTOCOL_VERSION;
+    return f.type === "hello.ack" && f.id === helloId && f.v !== PROTOCOL_VERSION
+      ? side()
+      : undefined;
   }
 
   function onMessage(raw: unknown) {
-    if (isIncompatibleFrame(raw)) {
+    const outdated = incompatibleSide(raw);
+    if (outdated) {
       const old = port;
       port = undefined;
       clearConnTimers();
       failAll("disconnected", "The connection to MediaForge closed.");
-      setState({ kind: "incompatible" });
+      setState({ kind: "incompatible", outdated });
       old?.disconnect();
       scheduleReconnect();
       return;

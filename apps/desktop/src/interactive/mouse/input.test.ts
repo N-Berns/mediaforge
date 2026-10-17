@@ -110,13 +110,26 @@ describe("InputHub", () => {
     expect(reports).toHaveLength(1);
   });
 
-  it("lets a held prefix go as keys when nothing follows", () => {
+  it("drops a held prefix when nothing follows, and the late end of it", () => {
+    vi.useFakeTimers();
+    const { h, keys, reports } = hub();
+    h.feed(`${ESC}[<35;10`);
+    expect(keys).toEqual([]);
+    vi.advanceTimersByTime(60);
+    expect(keys).toEqual([]);
+    h.feed(";5Mab");
+    expect(keys).toEqual(["ab"]);
+    expect(reports).toHaveLength(0);
+  });
+
+  it("types digits and M after a drop once another chunk has come between", () => {
     vi.useFakeTimers();
     const { h, keys } = hub();
     h.feed(`${ESC}[<1`);
-    expect(keys).toEqual([]);
     vi.advanceTimersByTime(60);
-    expect(keys).toEqual([`${ESC}[<1`]);
+    h.feed("x");
+    h.feed("5M");
+    expect(keys).toEqual(["x", "5M"]);
   });
 
   it("routes keys to a capture until it is released; injected keys skip it", () => {

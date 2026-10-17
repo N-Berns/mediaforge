@@ -781,6 +781,19 @@ describe("media.probe and variantId", () => {
     expect((t.fake.submitted[0] as { profileId: string }).profileId).toBe("audio-m4a");
   });
 
+  it("sorts a video-only variant into the Video only folder", async () => {
+    const t = await setup({ probe: async () => media, settings: { sortByType: true } });
+    await t.send("media.probe", { url: media.url });
+    await t.send("download.start", {
+      candidate: { ...candidate, url: media.url, pageUrl: media.url },
+      profileId: "best",
+      variantId: "137",
+    });
+    const request = t.fake.submitted[0] as { outputDir?: string };
+    expect(request.outputDir).toBe(join(defaultOutputDir(), KIND_FOLDERS.video));
+    expect(KIND_FOLDERS.video).toBe("Video only");
+  });
+
   it("records what a picked variant saves", async () => {
     const both = { id: "22", label: "720p", hasVideo: true, hasAudio: true };
     const t = await setup({ probe: async () => ({ ...media, formats: [...media.formats, both] }) });

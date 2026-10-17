@@ -56,10 +56,23 @@ describe("buildPopupModel", () => {
     expect(m.banner?.text).toMatch(/40%/);
   });
 
-  it("asks for an update when the core is incompatible, and reports unavailable", () => {
-    expect(buildPopupModel({ ...base, connection: { kind: "incompatible" } }).banner?.text).toMatch(
-      /Update MediaForge/,
+  it("names the side to update when the core is incompatible, and reports unavailable", () => {
+    const app = buildPopupModel({
+      ...base,
+      connection: { kind: "incompatible", outdated: "app" },
+    }).banner;
+    expect(app?.text).toBe(
+      "Update MediaForge: the app on your computer is older than this extension.",
     );
+    expect(app?.link?.label).toBe("Get MediaForge");
+    const extension = buildPopupModel({
+      ...base,
+      connection: { kind: "incompatible", outdated: "extension" },
+    }).banner;
+    expect(extension?.text).toBe(
+      "Update this extension: it is older than the MediaForge app on your computer.",
+    );
+    expect(extension?.link).toBeUndefined();
     expect(
       buildPopupModel({ ...base, connection: { kind: "unavailable", message: "no" } }).banner?.tone,
     ).toBe("error");
@@ -163,7 +176,7 @@ describe("buildPopupModel", () => {
     for (const connection of [
       { kind: "connecting" },
       { kind: "not-installed" },
-      { kind: "incompatible" },
+      { kind: "incompatible", outdated: "app" },
       { kind: "unavailable", message: "x" },
     ] as const) {
       expect(buildPopupModel({ ...base, connection }).openFolder).toBeUndefined();

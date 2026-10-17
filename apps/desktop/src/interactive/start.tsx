@@ -63,6 +63,35 @@ export function mouseExitHook(
   };
 }
 
+/** Signals that end the process without an `exit` event of their own: a kill, a closed terminal. */
+const EXIT_SIGNALS = { SIGHUP: 1, SIGTERM: 15 } as const;
+
+/**
+ * Runs `onExit` once, whatever ends the process, and exits on SIGTERM or SIGHUP, which skip the
+ * `exit` event by default. Returns a function that removes the listeners.
+ */
+export function exitHooks(
+  onExit: () => void,
+  proc: Pick<NodeJS.Process, "once" | "removeListener" | "exit"> = process,
+): () => void {
+  let done = false;
+  const once = () => {
+    if (done) return;
+    done = true;
+    onExit();
+  };
+  const onSignal = (signal: NodeJS.Signals) => {
+    once();
+    proc.exit(128 + (EXIT_SIGNALS[signal as keyof typeof EXIT_SIGNALS] ?? 0));
+  };
+  proc.once("exit", once);
+  for (const signal of Object.keys(EXIT_SIGNALS)) proc.once(signal, onSignal);
+  return () => {
+    proc.removeListener("exit", once);
+    for (const signal of Object.keys(EXIT_SIGNALS)) proc.removeListener(signal, onSignal);
+  };
+}
+
 export function realDeps(): AppDeps {
   // The startup notice and the About page share one check, kept once it works.
   let check: ReturnType<typeof checkForUpdate> | undefined;
@@ -131,7 +160,7 @@ export async function startInteractive(options: { manager?: boolean } = {}): Pro
     process.stdin,
     () => vt,
   );
-  process.once("exit", onExit);
+  const removeExitHooks = exitHooks(onExit);
   process.stdout.write(ENTER_SCREEN + MOUSE_ON);
   try {
     const app = render(
@@ -143,7 +172,7 @@ export async function startInteractive(options: { manager?: boolean } = {}): Pro
     await app.waitUntilExit();
   } finally {
     process.stdout.write(MOUSE_OFF + LEAVE_SCREEN);
-    process.removeListener("exit", onExit);
+    removeExitHooks();
     input.close();
     // On process.stdin itself: the Ink stream would start a new child on raw mode.
     await settleVtInput(vt, process.platform, process.stdin);

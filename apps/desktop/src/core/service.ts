@@ -624,7 +624,7 @@ export class CoreService {
       if (known.hasAudio && !known.hasVideo) profileId = "audio-m4a";
       variantKind = !known.hasVideo ? "audio" : known.hasAudio ? "video-audio" : "video";
     }
-    // The sort folder follows the profile actually used, which a variant may have changed.
+    // The profile actually used, which a variant may have changed.
     const profile = getProfile(profileId);
     if (!profile) {
       this.#error(state, message.id, "unknown-profile", `Unknown profile: ${profileId}`);
@@ -659,12 +659,9 @@ export class CoreService {
         }
         base = resolve(requestedDir);
       }
+      // The type the job saves, so a video-only variant lands in "Video only".
       outputDir = settings.sortByType
-        ? withKindFolder(
-            base || defaultOutputDir(),
-            request.subtitle ? "subtitles" : kindOfProfile(profile),
-            true,
-          )
+        ? withKindFolder(base || defaultOutputDir(), kind, true)
         : base;
     }
     const selector = terminalSelector ?? formatSelector;

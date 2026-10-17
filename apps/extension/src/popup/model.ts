@@ -115,11 +115,17 @@ export function buildPopupModel(
       };
       return model;
     case "incompatible":
-      model.banner = {
-        tone: "warn",
-        text: "Update MediaForge: this extension is newer than the app on your computer.",
-        link: { label: "Get MediaForge", href: INSTALL_URL },
-      };
+      model.banner =
+        state.connection.outdated === "app"
+          ? {
+              tone: "warn",
+              text: "Update MediaForge: the app on your computer is older than this extension.",
+              link: { label: "Get MediaForge", href: INSTALL_URL },
+            }
+          : {
+              tone: "warn",
+              text: "Update this extension: it is older than the MediaForge app on your computer.",
+            };
       return model;
     case "unavailable":
       model.banner = { tone: "error", text: state.connection.message };

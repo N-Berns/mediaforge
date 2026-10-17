@@ -168,6 +168,8 @@ Phase 2 has no buttons yet: send the requests with a small script through `CoreC
 - [ ] Kill the core during a download, reopen the manager: the notice banner shows; `R` resumes the paused downloads, `z` dismisses the notice.
 - [ ] Narrow the window from 120 to under 80 columns: Last try drops under 112, Type under 100, ETA under 90, Speed under 80; the rows still fit on one line each.
 - [ ] Type column: a download picked as Video only (menu or extension format list) reads `Video only`, an MP3 `Audio only`, a saved subtitle `Subtitle`, a plain download `Video`. `2` sorts by type; `f` → Type → Video only shows only those rows.
+- [ ] With sort by type on, pick a video-only format in the extension's format list: the file lands in `Video only`, not `Video`.
+- [ ] Load an extension build from before 2026-10-16 (protocol 2) against this app: the popup says `Update this extension: it is older than the MediaForge app on your computer.` With an older app, it says `Update MediaForge: the app on your computer is older than this extension.`
 - [ ] The key bar starts with `Space Tick  Ctrl+A All`; clicking `Ctrl+A All`, or the `[ ]` above the rows, ticks every visible row and shows `[•]` there; again unticks them.
 
 ## Mouse (phase 3c)

@@ -1,7 +1,7 @@
 import { EventEmitter } from "node:events";
 import { describe, expect, it, vi } from "vitest";
 import { enableVtInput } from "../console-mode.ts";
-import { MOUSE_OFF, MOUSE_ON, mouseExitHook } from "./start.tsx";
+import { exitHooks, MOUSE_OFF, MOUSE_ON, mouseExitHook } from "./start.tsx";
 
 const vtHandle = (exited: boolean) => {
   const child = Object.assign(new EventEmitter(), { kill: vi.fn() });
@@ -9,6 +9,39 @@ const vtHandle = (exited: boolean) => {
   if (exited) child.emit("exit", 0, null);
   return { child, handle };
 };
+
+describe("exitHooks", () => {
+  const fakeProcess = () => {
+    const emitter = new EventEmitter();
+    const exit = vi.fn();
+    return { emitter, exit, proc: Object.assign(emitter, { exit }) as never };
+  };
+
+  it("cleans up once on exit, SIGTERM or SIGHUP, and exits on a signal", () => {
+    for (const [signal, code] of [
+      ["SIGTERM", 143],
+      ["SIGHUP", 129],
+    ] as const) {
+      const { emitter, exit, proc } = fakeProcess();
+      const onExit = vi.fn();
+      exitHooks(onExit, proc);
+      emitter.emit(signal, signal);
+      emitter.emit("exit");
+      expect(onExit).toHaveBeenCalledTimes(1);
+      expect(exit).toHaveBeenCalledWith(code);
+    }
+  });
+
+  it("removes every listener", () => {
+    const { emitter, proc } = fakeProcess();
+    const onExit = vi.fn();
+    exitHooks(onExit, proc)();
+    expect(emitter.listenerCount("exit") + emitter.listenerCount("SIGTERM")).toBe(0);
+    expect(emitter.listenerCount("SIGHUP")).toBe(0);
+    emitter.emit("exit");
+    expect(onExit).not.toHaveBeenCalled();
+  });
+});
 
 describe("mouse switches", () => {
   it("are the SGR press/release/wheel modes", () => {

@@ -162,7 +162,7 @@ describe("native client", () => {
       type: "error",
       payload: { code: "invalid-message", message: "v", replyTo: p.sent[0]?.id ?? "" },
     });
-    expect(client.state().kind).toBe("incompatible");
+    expect(client.state()).toEqual({ kind: "incompatible", outdated: "app" });
   });
 
   it("treats a v1 hello.ack as incompatible", () => {
@@ -170,7 +170,15 @@ describe("native client", () => {
     client.start();
     const p = ports[0] as ReturnType<typeof fakePort>;
     p.receive({ ...ack(p.sent[0]?.id ?? ""), v: 1 });
-    expect(client.state().kind).toBe("incompatible");
+    expect(client.state()).toEqual({ kind: "incompatible", outdated: "app" });
+  });
+
+  it("says the extension is outdated when the core answers in a newer version", () => {
+    const { client, ports } = setup();
+    client.start();
+    const p = ports[0] as ReturnType<typeof fakePort>;
+    p.receive({ ...ack(p.sent[0]?.id ?? ""), v: PROTOCOL_VERSION + 1 });
+    expect(client.state()).toEqual({ kind: "incompatible", outdated: "extension" });
   });
 
   it("keeps incompatible sticky and retries only every 5 minutes", async () => {
