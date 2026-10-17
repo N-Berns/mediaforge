@@ -179,6 +179,7 @@ Run each item in the classic console (cmd), Windows Terminal, the VS Code termin
 - [ ] Manager: click a row (cursor), its `[ ]` (tick), Ctrl+click another row (range), double-click (details), a header (sort, again reverses), the wheel (3 rows), `p Pause` in the key bar, `y` / `N` in a prompt.
 - [ ] Manager: with the filter, details or keys panel open, clicks on the list area do nothing; with a y/N prompt open, only `y` and `N` react.
 - [ ] Details: `y` copies the link, `Y` the path; paste them into Notepad or a text editor. Clicking the URL line copies it too.
+- [ ] Hover: moving the pointer over a menu row, a folder, a key hint, a manager row, a header, a key-bar word, a filter option or the detail URL/Path underlines it; moving away removes the underline; the `►` highlight and the cursor do not move. The classic console may show no hover (clicks still work).
 - [ ] Shift+drag selects text in Windows Terminal, VS Code and Linux.
 - [ ] Quit, then in the same window: clicking prints nothing, and in cmd ↑ still recalls the last command (the console input mode was restored).
 - [ ] Windows: right after start the keys work; within about a second clicks work too.

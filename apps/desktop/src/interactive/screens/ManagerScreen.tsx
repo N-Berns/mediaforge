@@ -41,7 +41,7 @@ import {
 import { useCoreSession } from "../manager/session.ts";
 import { BOX_COLUMNS, Table, WHEEL_ROWS } from "../manager/Table.tsx";
 import { keySequence } from "../mouse/input.ts";
-import { Clickable, type MouseClick, useMouse } from "../mouse/MouseProvider.tsx";
+import { Clickable, HoverText, type MouseClick, useMouse } from "../mouse/MouseProvider.tsx";
 import { useSpeedUnit } from "../speed-unit.ts";
 import { COLORS } from "../theme.ts";
 
@@ -647,13 +647,13 @@ export function ManagerScreen({
       <Box width={width}>
         <Text> </Text>
         <Clickable modal onClick={() => answer(true)}>
-          <Text bold color={COLORS.warn}>
+          <HoverText bold color={COLORS.warn}>
             y
-          </Text>
+          </HoverText>
         </Clickable>
         <Text color={COLORS.warn}>/</Text>
         <Clickable modal onClick={() => answer(false)}>
-          <Text color={COLORS.warn}>N</Text>
+          <HoverText color={COLORS.warn}>N</HoverText>
         </Clickable>
         <Box flexShrink={1}>
           {/* Wraps rather than cuts: the whole question must be readable. */}
@@ -682,7 +682,7 @@ export function ManagerScreen({
               if (sequence) mouse.inject(sequence);
             }}
           >
-            <Text color={COLORS.muted}>{`${i > 0 ? "  " : ""}${key} ${label}`}</Text>
+            <HoverText color={COLORS.muted}>{`${i > 0 ? "  " : ""}${key} ${label}`}</HoverText>
           </Clickable>
         ))}
       </Box>

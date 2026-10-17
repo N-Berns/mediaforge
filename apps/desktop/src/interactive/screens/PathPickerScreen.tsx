@@ -18,7 +18,7 @@ import {
   startFolder,
   suggestions,
 } from "../folder-browser.ts";
-import { Clickable } from "../mouse/MouseProvider.tsx";
+import { Clickable, HoverText } from "../mouse/MouseProvider.tsx";
 import { COLORS, ICONS } from "../theme.ts";
 
 export interface PathPickerProps {
@@ -194,12 +194,12 @@ export function PathPickerScreen({ crumbs, startDir, onPick: pick, onCancel }: P
                     } else setIndex(start + offset);
                   }}
                 >
-                  <Text>
+                  <HoverText>
                     <Text color={COLORS.accent}>{selected ? `${ICONS.pointer} ` : "  "}</Text>
                     <Text color={selected ? COLORS.accent : undefined} bold={selected}>
                       {ICONS.folder} {name}
                     </Text>
-                  </Text>
+                  </HoverText>
                 </Clickable>
               );
             })}

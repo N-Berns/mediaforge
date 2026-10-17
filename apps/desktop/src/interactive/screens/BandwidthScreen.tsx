@@ -103,7 +103,7 @@ export function BandwidthScreen({ settings, note, onSave, onBack }: BandwidthScr
           value: preset,
           icon: preset === settings.limitPreset ? ICONS.on : ICONS.off,
           label: PRESET_NAMES[preset].padEnd(8),
-          hint: `${formatLimit(settings.limits[preset], unit)}${preset === settings.limitPreset ? "  (in use)" : ""}`,
+          hint: `${formatLimit(settings.limits[preset], unit)}${preset === settings.limitPreset ? "  (in use)" : ""}${preset === highlighted ? "  · e to change" : ""}`,
         }))}
       />
       {note ? (

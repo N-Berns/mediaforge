@@ -1,7 +1,7 @@
 import type { DownloadJob, DownloadStatus, SpeedUnit } from "@mediaforge/shared-types";
 import { Box, Text } from "ink";
 import type { ManagerSort } from "../../settings.ts";
-import { Clickable, type MouseClick } from "../mouse/MouseProvider.tsx";
+import { Clickable, HoverText, type MouseClick } from "../mouse/MouseProvider.tsx";
 import { COLORS } from "../theme.ts";
 import {
   COLUMN_LABELS,
@@ -37,9 +37,9 @@ function Cell({ width, text, color }: { width: number; text: string; color?: str
   return (
     <Box width={width} flexShrink={0}>
       <Box width={Math.max(1, width - 1)}>
-        <Text wrap="truncate-end" color={color}>
+        <HoverText wrap="truncate-end" color={color}>
           {text}
-        </Text>
+        </HoverText>
       </Box>
     </Box>
   );
@@ -126,14 +126,14 @@ export function Table({
           active={active}
           onClick={(click) => onRowClick?.(job, click)}
         >
-          <Text color={COLORS.accent}>{i === cursor ? ">" : " "}</Text>
-          <Text>{ticks.has(job.id) ? "[•] " : "[ ] "}</Text>
+          <HoverText color={COLORS.accent}>{i === cursor ? ">" : " "}</HoverText>
+          <HoverText>{ticks.has(job.id) ? "[•] " : "[ ] "}</HoverText>
           {columns.map((column) =>
             column === "name" && job.limitOverride ? (
               // The mark sits outside the cut, so a long name never hides it.
               <Box key={column} width={name} flexShrink={0}>
                 <Cell width={name - 2} text={cellText(job, column, unit, now)} />
-                <Text color={COLORS.accent}>{OVERRIDE_MARK}</Text>
+                <HoverText color={COLORS.accent}>{OVERRIDE_MARK}</HoverText>
               </Box>
             ) : (
               <Cell

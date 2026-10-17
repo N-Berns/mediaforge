@@ -12,8 +12,8 @@ const vtHandle = (exited: boolean) => {
 
 describe("mouse switches", () => {
   it("are the SGR press/release/wheel modes", () => {
-    expect(MOUSE_ON).toBe("\u001b[?1000h\u001b[?1006h");
-    expect(MOUSE_OFF).toBe("\u001b[?1000l\u001b[?1006l");
+    expect(MOUSE_ON).toBe("\u001b[?1000h\u001b[?1003h\u001b[?1006h");
+    expect(MOUSE_OFF).toBe("\u001b[?1003l\u001b[?1000l\u001b[?1006l");
   });
 
   it("the exit hook turns the mouse off and leaves raw mode", () => {

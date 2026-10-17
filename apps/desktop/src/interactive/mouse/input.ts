@@ -1,7 +1,7 @@
 /** One mouse report from the terminal. Cells count from 0, top-left. */
 export interface MouseReport {
-  kind: "press" | "release" | "wheel";
-  /** 0 left, 1 middle, 2 right; for a wheel, -1 up and 1 down. */
+  kind: "press" | "release" | "wheel" | "move";
+  /** 0 left, 1 middle, 2 right; for a wheel, -1 up and 1 down; for a move, 3 when no button is held. */
   button: number;
   x: number;
   y: number;
@@ -22,18 +22,19 @@ const WHEEL = 64;
 const EXTRA = 128;
 
 /**
- * Motion is never switched on; a terminal that sends it anyway is ignored. So are the
- * horizontal wheel (66, 67) and the extra buttons, which the app has no use for.
+ * Motion is read, for hover. The horizontal wheel (66, 67) and the extra buttons are dropped,
+ * which the app has no use for.
  */
 function wanted(code: number): boolean {
-  if (code & MOTION || code >= EXTRA) return false;
+  if (code >= EXTRA) return false;
   return !(code & WHEEL && code & 2);
 }
 
 function report(code: number, column: number, row: number, final: string): MouseReport {
   const wheel = (code & WHEEL) !== 0;
+  const motion = (code & MOTION) !== 0;
   return {
-    kind: wheel ? "wheel" : final === "M" ? "press" : "release",
+    kind: motion ? "move" : wheel ? "wheel" : final === "M" ? "press" : "release",
     button: wheel ? (code & 1 ? 1 : -1) : code & 3,
     x: column - 1,
     y: row - 1,

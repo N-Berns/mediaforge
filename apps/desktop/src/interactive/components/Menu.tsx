@@ -1,6 +1,6 @@
 import { Box, Text, useInput } from "ink";
 import { useEffect, useState } from "react";
-import { Clickable } from "../mouse/MouseProvider.tsx";
+import { Clickable, HoverText } from "../mouse/MouseProvider.tsx";
 import { COLORS, ICONS } from "../theme.ts";
 import { useEnterLock } from "./use-enter-lock.ts";
 
@@ -150,7 +150,7 @@ export function Menu<T>({
         return (
           <Clickable
             key={position}
-            active={isActive}
+            active={isActive && !item.disabled}
             onClick={(click) => {
               if (item.disabled) return;
               // The first click can scroll the list, so the second press of a double-click
@@ -165,14 +165,14 @@ export function Menu<T>({
                 {item.disabled ? "  " : `${numberOf[position]} `}
               </Text>
             ) : null}
-            <Text
+            <HoverText
               color={color}
               bold={selected || item.heading}
               dimColor={item.disabled && !item.heading}
             >
               {item.icon ? `${item.icon} ` : ""}
               {item.label.padEnd(labelWidth)}
-            </Text>
+            </HoverText>
             {item.hint ? <Text color={COLORS.muted}>{`  ${item.hint}`}</Text> : null}
           </Clickable>
         );

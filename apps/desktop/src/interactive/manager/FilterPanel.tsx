@@ -1,6 +1,6 @@
 import { Box, Text, useInput } from "ink";
 import { useState } from "react";
-import { Clickable } from "../mouse/MouseProvider.tsx";
+import { Clickable, HoverText } from "../mouse/MouseProvider.tsx";
 import { COLORS } from "../theme.ts";
 import {
   type Filters,
@@ -93,7 +93,7 @@ export function FilterPanel({ filters, onChange, onClose }: FilterPanelProps) {
       {GROUPS.map((g, gi) => (
         <Box key={g.name} overflow="hidden">
           <Clickable width={GROUP_WIDTH} flexShrink={0} onClick={() => setRow(gi)}>
-            <Text color={gi === row ? COLORS.accent : COLORS.muted}>{g.name}</Text>
+            <HoverText color={gi === row ? COLORS.accent : COLORS.muted}>{g.name}</HoverText>
           </Clickable>
           {g.options.map((option, oi) => {
             const on = option.on(filters);
@@ -109,7 +109,7 @@ export function FilterPanel({ filters, onChange, onClose }: FilterPanelProps) {
                   onChange(option.toggle(filters));
                 }}
               >
-                <Text {...(here && { inverse: true })}>{`${mark} ${option.label}`}</Text>
+                <HoverText {...(here && { inverse: true })}>{`${mark} ${option.label}`}</HoverText>
                 {oi < g.options.length - 1 ? <Text>{"  "}</Text> : null}
               </Clickable>
             );

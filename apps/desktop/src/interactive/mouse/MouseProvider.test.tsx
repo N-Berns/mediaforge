@@ -1,10 +1,16 @@
 import { Box, Text } from "ink";
 import { render } from "ink-testing-library";
-import type { ReactNode } from "react";
+import { type ReactNode, useState } from "react";
 import { describe, expect, it, vi } from "vitest";
 import { InputHub } from "./input.ts";
-import { Clickable, type MouseClick, MouseProvider } from "./MouseProvider.tsx";
-import { attachTestStdin, clickAt, pressAt, wheelAt } from "./testing.ts";
+import {
+  Clickable,
+  HoverText,
+  type MouseClick,
+  MouseProvider,
+  useHovered,
+} from "./MouseProvider.tsx";
+import { attachTestStdin, clickAt, moveAt, pressAt, wheelAt } from "./testing.ts";
 
 const tick = (ms = 30) => new Promise((r) => setTimeout(r, ms));
 
@@ -164,5 +170,139 @@ describe("MouseProvider", () => {
     await tick();
     expect(onClick).not.toHaveBeenCalled();
     expect(app.lastFrame()).toContain("target");
+  });
+});
+
+/** Shows whether the nearest Clickable is hovered, and counts its renders. */
+function Probe({ name, renders }: { name: string; renders?: { count: number } }) {
+  const hovered = useHovered();
+  if (renders) renders.count += 1;
+  return <Text>{`${name}:${hovered ? "on" : "off"}`}</Text>;
+}
+
+describe("MouseProvider hover", () => {
+  const twoRows = (renders?: { count: number }) => (
+    <Box flexDirection="column">
+      <Clickable onClick={() => {}}>
+        <Probe name="a" renders={renders} />
+      </Clickable>
+      <Clickable onClick={() => {}}>
+        <Probe name="b" />
+      </Clickable>
+    </Box>
+  );
+
+  it("hovers the box under the pointer and clears it when the pointer leaves", async () => {
+    const app = mount(twoRows());
+    await tick();
+    app.stdin.write(moveAt(0, 0));
+    await vi.waitFor(() => expect(app.lastFrame()).toContain("a:on"));
+    expect(app.lastFrame()).toContain("b:off");
+    app.stdin.write(moveAt(0, 1));
+    await vi.waitFor(() => expect(app.lastFrame()).toContain("b:on"));
+    expect(app.lastFrame()).toContain("a:off");
+    app.stdin.write(moveAt(40, 5));
+    await vi.waitFor(() => expect(app.lastFrame()).toContain("b:off"));
+  });
+
+  it("only the boxes that change hover re-render", async () => {
+    const renders = { count: 0 };
+    const app = mount(twoRows(renders));
+    await tick();
+    app.stdin.write(moveAt(0, 0));
+    await vi.waitFor(() => expect(app.lastFrame()).toContain("a:on"));
+    const after = renders.count;
+    for (let x = 1; x < 6; x++) app.stdin.write(moveAt(x, 0));
+    await tick(60);
+    expect(renders.count).toBe(after);
+  });
+
+  it("boxes without onClick never hover", async () => {
+    const app = mount(
+      <Clickable onWheel={() => {}}>
+        <Probe name="w" />
+      </Clickable>,
+    );
+    await tick();
+    app.stdin.write(moveAt(0, 0));
+    await tick(60);
+    expect(app.lastFrame()).toContain("w:off");
+  });
+
+  it("only modal boxes hover while one is up", async () => {
+    const app = mount(
+      <Box flexDirection="column">
+        <Clickable onClick={() => {}}>
+          <Probe name="row" />
+        </Clickable>
+        <Clickable modal onClick={() => {}}>
+          <Probe name="yes" />
+        </Clickable>
+      </Box>,
+    );
+    await tick();
+    app.stdin.write(moveAt(0, 0));
+    await tick(60);
+    expect(app.lastFrame()).toContain("row:off");
+    app.stdin.write(moveAt(0, 1));
+    await vi.waitFor(() => expect(app.lastFrame()).toContain("yes:on"));
+  });
+
+  it("a box that appears under a still pointer waits for the next move", async () => {
+    function Swap() {
+      const [second, setSecond] = useState(false);
+      return second ? (
+        <Clickable key="new" onClick={() => {}}>
+          <Probe name="new" />
+        </Clickable>
+      ) : (
+        <Clickable key="old" onClick={() => setSecond(true)}>
+          <Probe name="old" />
+        </Clickable>
+      );
+    }
+    const app = mount(<Swap />);
+    await tick();
+    app.stdin.write(moveAt(0, 0));
+    await vi.waitFor(() => expect(app.lastFrame()).toContain("old:on"));
+    app.stdin.write(clickAt(0, 0));
+    await vi.waitFor(() => expect(app.lastFrame()).toContain("new:off"));
+    await tick(60);
+    expect(app.lastFrame()).toContain("new:off");
+    app.stdin.write(moveAt(1, 0));
+    await vi.waitFor(() => expect(app.lastFrame()).toContain("new:on"));
+  });
+
+  it("presses and the wheel do not change hover", async () => {
+    const app = mount(
+      <Box flexDirection="column">
+        <Clickable onClick={() => {}} onWheel={() => {}}>
+          <Probe name="a" />
+        </Clickable>
+        <Clickable onClick={() => {}}>
+          <Probe name="b" />
+        </Clickable>
+      </Box>,
+    );
+    await tick();
+    app.stdin.write(moveAt(0, 0));
+    await vi.waitFor(() => expect(app.lastFrame()).toContain("a:on"));
+    app.stdin.write(clickAt(0, 1));
+    app.stdin.write(wheelAt(0, 1, 1));
+    await tick(60);
+    expect(app.lastFrame()).toContain("a:on");
+    expect(app.lastFrame()).toContain("b:off");
+  });
+
+  it("HoverText renders the label either way", async () => {
+    const app = mount(
+      <Clickable onClick={() => {}}>
+        <HoverText>label</HoverText>
+      </Clickable>,
+    );
+    await tick();
+    app.stdin.write(moveAt(0, 0));
+    await tick(60);
+    expect(app.lastFrame()).toContain("label");
   });
 });

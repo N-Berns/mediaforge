@@ -6,7 +6,7 @@ import {
 } from "@mediaforge/shared-types";
 import { Box, Text, useInput } from "ink";
 import { useState } from "react";
-import { Clickable } from "../mouse/MouseProvider.tsx";
+import { Clickable, HoverText } from "../mouse/MouseProvider.tsx";
 import { COLORS } from "../theme.ts";
 import { PRESET_NAMES } from "./LimitPicker.tsx";
 import { ORIGIN_LABELS, rowName, statusText } from "./model.ts";
@@ -125,7 +125,7 @@ export function DetailPanel({
           <Box width={LABEL_WIDTH} flexShrink={0}>
             <Text color={COLORS.muted}>{line.label}</Text>
           </Box>
-          <Text wrap="truncate-end">{line.text}</Text>
+          <HoverText wrap="truncate-end">{line.text}</HoverText>
         </Clickable>
       ))}
       <Text color={COLORS.muted}>{hint}</Text>

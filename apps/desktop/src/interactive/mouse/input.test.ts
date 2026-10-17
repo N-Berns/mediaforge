@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { InputHub, keySequence, splitInput } from "./input.ts";
-import { clickAt, pressAt, wheelAt } from "./testing.ts";
+import { clickAt, moveAt, pressAt, wheelAt } from "./testing.ts";
 
 const ESC = "\u001b";
 
@@ -29,8 +29,12 @@ describe("splitInput", () => {
     ]);
   });
 
-  it("drops motion reports", () => {
-    expect(splitInput(`${ESC}[<32;4;4M`)).toEqual({ text: "", reports: [], rest: "" });
+  it("reads motion as a move report", () => {
+    expect(splitInput(`${ESC}[<35;4;4M`)).toEqual({
+      text: "",
+      reports: [{ kind: "move", button: 3, x: 3, y: 3, shift: false, alt: false, ctrl: false }],
+      rest: "",
+    });
   });
 
   it("drops horizontal wheel reports", () => {
@@ -129,5 +133,9 @@ describe("InputHub", () => {
 
   it("builds wheel reports for tests", () => {
     expect(splitInput(wheelAt(0, 0, 1)).reports[0]?.kind).toBe("wheel");
+  });
+
+  it("builds move reports for tests", () => {
+    expect(splitInput(moveAt(5, 6)).reports[0]).toMatchObject({ kind: "move", x: 5, y: 6 });
   });
 });

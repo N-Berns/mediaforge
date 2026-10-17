@@ -3,7 +3,7 @@ import type { ReactElement } from "react";
 import { describe, expect, it, vi } from "vitest";
 import { InputHub } from "../mouse/input.ts";
 import { MouseProvider } from "../mouse/MouseProvider.tsx";
-import { attachTestStdin, clickAt, wheelAt } from "../mouse/testing.ts";
+import { attachTestStdin, clickAt, moveAt, wheelAt } from "../mouse/testing.ts";
 import { dividerItem, Menu, type MenuItem } from "./Menu.tsx";
 import { TextField } from "./TextField.tsx";
 import { ENTER_LOCK_MS } from "./use-enter-lock.ts";
@@ -229,6 +229,26 @@ describe("Menu mouse", () => {
     await tick();
     app.stdin.write(clickAt(4, 2));
     await tick();
+    expect(app.lastFrame()).toMatch(/► 1 Alpha/);
+  });
+
+  it("hover does not move the highlight", async () => {
+    const onSelect = vi.fn();
+    const app = withMouse(<Menu items={four} onSelect={onSelect} />);
+    await tick();
+    app.stdin.write(moveAt(4, 3));
+    await tick(60);
+    expect(app.lastFrame()).toMatch(/► 1 Alpha/);
+    app.stdin.write(ENTER);
+    await vi.waitFor(() => expect(onSelect).toHaveBeenCalledWith("a"));
+  });
+
+  it("disabled rows take no clicks", async () => {
+    const app = withMouse(<Menu items={four} onSelect={() => {}} />);
+    await tick();
+    app.stdin.write(clickAt(4, 2));
+    app.stdin.write(clickAt(4, 2));
+    await tick(60);
     expect(app.lastFrame()).toMatch(/► 1 Alpha/);
   });
 

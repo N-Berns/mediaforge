@@ -20,3 +20,6 @@ export const clickAt = (x: number, y: number, mods: { ctrl?: boolean } = {}) =>
 /** One wheel notch: -1 up, 1 down. */
 export const wheelAt = (x: number, y: number, step: -1 | 1) =>
   `${ESC}[<${step === 1 ? 65 : 64};${x + 1};${y + 1}M`;
+
+/** The pointer moving onto cell (x, y) with no button held. */
+export const moveAt = (x: number, y: number) => `${ESC}[<35;${x + 1};${y + 1}M`;

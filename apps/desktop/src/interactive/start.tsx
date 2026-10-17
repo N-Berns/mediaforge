@@ -31,9 +31,9 @@ import { openFolder } from "./open-folder.ts";
 const ENTER_SCREEN = "\x1b[?1049h\x1b[H";
 const LEAVE_SCREEN = "\x1b[?1049l";
 
-/** Mouse reporting: presses, releases and the wheel, in SGR encoding. */
-export const MOUSE_ON = "\x1b[?1000h\x1b[?1006h";
-export const MOUSE_OFF = "\x1b[?1000l\x1b[?1006l";
+/** Mouse reporting: presses, releases, the wheel and pointer motion, in SGR encoding. */
+export const MOUSE_ON = "\x1b[?1000h\x1b[?1003h\x1b[?1006h";
+export const MOUSE_OFF = "\x1b[?1003l\x1b[?1000l\x1b[?1006l";
 
 /**
  * Leaves the terminal usable if the process ends without unmounting (a crash): mouse off,

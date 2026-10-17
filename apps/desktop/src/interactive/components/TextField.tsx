@@ -1,6 +1,6 @@
 import { Box, Text, useInput } from "ink";
 import { useEffect, useRef, useState } from "react";
-import { Clickable } from "../mouse/MouseProvider.tsx";
+import { Clickable, HoverText } from "../mouse/MouseProvider.tsx";
 import { COLORS, ICONS } from "../theme.ts";
 import { useEnterLock } from "./use-enter-lock.ts";
 import { useTerminalSize } from "./use-terminal-size.ts";
@@ -222,14 +222,14 @@ export function TextField({
         {value.length === 0 && placeholder ? (
           <>
             <Text inverse> </Text>
-            <Text color={COLORS.muted}>{placeholder}</Text>
+            <HoverText color={COLORS.muted}>{placeholder}</HoverText>
           </>
         ) : (
-          <Text>
+          <HoverText>
             {before}
             <Text inverse>{at}</Text>
             {after}
-          </Text>
+          </HoverText>
         )}
       </Clickable>
       {error ? (

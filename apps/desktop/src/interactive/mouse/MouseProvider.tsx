@@ -1,15 +1,17 @@
-import { Box, type BoxProps, type DOMElement, measureElement } from "ink";
+import { Box, type BoxProps, type DOMElement, measureElement, Text, type TextProps } from "ink";
 import {
   createContext,
   type ReactNode,
   type RefObject,
+  useCallback,
   useContext,
   useEffect,
   useLayoutEffect,
   useMemo,
   useRef,
+  useState,
 } from "react";
-import type { InputHub, MouseReport } from "./input.ts";
+import type { InputHub } from "./input.ts";
 
 /** A left-button press on a registered box. */
 export interface MouseClick {
@@ -40,6 +42,8 @@ interface Entry {
   handlers: RefObject<ClickHandlers>;
   modal: boolean;
   order: number;
+  /** Called when this box becomes, or stops being, the hovered one. */
+  hover: (on: boolean) => void;
 }
 
 interface MouseApi {
@@ -73,30 +77,46 @@ export function MouseProvider({
   const entries = useRef(new Set<Entry>());
   const order = useRef(0);
   const last = useRef<{ x: number; y: number; at: number }>(undefined);
+  const pointer = useRef<{ x: number; y: number }>(undefined);
+  const hovered = useRef<Entry>(undefined);
+
+  /** Registered boxes under the point that have `need`, smallest first, then newest. */
+  const hits = useCallback((r: { x: number; y: number }, need: keyof ClickHandlers) => {
+    const all = [...entries.current];
+    const modal = all.filter((e) => e.modal);
+    const scope = modal.length > 0 ? modal : all;
+    return scope
+      .flatMap((entry) => {
+        const node = entry.ref.current;
+        if (!node?.yogaNode || !entry.handlers.current[need]) return [];
+        const box = measureElement(node);
+        const inside =
+          r.x >= box.x && r.x < box.x + box.width && r.y >= box.y && r.y < box.y + box.height;
+        return inside ? [{ entry, box }] : [];
+      })
+      .sort(
+        (a, b) =>
+          a.box.width * a.box.height - b.box.width * b.box.height || b.entry.order - a.entry.order,
+      );
+  }, []);
+
+  /** The box a click at the pointer would reach shows as hovered; only changes re-render. */
+  const rehover = useCallback(() => {
+    const at = pointer.current;
+    const next = at ? hits(at, "onClick")[0]?.entry : undefined;
+    if (hovered.current === next) return;
+    hovered.current?.hover(false);
+    hovered.current = next;
+    next?.hover(true);
+  }, [hits]);
 
   useEffect(() => {
-    /** Registered boxes under the point that have `need`, smallest first, then newest. */
-    const hits = (r: MouseReport, need: keyof ClickHandlers) => {
-      const all = [...entries.current];
-      const modal = all.filter((e) => e.modal);
-      const scope = modal.length > 0 ? modal : all;
-      return scope
-        .flatMap((entry) => {
-          const node = entry.ref.current;
-          if (!node?.yogaNode || !entry.handlers.current[need]) return [];
-          const box = measureElement(node);
-          const inside =
-            r.x >= box.x && r.x < box.x + box.width && r.y >= box.y && r.y < box.y + box.height;
-          return inside ? [{ entry, box }] : [];
-        })
-        .sort(
-          (a, b) =>
-            a.box.width * a.box.height - b.box.width * b.box.height ||
-            b.entry.order - a.entry.order,
-        );
-    };
-
     return hub.onMouse((r) => {
+      if (r.kind === "move") {
+        pointer.current = { x: r.x, y: r.y };
+        rehover();
+        return;
+      }
       if (r.kind === "wheel") {
         hits(r, "onWheel")[0]?.entry.handlers.current.onWheel?.(r.button < 0 ? -1 : 1);
         return;
@@ -129,7 +149,7 @@ export function MouseProvider({
         double,
       });
     });
-  }, [hub, now]);
+  }, [hub, now, hits, rehover]);
 
   const api = useMemo<MouseApi>(
     () => ({
@@ -137,7 +157,10 @@ export function MouseProvider({
         order.current += 1;
         const full = { ...entry, order: order.current };
         entries.current.add(full);
-        return () => entries.current.delete(full);
+        return () => {
+          entries.current.delete(full);
+          if (hovered.current === full) hovered.current = undefined;
+        };
       },
       inject: (text) => hub.inject(text),
       capture: (handler) => hub.capture(handler),
@@ -153,14 +176,33 @@ export function useClickable(
   ref: RefObject<DOMElement | null>,
   handlers: ClickHandlers,
   { active = true, modal = false }: { active?: boolean; modal?: boolean } = {},
-): void {
+): boolean {
   const { register } = useContext(MouseContext);
   const latest = useRef(handlers);
   latest.current = handlers;
+  const [hovered, setHovered] = useState(false);
   useLayoutEffect(() => {
     if (!active) return;
-    return register({ ref, handlers: latest, modal });
+    const unregister = register({ ref, handlers: latest, modal, hover: setHovered });
+    return () => {
+      unregister();
+      setHovered(false);
+    };
   }, [register, ref, active, modal]);
+  return active && hovered;
+}
+
+/** True inside a `Clickable` while the pointer is over it. */
+export const HoverContext = createContext(false);
+
+export function useHovered(): boolean {
+  return useContext(HoverContext);
+}
+
+/** Ink `Text`, underlined while its `Clickable` is hovered. */
+export function HoverText(props: TextProps) {
+  const hovered = useHovered();
+  return <Text {...props} underline={props.underline || hovered} />;
 }
 
 export type ClickableProps = BoxProps &
@@ -177,10 +219,10 @@ export function Clickable({
   ...box
 }: ClickableProps) {
   const ref = useRef<DOMElement>(null);
-  useClickable(ref, { onClick, onWheel, onOutside }, { active, modal });
+  const hovered = useClickable(ref, { onClick, onWheel, onOutside }, { active, modal });
   return (
     <Box ref={ref} {...box}>
-      {children}
+      <HoverContext.Provider value={hovered}>{children}</HoverContext.Provider>
     </Box>
   );
 }

@@ -10,7 +10,7 @@ import {
 } from "react";
 import { useDeps } from "../deps.ts";
 import { keySequence } from "../mouse/input.ts";
-import { Clickable, useMouse } from "../mouse/MouseProvider.tsx";
+import { Clickable, HoverText, useMouse } from "../mouse/MouseProvider.tsx";
 import { NoticeContext } from "../notice.tsx";
 import { COLORS, ICONS, LOGO } from "../theme.ts";
 import { useTerminalSize } from "./use-terminal-size.ts";
@@ -130,13 +130,13 @@ export function Frame({
         {asking ? (
           <Clickable modal onOutside={() => answer(false)}>
             <Clickable modal onClick={() => answer(true)}>
-              <Text bold color={COLORS.warn}>
+              <HoverText bold color={COLORS.warn}>
                 y
-              </Text>
+              </HoverText>
             </Clickable>
             <Text color={COLORS.warn}>/</Text>
             <Clickable modal onClick={() => answer(false)}>
-              <Text color={COLORS.warn}>N</Text>
+              <HoverText color={COLORS.warn}>N</HoverText>
             </Clickable>
             <Text color={COLORS.warn}>{`  ${question}`}</Text>
           </Clickable>
@@ -152,12 +152,12 @@ export function Frame({
                     key === "Ctrl+C" ? setAsking(true) : sequence && mouse.inject(sequence)
                   }
                 >
-                  <Text>
+                  <HoverText>
                     <Text bold color={COLORS.accent}>
                       {key}
                     </Text>
                     <Text color={COLORS.muted}> {label}</Text>
-                  </Text>
+                  </HoverText>
                 </Clickable>
               );
             })}

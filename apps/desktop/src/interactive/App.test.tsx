@@ -697,6 +697,10 @@ describe("settings", () => {
     await press(t.app, KEY.enter);
     await waitFor(t.app, "e Edit value");
     await moveTo(t.app, "Med");
+    // The hint to change a value follows the highlight.
+    const lines = (t.app.lastFrame() ?? "").split("\n");
+    expect(lines.find((line) => line.includes("Med"))).toContain("· e to change");
+    expect(lines.find((line) => line.includes("High"))).not.toContain("e to change");
     await press(t.app, KEY.enter);
     await waitFor(t.app, "Saved");
     expect((await t.store.load()).limitPreset).toBe("med");
