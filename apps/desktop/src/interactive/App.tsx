@@ -26,6 +26,7 @@ import { LinkScreen } from "./screens/LinkScreen.tsx";
 import { LookupScreen } from "./screens/LookupScreen.tsx";
 import { ManagerScreen, type ManagerView } from "./screens/ManagerScreen.tsx";
 import { QualityScreen } from "./screens/QualityScreen.tsx";
+import { ReportScreen } from "./screens/ReportScreen.tsx";
 import { type ResultAction, ResultScreen } from "./screens/ResultScreen.tsx";
 import { SettingsScreen } from "./screens/SettingsScreen.tsx";
 import { SetupScreen } from "./screens/SetupScreen.tsx";
@@ -48,6 +49,7 @@ type Screen =
   | { name: "settings" }
   | { name: "setup"; prompt?: boolean; autoDownload?: boolean }
   | { name: "about" }
+  | { name: "report" }
   /** `focusId`: the row Add link just started; `note`: why it could not start one. */
   | { name: "manager"; focusId?: string; note?: string };
 
@@ -396,8 +398,11 @@ export function App({ deps, start }: { deps: AppDeps; start?: "manager" }) {
           <AboutScreen
             onBack={nav.back}
             onSetup={() => nav.reset({ name: "home" }, { name: "setup", autoDownload: true })}
+            onReport={() => nav.push({ name: "report" })}
           />
         );
+      case "report":
+        return <ReportScreen onBack={nav.back} />;
     }
   })();
 

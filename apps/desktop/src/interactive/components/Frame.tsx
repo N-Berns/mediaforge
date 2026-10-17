@@ -12,7 +12,7 @@ import { useDeps } from "../deps.ts";
 import { keySequence } from "../mouse/input.ts";
 import { Clickable, HoverText, useMouse } from "../mouse/MouseProvider.tsx";
 import { NoticeContext } from "../notice.tsx";
-import { COLORS, ICONS, LOGO } from "../theme.ts";
+import { COLORS, ICONS, LOGO, LOGO_COLORS } from "../theme.ts";
 import { useTerminalSize } from "./use-terminal-size.ts";
 
 export type Hint = readonly [key: string, label: string];
@@ -37,6 +37,16 @@ export interface FrameProps {
 const CTRL_C_QUESTION = { Quit: "Quit MediaForge?", Cancel: "Cancel the download?" } as const;
 const CTRL_C = String.fromCharCode(3);
 const MAX_WIDTH = 100;
+
+/** The wordmark split into its letters, each in its own color from `LOGO_COLORS`. */
+const LOGO_ROWS = LOGO.map((line, row) => ({
+  id: `row-${row}`,
+  letters: line.split(" ").map((text, i) => ({
+    id: `${row}-${i}`,
+    text: i > 0 ? ` ${text}` : text,
+    color: LOGO_COLORS[i] ?? COLORS.accent,
+  })),
+}));
 /** The wordmark is 39 columns wide; below this the plain name is shown instead. */
 const LOGO_MIN_WIDTH = 52;
 
@@ -89,9 +99,13 @@ export function Frame({
       <Box paddingX={1} justifyContent="center">
         {width >= LOGO_MIN_WIDTH ? (
           <Box flexDirection="column">
-            {LOGO.map((line) => (
-              <Text key={line} bold color={COLORS.accent}>
-                {line}
+            {LOGO_ROWS.map((row) => (
+              <Text key={row.id} bold>
+                {row.letters.map((letter) => (
+                  <Text key={letter.id} color={letter.color}>
+                    {letter.text}
+                  </Text>
+                ))}
               </Text>
             ))}
           </Box>
@@ -153,7 +167,7 @@ export function Frame({
                   }
                 >
                   <HoverText>
-                    <Text bold color={COLORS.accent}>
+                    <Text bold color={COLORS.key}>
                       {key}
                     </Text>
                     <Text color={COLORS.muted}> {label}</Text>

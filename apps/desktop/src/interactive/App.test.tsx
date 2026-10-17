@@ -164,6 +164,20 @@ function setup(options: Options = {}) {
     version: "9.9.9",
     managerCore: core.connectAs("manager"),
     flash: () => void flashes.push(Date.now()),
+    sendReport: vi.fn(async () => ({ ok: true }) as const),
+    readHistory: async () =>
+      JSON.stringify({
+        jobs: [
+          {
+            id: "f1",
+            status: "failed",
+            updatedAt: 5,
+            error: "HTTP Error 403",
+            request: { candidate: { url: "https://x.test/f1", pageTitle: "Broken page" } },
+          },
+        ],
+      }),
+    osName: "Linux 6.8",
     applyAutostart: async (enabled) => void autostart.push(enabled),
     notifyCore: async () => {
       notified.push(Date.now());
@@ -209,10 +223,10 @@ async function waitFor(app: TestApp, text: string, tries = 200) {
 async function moveTo(app: TestApp, label: string) {
   for (let i = 0; i < 16; i++) {
     const frame = app.lastFrame() ?? "";
-    // The selection pointer sits at a fixed column; some unselected rows also use ► as their icon.
+    // The selection pointer sits at a fixed column; the cursor is a >.
     const selected = frame
       .split("\n")
-      .some((line) => line.startsWith("  ► ") && line.includes(label));
+      .some((line) => line.startsWith("  > ") && line.includes(label));
     if (selected) return;
     await press(app, KEY.down);
   }
@@ -259,7 +273,7 @@ describe("home", () => {
     for (const label of ["Download media", "Settings", "Check setup", "About", "Quit"]) {
       expect(frame).toContain(label);
     }
-    expect(frame).toContain("►");
+    expect(frame).toContain("> ");
     expect(frame).toContain("Move");
     app.unmount();
   });
@@ -1322,7 +1336,7 @@ describe("stale extractor", () => {
     expect(failed).toContain("Update yt-dlp and retry");
     // Nothing happens until the user picks it: "Try again" is the highlighted choice.
     expect(t.installed).toEqual([]);
-    expect(failed).toMatch(/► .*Try again/);
+    expect(failed).toMatch(/> .*Try again/);
 
     await moveTo(t.app, "Update yt-dlp and retry");
     await press(t.app, KEY.enter);
@@ -1579,6 +1593,68 @@ describe("about", () => {
     await press(app, KEY.esc);
     await waitFor(app, "What would you like to do?");
     app.unmount();
+  });
+});
+
+describe("reporting a problem", () => {
+  async function openReport() {
+    const t = setup({});
+    await waitFor(t.app, "What would you like to do?");
+    await moveTo(t.app, "About");
+    await press(t.app, KEY.enter);
+    await waitFor(t.app, "Report a problem");
+    await moveTo(t.app, "Report a problem");
+    await press(t.app, KEY.enter);
+    await waitFor(t.app, "What is the problem with?");
+    return t;
+  }
+
+  it("sends the type, the description and the diagnostics from About", async () => {
+    const t = await openReport();
+    await press(t.app, KEY.enter);
+    await waitFor(t.app, "What went wrong?");
+    await press(t.app, KEY.enter);
+    await waitFor(t.app, "Describe what went wrong first.");
+    t.app.stdin.write("Downloads stop at 99%");
+    await tick(30);
+    await press(t.app, KEY.enter);
+    await waitFor(t.app, "last failed download: Broken page");
+    expect(t.app.lastFrame()).toContain("app: 9.9.9 (linux-x64)");
+    await press(t.app, KEY.enter);
+    await waitFor(t.app, "Report sent");
+    expect(t.deps.sendReport).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "App",
+        description: "Downloads stop at 99%",
+        appVersion: "9.9.9",
+        os: "Linux 6.8",
+        browser: "n/a (app)",
+        details: expect.stringContaining("HTTP Error 403"),
+      }),
+    );
+    t.app.unmount();
+  });
+
+  it("can leave the diagnostics out, and offers a retry when sending fails", async () => {
+    const t = await openReport();
+    vi.mocked(t.deps.sendReport).mockResolvedValueOnce({ ok: false, message: "Offline." });
+    await moveTo(t.app, "The browser extension");
+    await press(t.app, KEY.enter);
+    await waitFor(t.app, "What went wrong?");
+    t.app.stdin.write("The overlay is missing");
+    await tick(30);
+    await press(t.app, KEY.enter);
+    await waitFor(t.app, "Send without diagnostics");
+    await moveTo(t.app, "Send without diagnostics");
+    await press(t.app, KEY.enter);
+    await waitFor(t.app, "Offline.");
+    expect(t.deps.sendReport).toHaveBeenLastCalledWith(
+      expect.objectContaining({ type: "Extension", details: undefined }),
+    );
+    await press(t.app, KEY.enter);
+    await waitFor(t.app, "Report sent");
+    expect(t.deps.sendReport).toHaveBeenCalledTimes(2);
+    t.app.unmount();
   });
 });
 

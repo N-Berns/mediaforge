@@ -1,4 +1,5 @@
 import type { DownloadJob, DownloadStatus } from "@mediaforge/shared-types";
+import type { NoticeKind } from "../notice.tsx";
 
 export type Action = "pause" | "resume" | "cancel" | "remove" | "trash" | "limit" | "open";
 
@@ -53,9 +54,14 @@ const KEYS = "y/N  ";
 
 const downloads = (n: number) => `${n} download${n === 1 ? "" : "s"}`;
 
+/** Where deleted files go: the Recycle Bin on Windows, the freedesktop Trash elsewhere. */
+const trashName = (platform: NodeJS.Platform) =>
+  platform === "win32" ? "the Recycle Bin" : "the Trash";
+
 export function confirmText(
   action: "cancel" | "remove" | "trash" | "clear",
   jobs: readonly DownloadJob[],
+  platform: NodeJS.Platform = process.platform,
 ): string | undefined {
   const n = jobs.length;
   switch (action) {
@@ -68,7 +74,7 @@ export function confirmText(
       return `${KEYS}Remove ${n}? ${running} ${verb} running and will be cancelled.`;
     }
     case "trash":
-      return `${KEYS}Trash the files of ${downloads(n)}?`;
+      return `${KEYS}Delete ${downloads(n)} from disk? Files go to ${trashName(platform)}.`;
     case "clear":
       return `${KEYS}Clear ${n} finished? Files stay on disk.`;
   }
@@ -104,4 +110,15 @@ export function resultText(
     ...(skipped > 0 ? [`${skipped} skipped`] : []),
     ...(failed.length > 0 ? [`${failed.length} failed: ${failed[0]?.message}`] : []),
   ].join(" · ");
+}
+
+/** The status banner's text and color: red when any failed, amber when nothing or not all ran. */
+export function outcome(
+  action: Action | "clear",
+  done: number,
+  skipped: number,
+  failed: readonly { message: string }[],
+): [string, NoticeKind] {
+  const kind: NoticeKind = failed.length > 0 ? "error" : done === 0 || skipped > 0 ? "warn" : "ok";
+  return [resultText(action, done, skipped, failed), kind];
 }

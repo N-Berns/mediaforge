@@ -11,16 +11,14 @@ import {
 import type { ManagerSort, SortColumn } from "../../settings.ts";
 
 export type StatusFilter = "active" | "queued" | "paused" | "completed" | "failed" | "cancelled";
-export type LastTryFilter = "today" | "7d" | "30d" | "all";
 
 export interface Filters {
   statuses: StatusFilter[];
   types: ContentKind[];
   origins: JobOrigin[];
-  lastTry: LastTryFilter;
 }
 
-export const NO_FILTERS: Filters = { statuses: [], types: [], origins: [], lastTry: "all" };
+export const NO_FILTERS: Filters = { statuses: [], types: [], origins: [] };
 
 export const STATUS_FILTERS: StatusFilter[] = [
   "active",
@@ -32,7 +30,6 @@ export const STATUS_FILTERS: StatusFilter[] = [
 ];
 export const KINDS: ContentKind[] = ["video-audio", "video", "audio", "subtitles"];
 export const ORIGINS: JobOrigin[] = ["extension", "menu", "manager", "cli"];
-export const LAST_TRY_FILTERS: LastTryFilter[] = ["today", "7d", "30d", "all"];
 
 export const STATUS_FILTER_LABELS: Record<StatusFilter, string> = {
   active: "Active",
@@ -54,18 +51,12 @@ export const ORIGIN_LABELS: Record<JobOrigin, string> = {
   manager: "Manager",
   cli: "CLI",
 };
-export const LAST_TRY_LABELS: Record<LastTryFilter, string> = {
-  today: "Today",
-  "7d": "7 days",
-  "30d": "30 days",
-  all: "All",
-};
-
 export type Column = SortColumn;
 
 export const COLUMN_LABELS: Record<Column, string> = {
   name: "Name",
   type: "Type",
+  origin: "Origin",
   size: "Size",
   status: "Status",
   speed: "Speed",
@@ -76,6 +67,7 @@ export const COLUMN_LABELS: Record<Column, string> = {
 /** Each fixed column's width, including the gap after it. */
 export const COLUMN_WIDTH: Record<Exclude<Column, "name">, number> = {
   type: 12,
+  origin: 13,
   size: 9,
   status: 17,
   speed: 15,
@@ -87,7 +79,6 @@ export const MIN_NAME_WIDTH = 10;
 const ROW_PREFIX_WIDTH = 5;
 
 const NONE = "—";
-const DAY_MS = 86_400_000;
 const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 
 const isRunning = (status: DownloadStatus) => status === "downloading" || status === "processing";
@@ -203,6 +194,8 @@ const sortValue = (job: DownloadJob, column: SortColumn): string | number | unde
       return rowName(job).toLowerCase();
     case "type":
       return KINDS.indexOf(jobKind(job));
+    case "origin":
+      return job.origin && ORIGINS.indexOf(job.origin);
     case "size":
       return sizeOf(job);
     case "status":
@@ -243,6 +236,7 @@ export function sortJobs(jobs: readonly DownloadJob[], sort: ManagerSort): Downl
 const FIRST_DESCENDING: Record<SortColumn, boolean> = {
   name: false,
   type: false,
+  origin: false,
   size: true,
   status: false,
   speed: true,
@@ -268,53 +262,58 @@ export function matchesSearch(job: DownloadJob, query: string): boolean {
 const statusMatches = (status: DownloadStatus, filter: StatusFilter) =>
   filter === "active" ? isRunning(status) : status === filter;
 
-export function matchesFilters(job: DownloadJob, filters: Filters, now: number): boolean {
+export function matchesFilters(job: DownloadJob, filters: Filters): boolean {
   if (filters.statuses.length > 0 && !filters.statuses.some((f) => statusMatches(job.status, f))) {
     return false;
   }
   if (filters.types.length > 0 && !filters.types.includes(jobKind(job))) return false;
-  if (filters.origins.length > 0 && !(job.origin && filters.origins.includes(job.origin))) {
-    return false;
-  }
-  if (filters.lastTry === "all") return true;
-  if (job.lastTryAt === undefined) return false;
-  const since =
-    filters.lastTry === "today"
-      ? startOfDay(now)
-      : now - (filters.lastTry === "7d" ? 7 : 30) * DAY_MS;
-  return job.lastTryAt >= since;
+  return !(filters.origins.length > 0 && !(job.origin && filters.origins.includes(job.origin)));
 }
 
 export const hasFilters = (filters: Filters): boolean =>
-  filters.statuses.length > 0 ||
-  filters.types.length > 0 ||
-  filters.origins.length > 0 ||
-  filters.lastTry !== "all";
+  filters.statuses.length > 0 || filters.types.length > 0 || filters.origins.length > 0;
 
-/** The header's filter text, e.g. "Paused, Extension, 7 days"; empty when nothing is set. */
-export function filterSummary(filters: Filters): string {
-  return [
-    ...filters.statuses.map((s) => STATUS_FILTER_LABELS[s]),
-    ...filters.types.map((k) => KIND_LABELS[k]),
-    ...filters.origins.map((o) => ORIGIN_LABELS[o]),
-    ...(filters.lastTry === "all" ? [] : [LAST_TRY_LABELS[filters.lastTry]]),
-  ].join(", ");
-}
-
-/** Last try goes under 112 columns, Type under 100, ETA under 90, Speed under 80. */
+/**
+ * Columns with an icon form shrink to it before anything drops: Origin under 120 columns, Type
+ * under 100, Status under 70. The rest have none and drop: Last try under 112, ETA under 90,
+ * Speed under 80.
+ */
 export function visibleColumns(width: number): Column[] {
-  const columns: Column[] = ["name"];
-  if (width >= 100) columns.push("type");
-  columns.push("size", "status");
+  const columns: Column[] = ["name", "type", "origin", "size", "status"];
   if (width >= 80) columns.push("speed");
   if (width >= 90) columns.push("eta");
   if (width >= 112) columns.push("lastTry");
   return columns;
 }
 
-export function nameWidth(width: number, columns: readonly Column[]): number {
+/** The columns `visibleColumns` shows as icons at this width. */
+export function compactColumns(width: number): Column[] {
+  return [
+    ...(width < 100 ? (["type"] as const) : []),
+    ...(width < 120 ? (["origin"] as const) : []),
+    ...(width < 70 ? (["status"] as const) : []),
+  ];
+}
+
+/** A column's width as icons: room for its header with the sort arrow, plus the gap. */
+const COMPACT_WIDTH: Partial<Record<Exclude<Column, "name">, number>> = {
+  type: 7,
+  origin: 9,
+  status: 9,
+};
+
+export function columnWidth(column: Exclude<Column, "name">, compact: boolean): number {
+  return (compact && COMPACT_WIDTH[column]) || COLUMN_WIDTH[column];
+}
+
+export function nameWidth(
+  width: number,
+  columns: readonly Column[],
+  compact: readonly Column[] = [],
+): number {
   const fixed = columns.reduce(
-    (sum, column) => (column === "name" ? sum : sum + COLUMN_WIDTH[column]),
+    (sum, column) =>
+      column === "name" ? sum : sum + columnWidth(column, compact.includes(column)),
     0,
   );
   return Math.max(MIN_NAME_WIDTH, width - ROW_PREFIX_WIDTH - fixed);

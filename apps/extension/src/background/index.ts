@@ -195,7 +195,8 @@ function notifyOverlays(): void {
 
 client.onPush((message) => {
   if (message.type === "settings.value") notifyOverlays();
-  if (mirror.apply(message) || message.type === "settings.value") broadcast();
+  const noticeChanged = message.type === "notice" || message.type === "hello.ack";
+  if (mirror.apply(message) || message.type === "settings.value" || noticeChanged) broadcast();
 });
 let wasReady = false;
 client.onState((state) => {

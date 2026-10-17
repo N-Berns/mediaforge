@@ -1,6 +1,12 @@
 import { describe, expect, it } from "vitest";
 import type { PopupState } from "../background/controller.ts";
-import { buildPopupModel, pendingPicker, unreachableModel } from "./model.ts";
+import {
+  buildPopupModel,
+  MANAGER_COMMAND,
+  openResultBanner,
+  pendingPicker,
+  unreachableModel,
+} from "./model.ts";
 
 describe("pendingPicker", () => {
   const media = { url: "https://e.test/watch", title: "Clip", formats: [] };
@@ -31,9 +37,11 @@ describe("pendingPicker", () => {
   });
 });
 
+const settings = { extensionUi: "overlay", keepRunning: false, askQuality: false } as const;
+
 const base: PopupState = {
   connection: { kind: "ready" },
-  settings: { extensionUi: "overlay", keepRunning: false, askQuality: false },
+  settings,
   candidates: [],
   jobs: [],
   probe: { state: "idle" },
@@ -121,7 +129,7 @@ describe("buildPopupModel", () => {
     });
     expect(m.picker?.formats[0]).toMatchObject({ id: "137", label: "1080p" });
     expect(m.picker?.formats[0]?.detail).toMatch(/mp4/);
-    expect(m.picker?.formats[0]?.detail).toMatch(/5\.0 MB|5 MB/);
+    expect(m.picker?.formats[0]?.detail).toMatch(/5\.2 MB/);
   });
 
   it("groups picker formats by video and audio, and lists subtitles", () => {
@@ -219,7 +227,7 @@ describe("buildPopupModel", () => {
         },
       ],
     });
-    expect(m.picker?.formats[0]?.detail).toMatch(/2\.0 GB/);
+    expect(m.picker?.formats[0]?.detail).toMatch(/2\.1 GB/);
   });
 
   it("caps the jobs list at 5", () => {
@@ -274,5 +282,156 @@ describe("buildPopupModel", () => {
     expect(m.banner?.tone).toBe("error");
     expect(m.banner?.text).toBe("Cannot reach the MediaForge extension. Reopen this popup.");
     expect(m.items).toEqual([]);
+  });
+
+  it("shows the size of a format with the shared formatter", () => {
+    const m = buildPopupModel(base, {
+      url: "https://e.test/",
+      formats: [
+        {
+          id: "a",
+          label: "720p",
+          container: "mp4",
+          hasVideo: true,
+          hasAudio: true,
+          approxBytes: 412_000_000,
+        },
+      ],
+    });
+    expect(m.picker?.formats[0]?.detail).toContain("412 MB");
+  });
+
+  it("shows speed only for a downloading job, in the chosen unit", () => {
+    const jobs = [{ id: "a", status: "downloading", percent: 42, speed: 6_100_000, updatedAt: 1 }];
+    const bits = buildPopupModel({
+      ...base,
+      jobs,
+      settings: { ...settings, speedUnit: "bits" },
+    });
+    expect(bits.jobs[0]).toMatchObject({ percentText: "42%", speedText: "48.8 Mbps" });
+    const bytes = buildPopupModel({
+      ...base,
+      jobs,
+      settings: { ...settings, speedUnit: "bytes" },
+    });
+    expect(bytes.jobs[0]?.speedText).toBe("6.1 MB/s");
+    expect(buildPopupModel({ ...base, jobs }).jobs[0]?.speedText).toBe("6.1 MB/s");
+    const queued = buildPopupModel({
+      ...base,
+      jobs: [{ id: "q", status: "queued", speed: 5, updatedAt: 1 }],
+    });
+    expect(queued.jobs[0]?.speedText).toBeUndefined();
+  });
+
+  it("derives the job controls from the status", () => {
+    const row = (status: string, extra = {}) =>
+      buildPopupModel({ ...base, jobs: [{ id: "a", status, updatedAt: 1, ...extra }] }).jobs[0];
+    const paused = row("paused", { percent: 71.4, speed: 100 });
+    expect(paused).toMatchObject({
+      percentText: "Paused 71%",
+      canResume: true,
+      canCancel: true,
+      canPause: false,
+      canRetry: false,
+    });
+    expect(paused?.speedText).toBeUndefined();
+    expect(row("paused")?.percentText).toBe("Paused");
+    expect(row("failed")).toMatchObject({ canRetry: true, canCancel: false, canPause: false });
+    expect(row("completed")).toMatchObject({
+      canPause: false,
+      canResume: false,
+      canRetry: false,
+      canCancel: false,
+    });
+    expect(row("processing")).toMatchObject({ canPause: true, canCancel: true });
+    expect(row("queued")).toMatchObject({ canPause: true, canCancel: true });
+  });
+
+  it("enables Open MediaForge only while connected", () => {
+    expect(buildPopupModel(base).openApp).toEqual({ enabled: true });
+    expect(
+      buildPopupModel({ ...base, connection: { kind: "setting-up", percent: 5 } }).openApp,
+    ).toEqual({ enabled: true });
+    const off = { enabled: false, tooltip: "MediaForge is not connected." };
+    for (const connection of [
+      { kind: "connecting" },
+      { kind: "not-installed" },
+      { kind: "incompatible", outdated: "app" },
+      { kind: "unavailable", message: "x" },
+    ] as const) {
+      expect(buildPopupModel({ ...base, connection }).openApp).toEqual(off);
+    }
+    expect(buildPopupModel(undefined).openApp).toEqual(off);
+    expect(unreachableModel().openApp).toEqual(off);
+  });
+
+  it("words the session notice by reason and count, only while connected", () => {
+    const notice = (reason: "unexpected" | "restarted", pausedCount: number) =>
+      buildPopupModel({ ...base, notice: { reason, pausedCount, jobIds: [] } }).notice;
+    expect(notice("unexpected", 2)).toEqual({
+      text: "MediaForge closed unexpectedly. 2 downloads were paused.",
+    });
+    expect(notice("restarted", 3)).toEqual({
+      text: "MediaForge was restarted. 3 downloads were paused.",
+    });
+    expect(notice("unexpected", 1)?.text).toBe(
+      "MediaForge closed unexpectedly. 1 download was paused.",
+    );
+    expect(
+      buildPopupModel({
+        ...base,
+        connection: { kind: "connecting" },
+        notice: { reason: "unexpected", pausedCount: 2, jobIds: [] },
+      }).notice,
+    ).toBeUndefined();
+    expect(buildPopupModel(base).notice).toBeUndefined();
+  });
+
+  it("lists the bandwidth presets with their limits", () => {
+    const m = buildPopupModel({
+      ...base,
+      settings: { ...settings, limitPreset: "med", speedUnit: "bytes" },
+    });
+    expect(m.presets?.current).toBe("med");
+    expect(m.presets?.options.map((o) => `${o.label} ${o.detail}`)).toEqual([
+      "High no limit",
+      "Med 5.0 MB/s",
+      "Low 1.0 MB/s",
+      "Custom no limit",
+    ]);
+    expect(m.presets?.customText).toBe("");
+    expect(buildPopupModel(base).presets?.current).toBe("high");
+    expect(buildPopupModel({ ...base, settings: undefined }).presets).toBeUndefined();
+  });
+
+  it("shows the Custom value in the speed unit for its field", () => {
+    const limits = { high: null, med: 5_000_000, low: 1_000_000, custom: 2_500_000 };
+    const custom = (speedUnit: "bytes" | "bits") =>
+      buildPopupModel({ ...base, settings: { ...settings, speedUnit, limits } }).presets;
+    expect(custom("bytes")).toMatchObject({ unit: "bytes", customText: "2.5 MB/s" });
+    expect(custom("bits")).toMatchObject({ unit: "bits", customText: "20.0 Mbps" });
+  });
+
+  it("shows a cancelled job as Cancelled, never as an error", () => {
+    const row = buildPopupModel({
+      ...base,
+      jobs: [{ id: "c", status: "cancelled", percent: 40, error: "Cancelled", updatedAt: 1 }],
+    }).jobs[0];
+    expect(row?.percentText).toBe("Cancelled");
+    expect(row?.error).toBeUndefined();
+    expect(row).toMatchObject({ canRetry: false, canCancel: false });
+  });
+
+  it("reports what happened when asked to open MediaForge", () => {
+    expect(openResultBanner("attention")).toEqual({
+      text: "MediaForge is already open.",
+      clearAfterMs: 5000,
+    });
+    expect(openResultBanner("no-terminal")).toEqual({
+      text: "Could not open a terminal. Run mediaforge --manager.",
+      copy: "mediaforge --manager",
+    });
+    expect(MANAGER_COMMAND).toBe("mediaforge --manager");
+    expect(openResultBanner("launched")).toBeUndefined();
   });
 });

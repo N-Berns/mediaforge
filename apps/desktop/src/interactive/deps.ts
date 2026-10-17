@@ -1,4 +1,5 @@
 import type { InstallProgress, InstallResult, Tool } from "@mediaforge/binary-resolver";
+import type { Report, SendResult } from "@mediaforge/shared-types";
 import { createContext, useContext } from "react";
 import type { CoreConnector } from "../core/connect.ts";
 import type { ToolReport } from "../doctor.ts";
@@ -49,6 +50,12 @@ export interface AppDeps {
   managerCore: CoreConnector;
   /** Draws the user's eye to this terminal window. Never throws. */
   flash: () => void;
+  /** Posts a problem report. Never rejects: a failure comes back as `{ ok: false }`. */
+  sendReport: (report: Report) => Promise<SendResult>;
+  /** The text of `history.json`, for the last failure in a report; undefined when unreadable. */
+  readHistory: () => Promise<string | undefined>;
+  /** The system, as reports name it: "Windows 11", "Linux 6.8.0". */
+  osName: string;
 }
 
 export const DepsContext = createContext<AppDeps | undefined>(undefined);

@@ -15,19 +15,19 @@ import { useDeps } from "../deps.ts";
 import {
   type Action,
   confirmText,
-  resultText,
+  outcome,
   STATUS_MS,
   split,
   targets,
   tooLargeText,
 } from "../manager/actions.ts";
 import { DetailPanel } from "../manager/DetailPanel.tsx";
-import { FilterPanel } from "../manager/FilterPanel.tsx";
+import { FILTER_KEYS, FilterPanel } from "../manager/FilterPanel.tsx";
+import { filterIcons } from "../manager/icons.ts";
 import { KeyList } from "../manager/KeyList.tsx";
 import { LimitPicker, PRESET_NAMES } from "../manager/LimitPicker.tsx";
 import {
   type Filters,
-  filterSummary,
   hasFilters,
   matchesFilters,
   matchesSearch,
@@ -42,8 +42,9 @@ import { useCoreSession } from "../manager/session.ts";
 import { BOX_COLUMNS, Table, WHEEL_ROWS } from "../manager/Table.tsx";
 import { keySequence } from "../mouse/input.ts";
 import { Clickable, HoverText, type MouseClick, useMouse } from "../mouse/MouseProvider.tsx";
+import type { NoticeKind } from "../notice.tsx";
 import { useSpeedUnit } from "../speed-unit.ts";
-import { COLORS } from "../theme.ts";
+import { COLORS, ICONS } from "../theme.ts";
 
 export interface ManagerView {
   cursorId?: string;
@@ -74,8 +75,11 @@ export interface ManagerScreenProps {
 
 const EMPTY_VIEW: ManagerView = { ticks: [], search: "", filters: NO_FILTERS };
 const DEFAULT_SORT: ManagerSort = { column: "lastTry", descending: true };
-/** Header, the blank line under it, column header, divider, status line and key bar. */
-const FIXED_LINES = 6;
+/**
+ * Header, the blank line under it, column header, the blank line under that, status line,
+ * divider and key bar.
+ */
+const FIXED_LINES = 7;
 /** Rows shown when the terminal height is unknown (tests, pipes). */
 const DEFAULT_LIST_ROWS = 20;
 const NOT_CONNECTED = "Not connected.";
@@ -87,6 +91,14 @@ const NOTICE_TEXT = {
   unexpected: "Previous session ended unexpectedly.",
   restarted: "MediaForge was restarted.",
 } as const;
+
+/** The header's limit, colored by how tight it is: no cap green, down to Low red. */
+const PRESET_COLORS: Record<LimitPreset, string> = {
+  high: COLORS.ok,
+  med: COLORS.warn,
+  low: COLORS.error,
+  custom: COLORS.accent,
+};
 
 const KEY_BAR: [string, string][] = [
   ["Space", "Tick"],
@@ -102,14 +114,18 @@ const KEY_BAR: [string, string][] = [
   ["l", "Limit"],
 ];
 
-/** As many key hints as fit, always ending with `? Keys`. */
-function keyBar(width: number): [string, string][] {
-  const keys: [string, string] = ["?", "Keys"];
-  const parts: [string, string][] = [...KEY_BAR];
+/** As many of `hints` as fit in `width`, then `last` (the list's `? Keys`) when given. */
+function keyBar(
+  width: number,
+  hints: [string, string][] = KEY_BAR,
+  last: [string, string] | undefined = ["?", "Keys"],
+): [string, string][] {
+  const tail = last ? [last] : [];
+  const parts: [string, string][] = [...hints];
   const length = (list: [string, string][]) =>
-    ` ${[...list, keys].map(([k, l]) => `${k} ${l}`).join("  ")}`.length;
+    ` ${[...list, ...tail].map(([k, l]) => `${k} ${l}`).join("  ")}`.length;
   while (parts.length > 0 && length(parts) > width) parts.pop();
-  return [...parts, keys];
+  return [...parts, ...tail];
 }
 
 type Failed = { jobId: string; message: string; code?: string }[];
@@ -145,6 +161,7 @@ export function ManagerScreen({
   attentionMs = ATTENTION_MS,
 }: ManagerScreenProps) {
   const deps = useDeps();
+  const version = `v${deps.version}`;
   const contextUnit = useSpeedUnit();
   const { columns: width, rows: height } = useTerminalSize();
   const [attention, setAttention] = useState(false);
@@ -164,7 +181,7 @@ export function ManagerScreen({
   const [view, setViewState] = useState<ManagerView>(initialView ?? EMPTY_VIEW);
   const [mode, setMode] = useState<Mode>({ name: "list" });
   const [sort, setSort] = useState<ManagerSort>(DEFAULT_SORT);
-  const [status, setStatus] = useState<string>();
+  const [status, setStatus] = useState<{ text: string; kind: NoticeKind }>();
   const lastIndex = useRef(0);
   const top = useRef(0);
   const focused = useRef(false);
@@ -184,14 +201,15 @@ export function ManagerScreen({
     [onView],
   );
 
-  const say = useCallback((text: string) => {
+  /** Shows a result in the banner above the key bar, colored by how it went, for a few seconds. */
+  const say = useCallback((text: string, kind: NoticeKind) => {
     clearTimeout(statusTimer.current);
-    setStatus(text);
+    setStatus({ text, kind });
     statusTimer.current = setTimeout(() => setStatus(undefined), STATUS_MS);
   }, []);
   useEffect(() => () => clearTimeout(statusTimer.current), []);
   useEffect(() => {
-    if (note) say(note);
+    if (note) say(note, "warn");
     // Without a row to wait for, the note was all there was to use.
     if (note && !focusId) onFocused?.();
   }, [note, focusId, say, onFocused]);
@@ -212,7 +230,7 @@ export function ManagerScreen({
     if (ready) return;
     setMode((m) => {
       if (m.name !== "confirm" && m.name !== "limit") return m;
-      say(NOT_CONNECTED);
+      say(NOT_CONNECTED, "warn");
       return { name: "list" };
     });
   }, [ready, say]);
@@ -223,7 +241,7 @@ export function ManagerScreen({
   const latest = useRef(all);
   latest.current = all;
   const shown = sortJobs(
-    all.filter((job) => matchesSearch(job, view.search) && matchesFilters(job, view.filters, now)),
+    all.filter((job) => matchesSearch(job, view.search) && matchesFilters(job, view.filters)),
     sort,
   );
   const found = shown.findIndex((job) => job.id === view.cursorId);
@@ -324,12 +342,12 @@ export function ManagerScreen({
    */
   const lock = (work: () => Promise<void>) => {
     if (busy.current) {
-      say(BUSY);
+      say(BUSY, "warn");
       return;
     }
     busy.current = true;
     work()
-      .catch((error) => say(errorText(error)))
+      .catch((error) => say(errorText(error), "error"))
       .finally(() => {
         busy.current = false;
       });
@@ -338,7 +356,7 @@ export function ManagerScreen({
   /** An action that needs the core: refused at once while it is away. */
   const send = (work: () => Promise<void>) => {
     if (!busy.current && !ready) {
-      say(NOT_CONNECTED);
+      say(NOT_CONNECTED, "warn");
       return;
     }
     lock(work);
@@ -362,57 +380,57 @@ export function ManagerScreen({
 
   const simple = (action: "pause" | "resume", type: "download.pause" | "download.resume") => {
     const { ids, skipped } = affected(action);
-    if (ids.length === 0) return say(resultText(action, 0, skipped, []));
+    if (ids.length === 0) return say(...outcome(action, 0, skipped, []));
     send(async () => {
       const failed = await batch(type, { jobIds: ids });
-      say(resultText(action, ids.length - failed.length, skipped, failed));
+      say(...outcome(action, ids.length - failed.length, skipped, failed));
     });
   };
 
   const confirm = (text: string | undefined, run: () => Promise<void>) => {
-    if (busy.current) say(BUSY);
+    if (busy.current) say(BUSY, "warn");
     else if (text === undefined) send(run);
-    else if (!ready) say(NOT_CONNECTED);
+    else if (!ready) say(NOT_CONNECTED, "warn");
     else setMode({ name: "confirm", text, run });
   };
 
   const cancel = () => {
     const jobs = targets(shown, ticks, cursorJob?.id);
     const { ids, skipped } = split("cancel", jobs);
-    if (ids.length === 0) return say(resultText("cancel", 0, skipped, []));
+    if (ids.length === 0) return say(...outcome("cancel", 0, skipped, []));
     const chosen = jobs.filter((job) => ids.includes(job.id));
     confirm(confirmText("cancel", chosen), async () => {
       for (const jobId of ids) session.notify("download.cancel", { jobId });
-      say(resultText("cancel", ids.length, skipped, []));
+      say(...outcome("cancel", ids.length, skipped, []));
     });
   };
 
   const remove = () => {
     const jobs = targets(shown, ticks, cursorJob?.id);
-    if (jobs.length === 0) return say(resultText("remove", 0, 0, []));
+    if (jobs.length === 0) return say(...outcome("remove", 0, 0, []));
     const ids = jobs.map((job) => job.id);
     confirm(confirmText("remove", jobs), async () => {
       const failed = await batch("jobs.remove", { jobIds: ids });
-      say(resultText("remove", ids.length - failed.length, 0, failed));
+      say(...outcome("remove", ids.length - failed.length, 0, failed));
     });
   };
 
   const trash = () => {
     const jobs = targets(shown, ticks, cursorJob?.id);
-    if (jobs.length === 0) return say(resultText("trash", 0, 0, []));
+    if (jobs.length === 0) return say(...outcome("trash", 0, 0, []));
     const ids = jobs.map((job) => job.id);
     confirm(confirmText("trash", jobs), async () => {
       const failed = await batch("jobs.trash", { jobIds: ids });
       const tooLarge = failed.filter((f) => f.code === "too-large").map((f) => f.jobId);
       const other = failed.filter((f) => f.code !== "too-large");
-      say(resultText("trash", ids.length - failed.length, 0, other));
+      say(...outcome("trash", ids.length - failed.length, 0, other));
       if (tooLarge.length === 0) return;
       setMode({
         name: "confirm",
         text: tooLargeText(tooLarge.length),
         run: async () => {
           const again = await batch("jobs.trash", { jobIds: tooLarge, permanent: true });
-          say(resultText("trash", tooLarge.length - again.length, 0, again));
+          say(...outcome("trash", tooLarge.length - again.length, 0, again));
         },
       });
     });
@@ -420,18 +438,18 @@ export function ManagerScreen({
 
   const clearFinished = () => {
     const done = all.filter((job) => job.status === "completed");
-    if (done.length === 0) return say(resultText("clear", 0, 0, []));
+    if (done.length === 0) return say(...outcome("clear", 0, 0, []));
     confirm(confirmText("clear", done), async () => {
       // Exactly the rows finished when y is pressed: not one that finishes on the way.
       const ids = latest.current.filter((job) => job.status === "completed").map((j) => j.id);
-      if (ids.length === 0) return say(resultText("clear", 0, 0, []));
+      if (ids.length === 0) return say(...outcome("clear", 0, 0, []));
       const failed = await batch("jobs.remove", { jobIds: ids });
-      say(resultText("clear", ids.length - failed.length, 0, failed));
+      say(...outcome("clear", ids.length - failed.length, 0, failed));
     });
   };
 
   const openFolder = () => {
-    if (cursorJob?.status !== "completed") return say(resultText("open", 0, 1, []));
+    if (cursorJob?.status !== "completed") return say(...outcome("open", 0, 1, []));
     const jobId = cursorJob.id;
     send(async () => {
       await session.request("folder.open", { jobId });
@@ -451,7 +469,7 @@ export function ManagerScreen({
     if (!next) return;
     send(async () => {
       await session.request("settings.set", { limitPreset: next });
-      say(`Limit: ${limitText(next)}`);
+      say(`Limit: ${limitText(next)}`, "ok");
     });
   };
 
@@ -465,8 +483,8 @@ export function ManagerScreen({
 
   const pickLimit = () => {
     const { ids, skipped } = affected("limit");
-    if (ids.length === 0) return say(resultText("limit", 0, skipped, []));
-    if (!ready) return say(NOT_CONNECTED);
+    if (ids.length === 0) return say(...outcome("limit", 0, skipped, []));
+    if (!ready) return say(NOT_CONNECTED, "warn");
     setMode({
       name: "limit",
       ids,
@@ -492,7 +510,7 @@ export function ManagerScreen({
   const copy = (field: "url" | "path") => {
     if (!detailJob) return;
     const text = field === "url" ? detailJob.request.candidate.url : detailJob.outputPath;
-    if (!text) return say("No file yet.");
+    if (!text) return say("No file yet.", "warn");
     void deps
       .writeClipboard(text)
       .then((ok) =>
@@ -502,6 +520,7 @@ export function ManagerScreen({
               ? "Copied the link."
               : "Copied the path."
             : "Could not copy to the clipboard.",
+          ok ? "ok" : "error",
         ),
       );
   };
@@ -543,11 +562,11 @@ export function ManagerScreen({
           ? v.ticks.filter((id) => id !== cursorJob.id)
           : [...v.ticks, cursorJob.id],
       }));
-    } else if (/^[1-7]$/.test(input)) {
+    } else if (/^[1-8]$/.test(input)) {
       saveSort(nextSort(sort, SORT_COLUMNS[Number(input) - 1] as ManagerSort["column"]));
     } else if (input === "/") setMode({ name: "search" });
     else if (input === "a") {
-      if (busy.current) say(BUSY);
+      if (busy.current) say(BUSY, "warn");
       else onAdd();
     } else if (input === "p") simple("pause", "download.pause");
     else if (input === "r") simple("resume", "download.resume");
@@ -565,7 +584,7 @@ export function ManagerScreen({
       const jobIds = notice.jobIds;
       send(async () => {
         const failed = await batch("download.resume", { jobIds });
-        say(resultText("resume", jobIds.length - failed.length, 0, failed));
+        say(...outcome("resume", jobIds.length - failed.length, 0, failed));
       });
     } else if (input === "z" && notice) {
       send(async () => {
@@ -582,13 +601,16 @@ export function ManagerScreen({
     ["queued", "downloading", "processing"].includes(job.status),
   ).length;
   const narrowed = view.search !== "" || hasFilters(view.filters);
-  const summary = [
-    `Limit: ${limitText(preset)}`,
-    narrowed ? `${shown.length} of ${items(all.length)}` : items(all.length),
-    `${active} active`,
-    ...(view.search ? [`search: "${view.search}"`] : []),
-    ...(hasFilters(view.filters) ? [`filter: ${filterSummary(view.filters)}`] : []),
-  ].join(" · ");
+  // Colored by meaning: how tight the limit is, whether anything runs, whether the list is narrowed.
+  const summary: { text: string; color?: string; icons?: { text: string; color: string }[] }[] = [
+    { text: `Limit: ${limitText(preset)}`, color: PRESET_COLORS[preset] },
+    { text: narrowed ? `${shown.length} of ${items(all.length)}` : items(all.length) },
+    { text: `${active} active`, color: active > 0 ? COLORS.accent : COLORS.muted },
+    ...(view.search ? [{ text: `search: "${view.search}"`, color: COLORS.warn }] : []),
+    ...(hasFilters(view.filters)
+      ? [{ text: "filter:", color: COLORS.warn, icons: filterIcons(view.filters) }]
+      : []),
+  ];
 
   const body =
     mode.name === "filter" ? (
@@ -622,7 +644,7 @@ export function ManagerScreen({
           setMode({ name: "list" });
           send(async () => {
             const failed = await batch("download.setLimit", { jobIds: ids, preset: choice });
-            say(resultText("limit", ids.length - failed.length, skipped, failed));
+            say(...outcome("limit", ids.length - failed.length, skipped, failed));
           });
         }}
       />
@@ -677,31 +699,59 @@ export function ManagerScreen({
         <Text color={COLORS.muted}>{"   Enter keep · Esc clear"}</Text>
       </Text>
     ) : (
-      <Box width={width} overflow="hidden">
-        <Text> </Text>
-        {keyBar(width).map(([key, label], i) => (
-          <Clickable
-            key={key}
-            flexShrink={0}
-            active={mode.name === "list"}
-            onClick={() => {
-              const sequence = keySequence(key);
-              if (sequence) mouse.inject(sequence);
-            }}
-          >
-            <HoverText color={COLORS.muted}>{`${i > 0 ? "  " : ""}${key} ${label}`}</HoverText>
-          </Clickable>
-        ))}
+      <Box width={width} justifyContent="space-between">
+        <Box overflow="hidden">
+          <Text> </Text>
+          {(mode.name === "filter"
+            ? keyBar(width - version.length - 2, FILTER_KEYS, undefined)
+            : keyBar(width - version.length - 2)
+          ).map(([key, label], i) => (
+            <Clickable
+              key={`${key} ${label}`}
+              flexShrink={0}
+              active={mode.name === "list" || mode.name === "filter"}
+              onClick={() => {
+                const sequence = keySequence(key);
+                if (sequence) mouse.inject(sequence);
+              }}
+            >
+              {/* Drawn like the key hints on every other screen: the key colored, the word dim. */}
+              <HoverText>
+                <Text bold color={COLORS.key}>{`${i > 0 ? "  " : ""}${key}`}</Text>
+                <Text color={COLORS.muted}>{` ${label}`}</Text>
+              </HoverText>
+            </Clickable>
+          ))}
+        </Box>
+        <Text color={COLORS.muted}>{`${version} `}</Text>
       </Box>
     );
 
   return (
-    <Clickable flexDirection="column" width={width} active={listMode} onWheel={wheelBy}>
+    <Clickable
+      flexDirection="column"
+      width={width}
+      // The whole window, so the key bar sits on its last line however few rows there are.
+      {...(height && { height: height - 1 })}
+      active={listMode}
+      onWheel={wheelBy}
+    >
       <Box width={width} justifyContent="space-between">
         <Text bold color={COLORS.accent} wrap="truncate-end">
           {" MediaForge · Downloads"}
         </Text>
-        <Text wrap="truncate-end">{summary}</Text>
+        <Text wrap="truncate-end">
+          {summary.map((part, i) => (
+            <Text key={part.text}>
+              {i > 0 ? <Text color={COLORS.muted}>{" · "}</Text> : null}
+              <Text color={part.color}>{part.text}</Text>
+              {/* The filters as their icons, colored as on the filter page, to keep the header short. */}
+              {part.icons?.map((icon) => (
+                <Text key={icon.text} color={icon.color}>{` ${icon.text}`}</Text>
+              ))}
+            </Text>
+          ))}
+        </Text>
       </Box>
       {banners.map((text) => (
         <Text key={text} color={COLORS.warn} wrap="truncate-end">
@@ -709,11 +759,16 @@ export function ManagerScreen({
         </Text>
       ))}
       <Text> </Text>
-      {body}
+      <Box flexDirection="column" flexGrow={1}>
+        {body}
+      </Box>
+      {/* The result of the last action, colored like the notices on the other screens. */}
+      <Text color={status ? COLORS[status.kind] : undefined} wrap="truncate-end">
+        {status ? ` ${ICONS[status.kind]} ${status.text}` : " "}
+      </Text>
       <Text color={COLORS.muted} wrap="truncate-end">
         {"─".repeat(Math.max(0, width))}
       </Text>
-      <Text wrap="truncate-end">{status ? ` ${status}` : " "}</Text>
       {footer}
     </Clickable>
   );

@@ -96,6 +96,7 @@ interface MountOptions {
   runner?: ProcessRunner;
   trash?: TrashFn;
   columns?: number;
+  rows?: number;
   props?: Partial<ManagerScreenProps>;
   /**
    * The double-click clock. By default it moves 1 s on every read, so no two clicks are a
@@ -176,6 +177,10 @@ async function mount(options: MountOptions = {}) {
   attachTestStdin(hub, app.stdin);
   if (options.columns) {
     Object.defineProperty(app.stdout, "columns", { value: options.columns, configurable: true });
+    (app.stdout as unknown as NodeJS.EventEmitter).emit("resize");
+  }
+  if (options.rows) {
+    Object.defineProperty(app.stdout, "rows", { value: options.rows, configurable: true });
     (app.stdout as unknown as NodeJS.EventEmitter).emit("resize");
   }
   const frame = () => app.lastFrame() ?? "";
@@ -284,10 +289,10 @@ describe("ManagerScreen table", () => {
 
   it("number keys sort and the same key reverses", async () => {
     const m = await mount({ jobs: three() });
-    await m.press("3");
+    await m.press("4");
     await vi.waitFor(() => expect(m.frame()).toContain("Size ▼"));
     expect(tableRows(m.frame())[0]).toContain("Big Buck Bunny");
-    await m.press("3");
+    await m.press("4");
     await vi.waitFor(() => expect(m.frame()).toContain("Size ▲"));
     expect(tableRows(m.frame())[0]).toContain("Trailer");
     await vi.waitFor(async () =>
@@ -316,12 +321,23 @@ describe("ManagerScreen table", () => {
     );
   });
 
-  it("drops columns as the terminal narrows", async () => {
+  it("shows icons, then drops columns, as the terminal narrows", async () => {
     const narrow = await mount({ jobs: three(), columns: 85 });
     await vi.waitFor(() => expect(narrow.frame()).not.toContain("Last try"));
     expect(narrow.frame()).not.toContain("ETA");
     expect(narrow.frame()).toContain("Speed");
-    expect(narrow.frame()).not.toContain("Type");
+    // Type and Origin stay, as icons.
+    expect(narrow.frame()).toContain("Type");
+    expect(narrow.frame()).toContain("Origin");
+    const rows = tableRows(narrow.frame()).join(" ");
+    expect(rows).toContain("►♪");
+    expect(rows).not.toContain("Video");
+    // Under 70 columns Status shows its icon too.
+    const tiny = await mount({ jobs: three(), columns: 60 });
+    await vi.waitFor(() => expect(tiny.frame()).toContain("Status"));
+    const tinyRows = tableRows(tiny.frame()).join(" ");
+    expect(tinyRows).toContain("▌▌");
+    expect(tinyRows).not.toMatch(/Completed|Paused|Downloading/);
     const wide = await mount({ jobs: three(), columns: 120 });
     await vi.waitFor(() => expect(wide.frame()).toContain("Last try"));
     expect(wide.frame()).toContain("ETA");
@@ -419,20 +435,40 @@ async function startOne(m: Awaited<ReturnType<typeof mount>>, title: string): Pr
 
 const statusOf = (m: Awaited<ReturnType<typeof mount>>, id: string) => m.history.get(id)?.status;
 
+describe("ManagerScreen layout", () => {
+  it("shows the origin with its icon in a wide window", async () => {
+    const m = await mount({
+      jobs: [row("e", { title: "From the browser", origin: "extension", lastTryAt: 1 })],
+      columns: 130,
+    });
+    await vi.waitFor(() => expect(m.frame()).toContain("Origin"));
+    expect(tableRows(m.frame())[0]).toContain("◊ Extension");
+  });
+
+  it("keeps the key bar and the version on the last line, under a divider", async () => {
+    const m = await mount({ rows: 30, columns: 120 });
+    await vi.waitFor(() => expect(m.frame().split("\n")).toHaveLength(29));
+    const lines = m.frame().split("\n");
+    expect(lines.at(-1)).toContain("? Keys");
+    expect(lines.at(-1)?.trimEnd().endsWith("v1.0.0")).toBe(true);
+    expect(lines.at(-2)).toMatch(/^─+$/);
+  });
+});
+
 describe("ManagerScreen actions", () => {
   it("p pauses the cursor row", async () => {
     const m = await mount();
     const id = await startOne(m, "Running one");
     await m.press("p");
     await vi.waitFor(() => expect(statusOf(m, id)).toBe("paused"));
-    await vi.waitFor(() => expect(m.frame()).toContain("Paused 1"));
+    await vi.waitFor(() => expect(m.frame()).toContain("√ Paused 1"));
   });
 
   it("p on ticked rows skips the ones that do not apply", async () => {
     const m = await mount({ jobs: [row("done", { title: "Done one", lastTryAt: 1 })] });
     const id = await startOne(m, "Running one");
     await m.press(KEY.ctrlA, "p");
-    await vi.waitFor(() => expect(m.frame()).toContain("Paused 1 · 1 skipped"));
+    await vi.waitFor(() => expect(m.frame()).toContain("▲ Paused 1 · 1 skipped"));
     expect(statusOf(m, id)).toBe("paused");
   });
 
@@ -491,7 +527,9 @@ describe("ManagerScreen actions", () => {
       jobs: [row("done", { title: "Done one", lastTryAt: 1, files: ["/dl/a.mp4"] })],
     });
     await m.press(KEY.del);
-    await vi.waitFor(() => expect(m.frame()).toContain("y/N  Trash the files of 1 download?"));
+    await vi.waitFor(() =>
+      expect(m.frame()).toContain("y/N  Delete 1 download from disk? Files go to"),
+    );
     await m.press("y");
     await vi.waitFor(() => expect(m.history.get("done")).toBeUndefined());
     expect(trash).toHaveBeenCalledWith(["/dl/a.mp4"], { permanent: false });
@@ -508,7 +546,7 @@ describe("ManagerScreen actions", () => {
       jobs: [row("big", { title: "Huge one", lastTryAt: 1, files: ["/dl/huge.mkv"] })],
     });
     await m.press(KEY.del);
-    await vi.waitFor(() => expect(m.frame()).toContain("y/N  Trash the files of"));
+    await vi.waitFor(() => expect(m.frame()).toContain("y/N  Delete"));
     await m.press("y");
     await vi.waitFor(() =>
       expect(m.frame()).toContain("y/N  1 is too big for the Recycle Bin. Delete for good?"),
@@ -637,10 +675,10 @@ describe("ManagerScreen panels and banners", () => {
       ],
     });
     await m.press("f");
-    await vi.waitFor(() => expect(m.frame()).toContain("Last try"));
-    // The Status line: Active, Queued, Paused…
-    await m.press(KEY.right, KEY.right, " ");
-    await vi.waitFor(() => expect(m.frame()).toContain("filter: Paused"));
+    await vi.waitFor(() => expect(m.frame()).toContain("Origin"));
+    // The Status column: Active, Queued, Paused…
+    await m.press(KEY.down, KEY.down, " ");
+    await vi.waitFor(() => expect(m.frame()).toContain("filter: ▌▌"));
     await m.press(KEY.esc);
     await vi.waitFor(() => expect(tableRows(m.frame())).toHaveLength(1));
     expect(tableRows(m.frame())[0]).toContain("Paused one");
@@ -648,8 +686,8 @@ describe("ManagerScreen panels and banners", () => {
 
   it("Esc clears search and filters before going back", async () => {
     const m = await mount({ jobs: [row("p1", { title: "Paused one", status: "paused" })] });
-    await m.press("f", KEY.right, KEY.right, " ", KEY.enter);
-    await vi.waitFor(() => expect(m.frame()).toContain("filter: Paused"));
+    await m.press("f", KEY.down, KEY.down, " ", KEY.enter);
+    await vi.waitFor(() => expect(m.frame()).toContain("filter: ▌▌"));
     await m.press(KEY.esc);
     await vi.waitFor(() => expect(m.frame()).not.toContain("filter:"));
     expect(m.props.onBack).not.toHaveBeenCalled();
@@ -853,21 +891,27 @@ describe("ManagerScreen key lock and compact panels", () => {
     slow.release();
   });
 
-  it("the filter panel takes one line per group", async () => {
+  it("the filter panel shows one column per group, with its own keys", async () => {
     const m = await mount();
     await m.press("f");
-    await vi.waitFor(() => expect(m.frame()).toContain("Last try"));
+    await vi.waitFor(() => expect(m.frame()).toContain("Origin"));
     const lines = m.frame().split("\n");
-    const top = lines.findIndex((l) => l.includes("Filter"));
-    const hint = lines.findIndex((l) => l.includes("Space toggle"));
-    expect(hint - top).toBeLessThanOrEqual(5);
-    const status = lines.find((l) => l.includes("Status")) ?? "";
-    expect(status).toContain("Active");
-    expect(status).toContain("Cancelled");
-    expect(lines.find((l) => l.includes("Type"))).toContain("Video only");
-    // Down past Type to Origin, right to Menu, toggle.
-    await m.press(KEY.down, KEY.down, KEY.right, " ");
-    await vi.waitFor(() => expect(m.frame()).toContain("filter: Menu"));
+    const head = lines.find((l) => l.includes("Status")) ?? "";
+    for (const name of ["Type", "Origin"]) expect(head).toContain(name);
+    expect(m.frame()).not.toContain("Last try");
+    const first = lines.find((l) => l.includes("Active")) ?? "";
+    expect(first).toContain("Video");
+    expect(first).toContain("Extension");
+    // The cursor is the table's >, with no highlight.
+    expect(first).toContain("> [ ]");
+    // Each option of a group starts in the same column.
+    const at = (text: string) => lines.find((l) => l.includes(text))?.indexOf(text);
+    expect(at("Cancelled")).toBe(at("Active"));
+    expect(lines.at(-1)).toContain("Space Toggle");
+    expect(lines.at(-1)).not.toContain("a Add");
+    // Right to Origin, down to Menu, toggle.
+    await m.press(KEY.right, KEY.right, KEY.down, " ");
+    await vi.waitFor(() => expect(m.frame()).toContain("filter: ≡"));
   });
 
   it("the detail panel scrolls a long error instead of growing", async () => {
@@ -1101,8 +1145,8 @@ describe("ManagerScreen mouse", () => {
     const m = await mount({ jobs: ten() });
     const keys = m.find("? Keys");
     const add = m.find("a Add");
-    await m.press("f");
-    await vi.waitFor(() => expect(m.frame()).toContain("[ ] Paused"));
+    await m.press(KEY.enter);
+    await vi.waitFor(() => expect(m.frame()).toContain("Origin"));
     const before = m.frame();
     await m.click(keys.x, keys.y);
     await m.click(add.x, add.y);
@@ -1121,10 +1165,10 @@ describe("ManagerScreen panels and copy", () => {
   it("a click on a filter option toggles it", async () => {
     const m = await mount({ jobs: three() });
     await m.press("f");
-    await vi.waitFor(() => expect(m.frame()).toContain("[ ] Paused"));
-    const option = m.find("[ ] Paused");
-    await m.click(option.x + 1, option.y);
-    await vi.waitFor(() => expect(m.frame()).toContain("[x] Paused"));
+    await vi.waitFor(() => expect(m.frame()).toContain("Paused"));
+    const option = m.find("Paused");
+    await m.click(option.x, option.y);
+    await vi.waitFor(() => expect(m.frame()).toContain("filter: ▌▌"));
     await vi.waitFor(() => expect(m.frame()).toContain("1 of 3 items"));
   });
 

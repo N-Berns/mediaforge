@@ -3,15 +3,18 @@ import { Box, Text } from "ink";
 import type { ManagerSort } from "../../settings.ts";
 import { Clickable, HoverText, type MouseClick } from "../mouse/MouseProvider.tsx";
 import { COLORS } from "../theme.ts";
+import { KIND_ICONS, ORIGIN_ICONS, STATUS_STYLE } from "./icons.ts";
 import {
   COLUMN_LABELS,
-  COLUMN_WIDTH,
   type Column,
+  columnWidth,
+  compactColumns,
   etaText,
   jobKind,
   KIND_LABELS,
   lastTryText,
   nameWidth,
+  ORIGIN_LABELS,
   OVERRIDE_MARK,
   rowName,
   sizeText,
@@ -47,18 +50,38 @@ function Cell({ width, text, color }: { width: number; text: string; color?: str
   );
 }
 
-const widthOf = (column: Column, name: number) => (column === "name" ? name : COLUMN_WIDTH[column]);
+/** The status as its filter icon, with the percent where there is one: "▼ 42%", "▌▌ 71%", "√". */
+function statusIcon(job: DownloadJob): string {
+  const filter =
+    job.status === "downloading" || job.status === "processing" ? "active" : job.status;
+  const icon = STATUS_STYLE[filter].icon;
+  return job.status === "downloading" || job.status === "paused"
+    ? `${icon} ${statusText(job).replace(/^\D+/, "")}`
+    : icon;
+}
 
-function cellText(job: DownloadJob, column: Column, unit: SpeedUnit, now: number): string {
+function cellText(
+  job: DownloadJob,
+  column: Column,
+  unit: SpeedUnit,
+  now: number,
+  compact: readonly Column[],
+): string {
+  const icons = compact.includes(column);
   switch (column) {
     case "name":
       return rowName(job);
     case "type":
-      return KIND_LABELS[jobKind(job)];
+      return icons ? KIND_ICONS[jobKind(job)].trim() : KIND_LABELS[jobKind(job)];
+    case "origin":
+      if (!job.origin) return "—";
+      return icons
+        ? ORIGIN_ICONS[job.origin]
+        : `${ORIGIN_ICONS[job.origin]} ${ORIGIN_LABELS[job.origin]}`;
     case "size":
       return sizeText(job);
     case "status":
-      return statusText(job);
+      return icons ? statusIcon(job) : statusText(job);
     case "speed":
       return speedText(job, unit);
     case "eta":
@@ -104,7 +127,10 @@ export function Table({
   onTickAllClick,
   active = true,
 }: TableProps) {
-  const name = nameWidth(width, columns);
+  const compact = compactColumns(width);
+  const name = nameWidth(width, columns, compact);
+  const widthOf = (column: Column) =>
+    column === "name" ? name : columnWidth(column, compact.includes(column));
   return (
     <Box flexDirection="column" width={width} overflow="hidden">
       <Box width={width} overflow="hidden">
@@ -120,7 +146,7 @@ export function Table({
             onClick={() => onHeaderClick?.(column)}
           >
             <Cell
-              width={widthOf(column, name)}
+              width={widthOf(column)}
               color={COLORS.muted}
               text={
                 column === sort.column
@@ -131,6 +157,8 @@ export function Table({
           </Clickable>
         ))}
       </Box>
+      {/* A row's worth of space keeps the headers apart from the first download. */}
+      <Text> </Text>
       {rows.map((job, i) => (
         <Clickable
           key={job.id}
@@ -145,14 +173,14 @@ export function Table({
             column === "name" && job.limitOverride ? (
               // The mark sits outside the cut, so a long name never hides it.
               <Box key={column} width={name} flexShrink={0}>
-                <Cell width={name - 2} text={cellText(job, column, unit, now)} />
+                <Cell width={name - 2} text={cellText(job, column, unit, now, compact)} />
                 <HoverText color={COLORS.accent}>{OVERRIDE_MARK}</HoverText>
               </Box>
             ) : (
               <Cell
                 key={column}
-                width={widthOf(column, name)}
-                text={cellText(job, column, unit, now)}
+                width={widthOf(column)}
+                text={cellText(job, column, unit, now, compact)}
                 {...(column === "status" && { color: STATUS_COLOR[job.status] })}
               />
             ),

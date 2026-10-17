@@ -19,7 +19,7 @@ const KEYS: [string, string][] = [
   ["L", "Set the override for the rows"],
   ["b", "Switch bytes and bits"],
   ["Enter", "Details"],
-  ["1-7", "Sort by Name, Type, Size, Status, Speed, ETA, Last try"],
+  ["1-8", "Sort by Name, Type, Origin, Size, Status, Speed, ETA, Last try"],
   ["R", "Resume the downloads in the notice"],
   ["z", "Dismiss the session notice"],
   ["y, Y", "Copy the link, the path (in Details)"],

@@ -1,8 +1,9 @@
 import type { DownloadJob } from "@mediaforge/shared-types";
 import { describe, expect, it } from "vitest";
 import {
+  columnWidth,
+  compactColumns,
   etaText,
-  filterSummary,
   jobKind,
   lastTryText,
   matchesFilters,
@@ -201,8 +202,6 @@ describe("sorting", () => {
 });
 
 describe("search and filters", () => {
-  const now = at(2026, 10, 16, 15, 0);
-
   it("search matches name and URL case-insensitively", () => {
     const j = withTitle("Lecture 07 - Graphs");
     expect(matchesSearch(j, "LEC")).toBe(true);
@@ -217,39 +216,12 @@ describe("search and filters", () => {
       statuses: ["paused" as const],
       origins: ["extension" as const],
     };
-    expect(matchesFilters(job("a", { status: "paused", origin: "extension" }), filters, now)).toBe(
-      true,
-    );
-    expect(matchesFilters(job("a", { status: "paused", origin: "cli" }), filters, now)).toBe(false);
+    expect(matchesFilters(job("a", { status: "paused", origin: "extension" }), filters)).toBe(true);
+    expect(matchesFilters(job("a", { status: "paused", origin: "cli" }), filters)).toBe(false);
     const active = { ...NO_FILTERS, statuses: ["active" as const] };
-    expect(matchesFilters(job("a", { status: "downloading" }), active, now)).toBe(true);
-    expect(matchesFilters(job("a", { status: "processing" }), active, now)).toBe(true);
-    expect(matchesFilters(job("a", { status: "queued" }), active, now)).toBe(false);
-  });
-
-  it("last try filter", () => {
-    const today = { ...NO_FILTERS, lastTry: "today" as const };
-    expect(matchesFilters(job("a", { lastTryAt: at(2026, 10, 16, 0, 1) }), today, now)).toBe(true);
-    expect(matchesFilters(job("a", { lastTryAt: at(2026, 10, 15, 23, 59) }), today, now)).toBe(
-      false,
-    );
-    const week = { ...NO_FILTERS, lastTry: "7d" as const };
-    expect(matchesFilters(job("a", { lastTryAt: now - 6 * 86_400_000 }), week, now)).toBe(true);
-    expect(matchesFilters(job("a", { lastTryAt: now - 8 * 86_400_000 }), week, now)).toBe(false);
-    expect(matchesFilters(job("a"), week, now)).toBe(false);
-    expect(matchesFilters(job("a"), NO_FILTERS, now)).toBe(true);
-  });
-
-  it("filterSummary", () => {
-    expect(
-      filterSummary({
-        statuses: ["paused"],
-        types: ["video"],
-        origins: ["extension"],
-        lastTry: "7d",
-      }),
-    ).toBe("Paused, Video only, Extension, 7 days");
-    expect(filterSummary(NO_FILTERS)).toBe("");
+    expect(matchesFilters(job("a", { status: "downloading" }), active)).toBe(true);
+    expect(matchesFilters(job("a", { status: "processing" }), active)).toBe(true);
+    expect(matchesFilters(job("a", { status: "queued" }), active)).toBe(false);
   });
 });
 
@@ -289,32 +261,50 @@ describe("type", () => {
 
   it("filters by type, guessing rows that have none recorded", () => {
     const audioOnly = { ...NO_FILTERS, types: ["audio" as const] };
-    expect(matchesFilters(job("a", { kind: "audio" }), audioOnly, 0)).toBe(true);
-    expect(matchesFilters(withRequest({ profileId: "audio-m4a" }), audioOnly, 0)).toBe(true);
-    expect(matchesFilters(job("a"), audioOnly, 0)).toBe(false);
+    expect(matchesFilters(job("a", { kind: "audio" }), audioOnly)).toBe(true);
+    expect(matchesFilters(withRequest({ profileId: "audio-m4a" }), audioOnly)).toBe(true);
+    expect(matchesFilters(job("a"), audioOnly)).toBe(false);
+  });
+});
+
+describe("origin", () => {
+  it("sorts by origin in the filter's order, rows without one last", () => {
+    const rows = [
+      job("c", { origin: "cli" }),
+      job("n"),
+      job("e", { origin: "extension" }),
+      job("m", { origin: "menu" }),
+    ];
+    const ids = (descending: boolean) =>
+      sortJobs(rows, { column: "origin", descending }).map((j) => j.id);
+    expect(ids(false)).toEqual(["e", "m", "c", "n"]);
+    expect(ids(true)).toEqual(["c", "m", "e", "n"]);
   });
 });
 
 describe("layout", () => {
-  it("visibleColumns drops last try, type, ETA, speed as the terminal narrows", () => {
-    expect(visibleColumns(112)).toEqual([
-      "name",
-      "type",
-      "size",
-      "status",
-      "speed",
-      "eta",
-      "lastTry",
-    ]);
-    expect(visibleColumns(111)).toEqual(["name", "type", "size", "status", "speed", "eta"]);
-    expect(visibleColumns(99)).toEqual(["name", "size", "status", "speed", "eta"]);
-    expect(visibleColumns(89)).toEqual(["name", "size", "status", "speed"]);
-    expect(visibleColumns(79)).toEqual(["name", "size", "status"]);
+  it("visibleColumns shrinks icon columns and drops the rest as the terminal narrows", () => {
+    const all = ["name", "type", "origin", "size", "status", "speed", "eta", "lastTry"];
+    expect(visibleColumns(120)).toEqual(all);
+    expect(compactColumns(120)).toEqual([]);
+    expect(compactColumns(119)).toEqual(["origin"]);
+    expect(visibleColumns(111)).toEqual(all.slice(0, -1));
+    expect(compactColumns(99)).toEqual(["type", "origin"]);
+    expect(visibleColumns(89)).toEqual(["name", "type", "origin", "size", "status", "speed"]);
+    expect(visibleColumns(79)).toEqual(["name", "type", "origin", "size", "status"]);
+    expect(compactColumns(69)).toEqual(["type", "origin", "status"]);
+  });
+
+  it("icon columns take less room", () => {
+    expect(columnWidth("type", true)).toBeLessThan(columnWidth("type", false));
+    expect(columnWidth("size", true)).toBe(columnWidth("size", false));
+    const columns = visibleColumns(79);
+    expect(nameWidth(79, columns, compactColumns(79))).toBeGreaterThan(nameWidth(79, columns));
   });
 
   it("nameWidth never goes under 10", () => {
     expect(nameWidth(30, visibleColumns(30))).toBe(10);
-    expect(nameWidth(120, visibleColumns(120))).toBeGreaterThan(30);
+    expect(nameWidth(140, visibleColumns(140))).toBeGreaterThan(30);
   });
 
   it("scrollWindow keeps the cursor visible", () => {

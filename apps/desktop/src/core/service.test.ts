@@ -99,6 +99,7 @@ interface SetupOptions {
   probeTool?: CoreServiceDeps["probeTool"];
   probe?: CoreServiceDeps["probe"];
   openPath?: CoreServiceDeps["openPath"];
+  openManager?: CoreServiceDeps["openManager"];
   settings?: Partial<Settings>;
   role?: ConnectionRole;
   /** Raw history.json content to start from. */
@@ -146,6 +147,7 @@ async function setup(options: SetupOptions = {}) {
     probe: options.probe ?? (async (url) => ({ url, formats: [] })),
     applyAutostart: autostart,
     openPath,
+    ...(options.openManager && { openManager: options.openManager }),
     onActivity,
     now: () => clock,
     newId: () => `id-${++clock}`,
@@ -678,6 +680,20 @@ describe("jobs and settings", () => {
     t.sent.length = 0;
     await t.send("settings.get");
     expect(t.sent[0]).toMatchObject({ payload: { keepRunning: true } });
+  });
+
+  it("pushes the new settings to the other clients, and replies once to the sender", async () => {
+    const t = await setup();
+    const other: HostToExtensionMessage[] = [];
+    const quiet: HostToExtensionMessage[] = [];
+    const otherHandle = t.service.attach({ send: (m) => other.push(m) });
+    t.service.attach({ send: (m) => quiet.push(m) });
+    await otherHandle.handle({ v: PROTOCOL_VERSION, id: "s", type: "jobs.subscribe", payload: {} });
+    other.length = 0;
+    await t.send("settings.set", { limitPreset: "low" });
+    expect(other).toMatchObject([{ type: "settings.value", payload: { limitPreset: "low" } }]);
+    expect(quiet).toEqual([]);
+    expect(t.sent.filter((m) => m.type === "settings.value")).toHaveLength(1);
   });
 
   it("saves a full folder path", async () => {
@@ -1411,6 +1427,14 @@ describe("bandwidth settings over the protocol", () => {
     expect((await t.settings.load()).limitPreset).toBe("high");
   });
 
+  it("lets the relay change the Custom value only", async () => {
+    const t = await setup();
+    const limits = { high: null, med: 5_000_000, low: 1_000_000, custom: 300_000 };
+    await t.send("settings.set", { limitPreset: "custom", limits });
+    expect(t.sent[0]).toMatchObject({ type: "settings.value", payload: { limits } });
+    expect(await t.settings.load()).toMatchObject({ limitPreset: "custom", limits });
+  });
+
   it("lets a terminal change the preset values", async () => {
     const t = await setup({ role: "terminal" });
     const limits = {
@@ -1549,6 +1573,78 @@ describe("app.open and client kinds", () => {
     expect(t.sent.find((m) => m.id === "open")).toMatchObject({
       type: "app.opened",
       payload: { mode: "no-terminal" },
+    });
+  });
+
+  describe("launching the manager", () => {
+    const opened = (t: Awaited<ReturnType<typeof setup>>, id: string) =>
+      t.sent.find((m) => m.id === id);
+
+    it("calls openManager once when no manager is connected and replies launched", async () => {
+      const openManager = vi.fn(async () => "launched" as const);
+      const t = await setup({ role: "terminal", openManager });
+      await t.send("app.open", {}, "open");
+      expect(openManager).toHaveBeenCalledTimes(1);
+      expect(opened(t, "open")).toMatchObject({
+        type: "app.opened",
+        payload: { mode: "launched" },
+      });
+    });
+
+    it("does not launch again inside the memory window, and does at its end", async () => {
+      const openManager = vi.fn(async () => "launched" as const);
+      const t = await setup({ role: "terminal", openManager });
+      await t.send("app.open", {}, "first");
+      t.advance(9_999);
+      await t.send("app.open", {}, "second");
+      expect(openManager).toHaveBeenCalledTimes(1);
+      expect(opened(t, "second")).toMatchObject({ payload: { mode: "launched" } });
+      t.advance(1);
+      await t.send("app.open", {}, "third");
+      expect(openManager).toHaveBeenCalledTimes(2);
+    });
+
+    it("shares one launch between requests that arrive while it is running", async () => {
+      let finish: (mode: "launched") => void = () => {};
+      const openManager = vi.fn(() => new Promise<"launched">((resolve) => (finish = resolve)));
+      const t = await setup({ role: "terminal", openManager });
+      const first = t.send("app.open", {}, "first");
+      const second = t.send("app.open", {}, "second");
+      finish("launched");
+      await Promise.all([first, second]);
+      expect(openManager).toHaveBeenCalledTimes(1);
+      expect(opened(t, "first")).toMatchObject({ payload: { mode: "launched" } });
+      expect(opened(t, "second")).toMatchObject({ payload: { mode: "launched" } });
+    });
+
+    it("replies no-terminal and does not remember it", async () => {
+      const openManager = vi.fn(async () => "no-terminal" as const);
+      const t = await setup({ role: "terminal", openManager });
+      await t.send("app.open", {}, "first");
+      await t.send("app.open", {}, "second");
+      expect(opened(t, "first")).toMatchObject({ payload: { mode: "no-terminal" } });
+      expect(openManager).toHaveBeenCalledTimes(2);
+    });
+
+    it("replies no-terminal when openManager rejects", async () => {
+      const openManager = vi.fn(async () => {
+        throw new Error("boom");
+      });
+      const t = await setup({ role: "terminal", openManager });
+      await t.send("app.open", {}, "open");
+      expect(opened(t, "open")).toMatchObject({ payload: { mode: "no-terminal" } });
+    });
+
+    it("flashes a manager that connected after a launch instead of waiting out the window", async () => {
+      const openManager = vi.fn(async () => "launched" as const);
+      const t = await setup({ role: "terminal", openManager });
+      await t.send("app.open", {}, "first");
+      const manager = join(t, "terminal");
+      await manager.send("hello", { client: "manager" });
+      await t.send("app.open", {}, "second");
+      expect(manager.got.map((m) => m.type)).toContain("app.attention");
+      expect(opened(t, "second")).toMatchObject({ payload: { mode: "attention" } });
+      expect(openManager).toHaveBeenCalledTimes(1);
     });
   });
 

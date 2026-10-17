@@ -120,11 +120,12 @@ export function createJobMirror() {
           // A late frame must not pull a finished job back to "downloading".
           const current = jobs.get(jobId);
           // A resume of a failed job reopens it with a queued frame.
-          if (current && TERMINAL.has(current.status)) {
-            if (!(current.status === "failed" && status === "queued")) return false;
-          }
+          const reopened = current?.status === "failed" && status === "queued";
+          if (current && TERMINAL.has(current.status) && !reopened) return false;
           return merge(jobId, {
             status,
+            // The old failure no longer applies to the reopened job.
+            ...(reopened && { error: undefined, cancelled: undefined }),
             ...(progress.percent !== undefined && { percent: progress.percent }),
             ...(progress.speed !== undefined && { speed: progress.speed }),
           });

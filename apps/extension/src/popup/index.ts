@@ -1,4 +1,5 @@
 import type { ProbedMedia } from "@mediaforge/shared-protocol";
+import { parseRate, type SpeedUnit } from "@mediaforge/shared-types";
 import type { DownloadResult, PopupState } from "../background/controller.ts";
 import {
   browserFromUserAgent,
@@ -15,6 +16,8 @@ import { buildDiagnostics, type DiagnosticsDecision } from "./diagnostics.ts";
 import {
   buildPopupModel,
   type ItemModel,
+  type OpenBanner,
+  openResultBanner,
   type PageSource,
   type PopupModel,
   pendingPicker,
@@ -32,6 +35,11 @@ let tabId = -1;
 let tabUrl = "";
 let picker: { media: ProbedMedia; source: PageSource } | undefined;
 let notice: string | undefined;
+/** What the popup said after asking to open MediaForge; goes away on its own or on dismiss. */
+let openBanner: OpenBanner | undefined;
+let openBannerTimer: ReturnType<typeof setTimeout> | undefined;
+/** The job whose Cancel is waiting for a Yes or No. */
+let confirmingCancel: string | undefined;
 /** The subtitle format last chosen in the picker. */
 let subtitleFormat: "srt" | "vtt" = "srt";
 /** Undefined until checked; only `false` shows the access banner. */
@@ -114,6 +122,10 @@ const ICON_PATHS = {
   download: ["M12 3v12", "M7 10l5 5 5-5", "M5 21h14"],
   file: ["M6 3h9l5 5v13H6z", "M14 3v6h6", "M9 13h6", "M9 17h6"],
   folder: ["M3 6h6l2 2h10v11H3z"],
+  open: ["M14 4h6v6", "M20 4l-9 9", "M18 14v6H4V6h6"],
+  pause: ["M8 5v14", "M16 5v14"],
+  play: ["M7 4l13 8-13 8z"],
+  x: ["M6 6l12 12", "M18 6L6 18"],
   globe: [
     "M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18z",
     "M3 12h18",
@@ -217,7 +229,7 @@ function collapsible(
   }
   const details = el(
     "details",
-    { className: "collapsible" },
+    { className: "collapsible", attrs: { "data-section": id } },
     head,
     el("div", { className: "collapsible-body" }, ...body),
   );
@@ -337,7 +349,104 @@ function pickerView(model: NonNullable<PopupModel["picker"]>, source: PageSource
   );
 }
 
-const status = (job: PopupModel["jobs"][number]): string => job.percentText || job.status;
+const status = (job: PopupModel["jobs"][number]): string => {
+  const text = job.percentText || job.status;
+  return job.speedText ? `${text} · ${job.speedText}` : text;
+};
+
+/** Shows or clears the open note; a timed one clears itself, and a newer one replaces the timer. */
+function setOpenBanner(next: OpenBanner | undefined): void {
+  if (openBannerTimer) clearTimeout(openBannerTimer);
+  openBannerTimer = undefined;
+  openBanner = next;
+  if (next?.clearAfterMs !== undefined) {
+    openBannerTimer = setTimeout(() => {
+      openBanner = undefined;
+      void refresh();
+    }, next.clearAfterMs);
+  }
+}
+
+/** Asks the background to open the manager; a failure goes to the error banner. */
+async function openApp(): Promise<void> {
+  const reply = await send<
+    { ok: true; mode: "attention" | "launched" | "no-terminal" } | { ok: false; message?: string }
+  >({ kind: "openApp" });
+  if (reply.ok) setOpenBanner(openResultBanner(reply.mode));
+  else notice = reply.message ?? "Could not open MediaForge.";
+  await refresh();
+}
+
+/** The icon-only button that opens MediaForge, at the top of every render. */
+function topBar(model: PopupModel): HTMLElement {
+  const open = iconButton("open", "", "Open MediaForge");
+  open.className = "icon-only";
+  open.disabled = !model.openApp.enabled;
+  if (model.openApp.tooltip) open.title = model.openApp.tooltip;
+  guarded(open, openApp);
+  return el("header", { className: "topbar" }, el("strong", { text: "MediaForge" }), open);
+}
+
+/** The note under the top bar; with text to copy it offers Copy and a way to dismiss. */
+function openBannerView(banner: OpenBanner): HTMLElement {
+  const node = el("div", {
+    className: "banner",
+    attrs: { "data-tone": "info", role: "status" },
+  });
+  node.append(el("span", { text: banner.text }));
+  if (banner.copy === undefined) return node;
+  const text = banner.copy;
+  const copy = iconButton("copy", "Copy", "Copy the command");
+  copy.addEventListener("click", () => {
+    void Promise.resolve(navigator.clipboard.writeText(text))
+      .then(() => setLabel(copy, "Copied"))
+      .catch(() => {});
+  });
+  const dismiss = iconButton("x", "", "Dismiss");
+  dismiss.className = "icon-only";
+  dismiss.addEventListener("click", () => {
+    setOpenBanner(undefined);
+    void refresh();
+  });
+  node.append(el("div", { className: "banner-actions" }, copy, dismiss));
+  return node;
+}
+
+/** Why downloads were paused when MediaForge last started; dismissing clears it everywhere. */
+function sessionNotice(model: PopupModel, text: string): HTMLElement {
+  const open = button("Open MediaForge", "Open MediaForge");
+  open.disabled = !model.openApp.enabled;
+  guarded(open, openApp);
+  const dismiss = iconButton("x", "", "Dismiss");
+  dismiss.className = "icon-only";
+  guarded(dismiss, async () => {
+    await send({ kind: "dismissNotice" });
+    await refresh();
+  });
+  return el(
+    "div",
+    { className: "banner", attrs: { "data-tone": "info", role: "status" } },
+    el("span", { text }),
+    el("div", { className: "banner-actions" }, open, dismiss),
+  );
+}
+
+/** An icon-only button that sends a job command; a refusal goes to the error banner. */
+function jobButton(
+  glyph: keyof typeof ICON_PATHS,
+  label: string,
+  command: "pause" | "resume",
+  jobId: string,
+): HTMLButtonElement {
+  const btn = iconButton(glyph, "", label);
+  btn.className = "icon-only";
+  guarded(btn, async () => {
+    const reply = await send<{ ok: boolean; message?: string }>({ kind: command, jobId });
+    if (!reply.ok) notice = reply.message ?? "Could not change the download.";
+    await refresh();
+  });
+  return btn;
+}
 
 /** Full text of the failure being read; lives outside the render so a refresh keeps it open. */
 let errorDetail: { title: string; message: string } | undefined;
@@ -399,9 +508,20 @@ function showErrorDialog(): void {
 let lastRenderKey = "";
 
 function render(model: PopupModel): void {
-  const key = JSON.stringify([model, picker?.source ?? null]);
+  if (confirmingCancel !== undefined) {
+    const id = confirmingCancel;
+    if (!model.jobs.some((j) => j.id === id && j.canCancel)) confirmingCancel = undefined;
+  }
+  const key = JSON.stringify([
+    model,
+    picker?.source ?? null,
+    openBanner ?? null,
+    confirmingCancel ?? null,
+  ]);
   if (key === lastRenderKey) return;
-  const nodes: Node[] = [];
+  const nodes: Node[] = [topBar(model)];
+  if (openBanner) nodes.push(openBannerView(openBanner));
+  if (model.notice) nodes.push(sessionNotice(model, model.notice.text));
   if (model.access) {
     const allow = button(model.access.button, model.access.button);
     // The request must run inside the click, so it is the first thing the handler does.
@@ -493,7 +613,6 @@ function render(model: PopupModel): void {
       );
     }
     for (const job of model.jobs) {
-      const failed = job.error !== undefined;
       const item = el(
         "div",
         {},
@@ -506,7 +625,7 @@ function render(model: PopupModel): void {
             el("div", { text: job.title }),
             ...(job.label ? [el("span", { className: "tag", text: job.label })] : []),
           ),
-          failed ? errorLink(job.title, job.error ?? "") : jobEnd(job),
+          jobEnd(job),
         ),
       );
       if (job.active) {
@@ -516,11 +635,7 @@ function render(model: PopupModel): void {
           "aria-label": `${job.title} progress`,
         };
         if (Number.isFinite(pct)) attrs.value = String(pct);
-        const cancel = button("Cancel", `Cancel ${job.title}`);
-        guarded(cancel, async () => {
-          await send({ kind: "cancel", jobId: job.id });
-        });
-        item.append(el("progress", { attrs }), cancel);
+        item.append(el("progress", { attrs }));
       }
       body.push(item);
     }
@@ -538,6 +653,29 @@ function render(model: PopupModel): void {
         setting("keepRunning", v),
       ),
     );
+  }
+  if (model.presets) {
+    settings.push(
+      el(
+        "div",
+        { className: "field preset-field" },
+        el("span", { text: "Speed limit" }),
+        segmented(
+          "Speed limit",
+          model.presets.options.map((o) => ({ value: o.value, label: `${o.label} ${o.detail}` })),
+          model.presets.current,
+          (value) => {
+            void setting("limitPreset", value)
+              .catch(async (error: unknown) => {
+                notice = messageOf(error);
+                await refresh();
+              })
+              .catch(() => {});
+          },
+        ),
+      ),
+    );
+    if (model.presets.current === "custom") settings.push(customLimitField(model.presets));
   }
   nodes.push(collapsible("settings", "Settings", settings));
   nodes.push(diagnosticsSection());
@@ -634,6 +772,56 @@ function fontSizeField(): HTMLElement {
     el("div", { className: "field" }, el("span", { text: "Font size" }), tabs),
     el("div", { className: "field" }, slider, readout),
   );
+}
+
+// The Custom limit field is one persistent element, like Diagnostics: progress pushes rebuild the
+// popup several times a second, and a fresh field would drop what the user is typing.
+let customField: HTMLElement | undefined;
+let customInput: HTMLInputElement;
+let customError: HTMLElement;
+let customUnit: SpeedUnit = "bytes";
+
+/** Saves the Custom field: the app's rules, so "5", "5 MB/s" and "40 Mbps"; empty is no limit. */
+async function saveCustomLimit(): Promise<void> {
+  const parsed = parseRate(customInput.value, customUnit);
+  if (!parsed.ok) {
+    customError.textContent = parsed.error;
+    return;
+  }
+  customError.textContent = "";
+  const reply = await send<{ ok?: boolean; message?: string } | undefined>({
+    kind: "setCustomLimit",
+    bytesPerSec: parsed.bytesPerSec,
+  });
+  if (reply?.ok === false) customError.textContent = reply.message ?? "Could not save the limit.";
+  await refresh();
+}
+
+/** The Custom limit's value, shown while Custom is the picked preset. */
+function customLimitField(presets: NonNullable<PopupModel["presets"]>): HTMLElement {
+  customUnit = presets.unit;
+  if (!customField) {
+    customInput = el("input", {
+      attrs: { type: "text", "aria-label": "Custom speed limit", spellcheck: "false" },
+    });
+    customError = el("div", { className: "sub field-error", attrs: { role: "alert" } });
+    customInput.addEventListener("keydown", (event) => {
+      if (event.key === "Enter") customInput.blur();
+    });
+    customInput.addEventListener("change", () => {
+      void saveCustomLimit().catch(() => {});
+    });
+    customField = el(
+      "div",
+      { className: "custom-limit" },
+      el("div", { className: "field" }, el("span", { text: "Custom" }), customInput),
+      customError,
+    );
+  }
+  customInput.placeholder = `no limit, or e.g. 5 ${presets.unit === "bits" ? "Mbps" : "MB/s"}`;
+  // Never overwrite what the user is typing; a saved or outside change shows once they leave.
+  if (document.activeElement !== customInput) customInput.value = presets.customText;
+  return customField;
 }
 
 /** A three-way switch: System, Light, Dark. Applies at once and is remembered. */
@@ -941,7 +1129,26 @@ async function setting(key: string, value: string | boolean): Promise<void> {
  * or a subtitle track. The background answers `needs-picker` for those; a page with one format
  * and no subtitles downloads straight away.
  */
+/**
+ * Folds every top-level section but "On this page", so the item and its picker get the room.
+ * Closing fires each section's toggle, which records the choice for later renders.
+ */
+function focusPageSection(): void {
+  // Recorded directly too: a render that follows at once would run before the toggle events.
+  for (const id of FOLDED_FOR_PAGE) collapsed.add(id);
+  collapsed.delete("page");
+  for (const section of app.querySelectorAll<HTMLDetailsElement>(":scope > details")) {
+    section.open = section.dataset.section === "page";
+  }
+  if (diagnosticsNode) diagnosticsNode.open = false;
+  if (aboutNode) aboutNode.open = false;
+}
+
+/** The sections `focusPageSection` folds; Diagnostics and About are folded by their nodes. */
+const FOLDED_FOR_PAGE = ["downloads", "settings"] as const;
+
 async function download(source: ItemModel["action"]): Promise<void> {
+  focusPageSection();
   const result = await send<DownloadResult>({ kind: "download", tabId, source });
   notice = undefined;
   picker = undefined;
@@ -965,14 +1172,44 @@ async function openFolder(jobId?: string): Promise<void> {
   await refresh();
 }
 
-/** A job's status, and for a finished file, a button that shows it in its folder. */
+/** A job's status and icon buttons; while a Cancel waits for an answer, Yes and No instead. */
 function jobEnd(job: PopupModel["jobs"][number]): HTMLElement {
-  const text = el("div", { text: status(job) });
-  if (!job.openable) return text;
-  const show = iconButton("folder", "", `Show ${job.title} in its folder`);
-  show.className = "icon-only";
-  guarded(show, () => openFolder(job.id));
-  return el("div", { className: "job-end" }, text, show);
+  if (confirmingCancel === job.id) {
+    const yes = button("Yes", `Yes, cancel ${job.title}`);
+    guarded(yes, async () => {
+      confirmingCancel = undefined;
+      await send({ kind: "cancel", jobId: job.id });
+      await refresh();
+    });
+    const no = button("No", `No, keep ${job.title}`);
+    no.addEventListener("click", () => {
+      confirmingCancel = undefined;
+      void refresh();
+    });
+    return el("div", { className: "job-end" }, el("span", { text: "Cancel?" }), yes, no);
+  }
+  const end = el("div", { className: "job-end" });
+  if (job.error !== undefined) end.append(errorLink(job.title, job.error));
+  else end.append(el("div", { text: status(job) }));
+  if (job.openable) {
+    const show = iconButton("folder", "", `Show ${job.title} in its folder`);
+    show.className = "icon-only";
+    guarded(show, () => openFolder(job.id));
+    end.append(show);
+  }
+  if (job.canPause) end.append(jobButton("pause", `Pause ${job.title}`, "pause", job.id));
+  if (job.canResume) end.append(jobButton("play", `Resume ${job.title}`, "resume", job.id));
+  if (job.canRetry) end.append(jobButton("refresh", `Retry ${job.title}`, "resume", job.id));
+  if (job.canCancel) {
+    const cancel = iconButton("x", "", `Cancel ${job.title}`);
+    cancel.className = "icon-only";
+    cancel.addEventListener("click", () => {
+      confirmingCancel = job.id;
+      void refresh();
+    });
+    end.append(cancel);
+  }
+  return end;
 }
 
 /** Starts one download per ticked row, in the order they are listed. */
@@ -1023,6 +1260,8 @@ async function refresh(): Promise<boolean> {
       // An overlay click that needed a choice: show the same picker a popup click would, and tell
       // the background it was taken so Cancel does not bring it back.
       picker = pendingPicker(state);
+      // The overlay's Download, like the popup's: the picker gets the room.
+      focusPageSection();
       void send({ kind: "clearPicker", tabId }).catch(() => {});
     }
     lastState = state;

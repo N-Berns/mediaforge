@@ -1,12 +1,32 @@
+/**
+ * Taken from the logo (assets/brand/icon.svg): its cyan top and its amber-to-red bottom. Success
+ * keeps a green, which the logo has none of. Terminals without 24-bit color get the nearest one.
+ */
 export const COLORS = {
-  accent: "cyan",
-  ok: "green",
-  error: "red",
-  warn: "yellow",
+  accent: "#22d3ee",
+  /** The key in a key hint: "Esc" in "Esc Back". */
+  key: "#ff9a4d",
+  ok: "#4ade80",
+  error: "#f2542d",
+  warn: "#ffc26b",
   /** Paused downloads, kept apart from cancelled ones (which use warn). */
-  paused: "blue",
+  paused: "#7df0ff",
   muted: "gray",
 } as const;
+
+/** One color per letter of the wordmark: MEDIA in the logo's cyans, FORGE in its fire. */
+export const LOGO_COLORS = [
+  "#7df0ff",
+  "#62e7f8",
+  "#4bdef3",
+  "#36d8f0",
+  "#22d3ee",
+  "#ffc26b",
+  "#ffae5c",
+  "#ff9a4d",
+  "#ff7a2f",
+  "#f2542d",
+] as const;
 
 /**
  * Icons are limited to characters in the WGL4 set, which the default Windows
@@ -20,6 +40,8 @@ export const ICONS = {
   quit: "×",
   back: "◄",
   pointer: "►",
+  /** The selection cursor in every list, the same as the downloads table's. */
+  cursor: ">",
   link: "►",
   type: "»",
   paste: "▪",
@@ -35,8 +57,8 @@ export const ICONS = {
   ok: "√",
   error: "×",
   warn: "▲",
-  /** U+2551, in WGL4 (U+2016 is not). */
-  paused: "║",
+  /** Two half blocks, the nearest WGL4 has to a pause sign (U+23F8 and U+2016 are not in it). */
+  paused: "▌▌",
   info: "○",
   on: "●",
   off: "○",
@@ -59,9 +81,9 @@ export const STEP_BAR = { full: "▬", empty: "─" } as const;
 
 /** Each step has its own colour while it runs; finished steps turn green, waiting ones grey. */
 export const STEP_COLORS = {
-  download: "blueBright",
-  video: "blueBright",
-  audio: "magentaBright",
-  merge: "yellow",
-  convert: "yellow",
+  download: "#22d3ee",
+  video: "#22d3ee",
+  audio: "#7df0ff",
+  merge: "#ff9a4d",
+  convert: "#ff9a4d",
 } as const;

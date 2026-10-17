@@ -1,6 +1,11 @@
 import { DEFAULT_PROFILE_ID } from "@mediaforge/media-profiles";
 import type { ExtensionSettings, ProbedMedia } from "@mediaforge/shared-protocol";
-import type { MediaCandidate, SubtitleRequest } from "@mediaforge/shared-types";
+import {
+  DEFAULT_LIMITS,
+  type MediaCandidate,
+  type Notice,
+  type SubtitleRequest,
+} from "@mediaforge/shared-types";
 import type { JobMirrorApi, MirrorJob } from "./job-mirror.ts";
 import {
   type ConnectionState,
@@ -27,6 +32,8 @@ export interface PopupState {
   probe: ProbeView;
   /** Media the overlay could not download without a quality choice; the popup opens its picker. */
   picker?: ProbedMedia;
+  /** Downloads the core paused when the last session ended, until the user dismisses it. */
+  notice?: Notice;
 }
 
 export type NothingReason = "unsupported" | "error" | "no-media" | "unavailable";
@@ -49,6 +56,12 @@ export type Command =
       subtitle?: SubtitleRequest;
     }
   | { kind: "cancel"; jobId: string }
+  | { kind: "pause"; jobId: string }
+  /** Resumes a paused job, or retries a failed one. */
+  | { kind: "resume"; jobId: string }
+  /** Brings the desktop app forward, launching it when it is not running. */
+  | { kind: "openApp" }
+  | { kind: "dismissNotice" }
   /** Show a finished job's file in the file manager, or the download folder without a job. */
   | { kind: "openFolder"; jobId?: string }
   /** The popup took the pending picker for this tab; it must not come back after Cancel. */
@@ -56,9 +69,11 @@ export type Command =
   | { kind: "clearFinished" }
   | {
       kind: "setSetting";
-      key: "extensionUi" | "keepRunning" | "askQuality";
+      key: "extensionUi" | "keepRunning" | "askQuality" | "limitPreset";
       value: string | boolean;
     }
+  /** The Custom preset's cap in bytes per second; null is no limit. */
+  | { kind: "setCustomLimit"; bytesPerSec: number | null }
   | { kind: "debug"; tabId: number }
   | { kind: "overlayConfig" }
   | { kind: "overlayDownload" };
@@ -133,10 +148,15 @@ const POPUP_KINDS = new Set([
   "probe",
   "download",
   "cancel",
+  "pause",
+  "resume",
+  "openApp",
+  "dismissNotice",
   "openFolder",
   "clearPicker",
   "clearFinished",
   "setSetting",
+  "setCustomLimit",
   "debug",
 ]);
 
@@ -164,6 +184,7 @@ export function createController(deps: ControllerDeps) {
   let settings: ExtensionSettings | undefined;
   let settingsAt = 0;
   let settingsLoad: Promise<ExtensionSettings | undefined> | undefined;
+  let notice: Notice | undefined;
   const keepSettings = (value: ExtensionSettings): void => {
     settings = value;
     settingsAt = deps.now();
@@ -172,6 +193,8 @@ export function createController(deps: ControllerDeps) {
   // Keep the settings cache current without the caller having to wire it.
   deps.client.onPush((message) => {
     if (message.type === "settings.value") keepSettings(message.payload);
+    // A hello.ack without a notice clears a stale one, as does a notice push without one.
+    if (message.type === "hello.ack" || message.type === "notice") notice = message.payload.notice;
   });
   let lastConnection: ConnectionState["kind"] | undefined;
   deps.client.onState((state) => {
@@ -371,6 +394,7 @@ export function createController(deps: ControllerDeps) {
             ? (probes.get(command.pageUrl) ?? { state: "idle" })
             : { state: "idle" },
           ...(picker && { picker }),
+          ...(notice && { notice }),
         };
         return state;
       }
@@ -403,6 +427,39 @@ export function createController(deps: ControllerDeps) {
         }
         return { ok: true };
       }
+      case "pause":
+      case "resume": {
+        try {
+          const type = command.kind === "pause" ? "download.pause" : "download.resume";
+          const reply = await deps.client.request(type, { jobIds: [command.jobId] });
+          const failed = reply.type === "jobs.result" ? reply.payload.failed[0] : undefined;
+          return failed ? { ok: false, message: failed.message } : { ok: true };
+        } catch (error) {
+          return { ok: false, message: errorMessage(error) };
+        }
+      }
+      case "openApp": {
+        try {
+          const reply = await deps.client.request("app.open", {});
+          if (reply.type !== "app.opened") return { ok: false, message: "Unexpected reply." };
+          return { ok: true, mode: reply.payload.mode };
+        } catch (error) {
+          // A core older than this request rejects its type as an invalid message.
+          if (error instanceof NativeRequestError && error.code === "invalid-message") {
+            return { ok: false, message: "Update MediaForge to open it from the browser." };
+          }
+          return { ok: false, message: errorMessage(error) };
+        }
+      }
+      case "dismissNotice": {
+        try {
+          await deps.client.request("notice.dismiss", {});
+          notice = undefined;
+          return { ok: true };
+        } catch (error) {
+          return { ok: false, message: errorMessage(error) };
+        }
+      }
       case "openFolder": {
         try {
           await deps.client.request(
@@ -433,6 +490,23 @@ export function createController(deps: ControllerDeps) {
           return { ok: true, settings };
         } catch (error) {
           return { ok: false, message: error instanceof Error ? error.message : String(error) };
+        }
+      }
+      case "setCustomLimit": {
+        try {
+          // Read the values fresh: the core refuses a change to High, Med or Low from here, so a
+          // stale copy of them would get the whole change refused.
+          const fresh = await deps.client.request("settings.get", {});
+          if (fresh.type !== "settings.value") return { ok: false, message: "Unexpected reply." };
+          const limits = {
+            ...(fresh.payload.limits ?? DEFAULT_LIMITS),
+            custom: command.bytesPerSec,
+          };
+          const reply = await deps.client.request("settings.set", { limits });
+          if (reply.type === "settings.value") keepSettings(reply.payload);
+          return { ok: true, settings };
+        } catch (error) {
+          return { ok: false, message: errorMessage(error) };
         }
       }
       case "debug":

@@ -40,7 +40,7 @@ describe("Menu number labels", () => {
   it("numbers each selectable row and leaves disabled rows blank", () => {
     const app = render(<Menu items={items} onSelect={() => {}} />);
     const frame = app.lastFrame() ?? "";
-    expect(frame).toMatch(/► 1 Alpha/);
+    expect(frame).toMatch(/> 1 Alpha/);
     expect(frame).toMatch(/ {2}2 Bravo/);
     expect(frame).not.toMatch(/3 Charlie/);
     app.unmount();
@@ -181,7 +181,7 @@ describe("Menu mouse", () => {
     const app = withMouse(<Menu items={four} onSelect={onSelect} />);
     await tick();
     app.stdin.write(clickAt(4, 1));
-    await vi.waitFor(() => expect(app.lastFrame()).toMatch(/► 2 Bravo/));
+    await vi.waitFor(() => expect(app.lastFrame()).toMatch(/> 2 Bravo/));
     expect(onSelect).not.toHaveBeenCalled();
     app.stdin.write(clickAt(4, 1));
     await vi.waitFor(() => expect(onSelect).toHaveBeenCalledWith("b"));
@@ -193,7 +193,7 @@ describe("Menu mouse", () => {
     const app = withMouse(<Menu items={four} onSelect={onSelect} />, () => clock);
     await tick();
     app.stdin.write(clickAt(4, 1));
-    await vi.waitFor(() => expect(app.lastFrame()).toMatch(/► 2 Bravo/));
+    await vi.waitFor(() => expect(app.lastFrame()).toMatch(/> 2 Bravo/));
     clock = 1000;
     app.stdin.write(clickAt(4, 1));
     await tick();
@@ -211,13 +211,13 @@ describe("Menu mouse", () => {
     // Rows 0-4 show a-e. The first click highlights e and scrolls the window, so the second
     // press of the double-click lands on f.
     app.stdin.write(clickAt(2, 4));
-    await vi.waitFor(() => expect(app.lastFrame()).toMatch(/more above[\s\S]*► E/));
+    await vi.waitFor(() => expect(app.lastFrame()).toMatch(/more above[\s\S]*> E/));
     app.stdin.write(clickAt(2, 4));
-    await vi.waitFor(() => expect(app.lastFrame()).toMatch(/► F/));
+    await vi.waitFor(() => expect(app.lastFrame()).toMatch(/> F/));
     await tick();
     expect(onSelect).not.toHaveBeenCalled();
     // A double-click on the row that is already highlighted picks it.
-    const at = (app.lastFrame() ?? "").split("\n").findIndex((line) => line.includes("► F"));
+    const at = (app.lastFrame() ?? "").split("\n").findIndex((line) => line.includes("> F"));
     app.stdin.write(clickAt(2, at));
     app.stdin.write(clickAt(2, at));
     await vi.waitFor(() => expect(onSelect).toHaveBeenCalledWith("f"));
@@ -229,7 +229,7 @@ describe("Menu mouse", () => {
     await tick();
     app.stdin.write(clickAt(4, 2));
     await tick();
-    expect(app.lastFrame()).toMatch(/► 1 Alpha/);
+    expect(app.lastFrame()).toMatch(/> 1 Alpha/);
   });
 
   it("hover does not move the highlight", async () => {
@@ -238,7 +238,7 @@ describe("Menu mouse", () => {
     await tick();
     app.stdin.write(moveAt(4, 3));
     await tick(60);
-    expect(app.lastFrame()).toMatch(/► 1 Alpha/);
+    expect(app.lastFrame()).toMatch(/> 1 Alpha/);
     app.stdin.write(ENTER);
     await vi.waitFor(() => expect(onSelect).toHaveBeenCalledWith("a"));
   });
@@ -249,7 +249,7 @@ describe("Menu mouse", () => {
     app.stdin.write(clickAt(4, 2));
     app.stdin.write(clickAt(4, 2));
     await tick(60);
-    expect(app.lastFrame()).toMatch(/► 1 Alpha/);
+    expect(app.lastFrame()).toMatch(/> 1 Alpha/);
   });
 
   it("the wheel moves the highlight, skipping disabled rows", async () => {
@@ -257,7 +257,7 @@ describe("Menu mouse", () => {
     await tick();
     app.stdin.write(wheelAt(4, 0, 1));
     app.stdin.write(wheelAt(4, 0, 1));
-    await vi.waitFor(() => expect(app.lastFrame()).toMatch(/► 4 Delta/));
+    await vi.waitFor(() => expect(app.lastFrame()).toMatch(/> 4 Delta/));
   });
 });
 
@@ -266,7 +266,7 @@ describe("TextField mouse", () => {
     const onSubmit = vi.fn();
     const app = withMouse(<TextField initial="abcdef" onSubmit={onSubmit} onCancel={() => {}} />);
     await tick();
-    // Border (1) + padding (1) + "► " (2): the text starts at column 4. Column 6 is "c".
+    // Border (1) + padding (1) + "> " (2): the text starts at column 4. Column 6 is "c".
     app.stdin.write(clickAt(6, 1));
     await tick();
     app.stdin.write("X");

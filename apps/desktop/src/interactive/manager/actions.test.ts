@@ -4,6 +4,7 @@ import {
   type Action,
   appliesTo,
   confirmText,
+  outcome,
   resultText,
   split,
   targets,
@@ -111,8 +112,11 @@ describe("texts", () => {
   });
 
   it("trash and clear", () => {
-    expect(confirmText("trash", [job("a"), job("b"), job("c")])).toBe(
-      "y/N  Trash the files of 3 downloads?",
+    expect(confirmText("trash", [job("a"), job("b"), job("c")], "win32")).toBe(
+      "y/N  Delete 3 downloads from disk? Files go to the Recycle Bin.",
+    );
+    expect(confirmText("trash", [job("a")], "linux")).toBe(
+      "y/N  Delete 1 download from disk? Files go to the Trash.",
     );
     expect(confirmText("clear", [job("a"), job("b"), job("c"), job("d"), job("e")])).toBe(
       "y/N  Clear 5 finished? Files stay on disk.",
@@ -134,5 +138,17 @@ describe("texts", () => {
     expect(resultText("pause", 0, 2, [])).toBe("Nothing to pause.");
     expect(resultText("trash", 3, 0, [])).toBe("Moved to the trash 3");
     expect(resultText("open", 0, 1, [])).toBe("Nothing to open.");
+  });
+});
+
+describe("outcome", () => {
+  it("colors a result by how it went", () => {
+    expect(outcome("pause", 2, 0, [])).toEqual(["Paused 2", "ok"]);
+    expect(outcome("pause", 1, 1, [])).toEqual(["Paused 1 · 1 skipped", "warn"]);
+    expect(outcome("pause", 0, 0, [])).toEqual(["Nothing to pause.", "warn"]);
+    expect(outcome("trash", 1, 0, [{ message: "locked" }])).toEqual([
+      "Moved to the trash 1 · 1 failed: locked",
+      "error",
+    ]);
   });
 });

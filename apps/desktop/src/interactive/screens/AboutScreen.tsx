@@ -23,9 +23,17 @@ type UpdateState =
   | { kind: "done"; info: UpdateInfo }
   | { kind: "failed"; info: UpdateInfo; message: string };
 
-type Choice = "update" | "tools" | "back";
+type Choice = "update" | "tools" | "report" | "back";
 
-export function AboutScreen({ onBack, onSetup }: { onBack: () => void; onSetup: () => void }) {
+export function AboutScreen({
+  onBack,
+  onSetup,
+  onReport,
+}: {
+  onBack: () => void;
+  onSetup: () => void;
+  onReport: () => void;
+}) {
   const deps = useDeps();
   const [reports, setReports] = useState<ToolReport[]>();
   const [update, setUpdate] = useState<UpdateState>({ kind: "checking" });
@@ -86,6 +94,7 @@ export function AboutScreen({ onBack, onSetup }: { onBack: () => void; onSetup: 
           },
         ]
       : []),
+    { value: "report", icon: ICONS.warn, label: "Report a problem" },
     { value: "back", icon: ICONS.back, label: "Back" },
   ];
 
@@ -157,6 +166,7 @@ export function AboutScreen({ onBack, onSetup }: { onBack: () => void; onSetup: 
           onSelect={(choice) => {
             if (choice === "back") onBack();
             else if (choice === "tools") onSetup();
+            else if (choice === "report") onReport();
             else if (update.kind === "available" || update.kind === "failed") install(update.info);
           }}
           items={items}

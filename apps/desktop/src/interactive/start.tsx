@@ -1,4 +1,6 @@
-import { stat } from "node:fs/promises";
+import { readFile, stat } from "node:fs/promises";
+import { release } from "node:os";
+import { sendReport } from "@mediaforge/shared-types";
 import { render } from "ink";
 import { flashWindow } from "../attention.ts";
 import { defaultBinDir } from "../binaries.ts";
@@ -10,6 +12,7 @@ import {
 } from "../console-mode.ts";
 import { applyAutostart } from "../core/autostart.ts";
 import { defaultCoreConnector } from "../core/connect.ts";
+import { historyPath } from "../core/history.ts";
 import { inspectTools } from "../doctor.ts";
 import { defaultDownloadDeps } from "../download.ts";
 import { defaultOutputDir } from "../engine/index.ts";
@@ -27,6 +30,7 @@ import { InputHub } from "./mouse/input.ts";
 import { MouseProvider } from "./mouse/MouseProvider.tsx";
 import { terminalStdin } from "./mouse/terminal-stdin.ts";
 import { openFolder } from "./open-folder.ts";
+import { osLabel } from "./report.ts";
 
 const ENTER_SCREEN = "\x1b[?1049h\x1b[H";
 const LEAVE_SCREEN = "\x1b[?1049l";
@@ -140,6 +144,15 @@ export function realDeps(): AppDeps {
     version: VERSION,
     managerCore: defaultCoreConnector("manager"),
     flash: () => flashWindow(),
+    sendReport: (report) => sendReport(report),
+    readHistory: async () => {
+      try {
+        return await readFile(historyPath(process.env), "utf8");
+      } catch {
+        return undefined;
+      }
+    },
+    osName: osLabel(process.platform, release()),
   };
 }
 

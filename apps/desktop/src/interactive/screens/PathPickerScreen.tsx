@@ -195,7 +195,7 @@ export function PathPickerScreen({ crumbs, startDir, onPick: pick, onCancel }: P
                   }}
                 >
                   <HoverText>
-                    <Text color={COLORS.accent}>{selected ? `${ICONS.pointer} ` : "  "}</Text>
+                    <Text color={COLORS.accent}>{selected ? `${ICONS.cursor} ` : "  "}</Text>
                     <Text color={selected ? COLORS.accent : undefined} bold={selected}>
                       {ICONS.folder} {name}
                     </Text>

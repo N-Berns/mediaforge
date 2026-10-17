@@ -46,6 +46,23 @@ body {
 .banner[data-tone="error"] {
   border-color: #b00020;
 }
+.topbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding-bottom: 6px;
+  border-bottom: 1px solid color-mix(in srgb, GrayText 40%, transparent);
+}
+.banner-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 6px;
+}
+.preset-field {
+  flex-wrap: wrap;
+}
 .row {
   display: grid;
   grid-template-columns: 1fr auto;
@@ -173,14 +190,18 @@ h2 {
 #app.picking {
   display: flex;
   flex-direction: column;
-  overflow: hidden;
+}
+/* The sections under the picker keep their own height; without this, open sections with many
+   downloads squeezed the picker to nothing. The popup scrolls when they do not all fit. */
+#app.picking > :not(.picker) {
+  flex: none;
 }
 .picker {
   display: flex;
   flex-direction: column;
   gap: 10px;
   flex: 1;
-  min-height: 0;
+  min-height: 260px;
 }
 .picker-list {
   display: flex;
@@ -387,4 +408,15 @@ button.icon-only span:empty {
 .report textarea {
   font: inherit;
   resize: vertical;
+}
+.custom-limit input {
+  font: inherit;
+  flex: 1;
+  min-width: 0;
+}
+.custom-limit .field-error {
+  color: #b00020;
+}
+.custom-limit .field-error:empty {
+  display: none;
 }

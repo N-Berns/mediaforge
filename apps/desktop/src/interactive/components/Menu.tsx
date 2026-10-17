@@ -159,7 +159,7 @@ export function Menu<T>({
               else setIndex(position);
             }}
           >
-            <Text color={COLORS.accent}>{selected ? `${ICONS.pointer} ` : "  "}</Text>
+            <Text color={COLORS.accent}>{selected ? `${ICONS.cursor} ` : "  "}</Text>
             {numbered ? (
               <Text color={selected ? COLORS.accent : COLORS.muted}>
                 {item.disabled ? "  " : `${numberOf[position]} `}

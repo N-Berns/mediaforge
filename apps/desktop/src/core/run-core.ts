@@ -11,6 +11,7 @@ import { ExitCode } from "../exit-codes.ts";
 import { type FormatsDeps, fetchMediaInfo } from "../formats.ts";
 import { openFolder } from "../interactive/open-folder.ts";
 import { detectJsRuntimeArgs } from "../js-runtime.ts";
+import { openManagerTerminal } from "../open-terminal.ts";
 import { DEFAULT_SETTINGS, defaultSettingsStore, type SettingsStore } from "../settings.ts";
 import { defaultToolRuntime, type ToolRuntime, tryResolve } from "../tool-runtime.ts";
 import { VERSION } from "../version.ts";
@@ -51,6 +52,8 @@ export interface RunCoreDeps {
   applyAutostart: (enabled: boolean) => Promise<void>;
   /** Shows a path in the file manager. Default: the real one, which creates a missing folder. */
   openPath?: (path: string, options: { select: boolean }) => Promise<void>;
+  /** Opens a terminal window with the manager. Default: the real one. */
+  openManager?: () => Promise<"launched" | "no-terminal">;
   /** Exit on SIGINT and SIGTERM. Off in tests. */
   handleSignals: boolean;
   /** Where the download history lives. */
@@ -223,6 +226,7 @@ export async function runCore(deps: RunCoreDeps): Promise<number> {
         }),
       applyAutostart: syncAutostart,
       openPath: deps.openPath ?? openInFileManager,
+      openManager: deps.openManager ?? (() => openManagerTerminal()),
       onActivity: check,
       now: () => Date.now(),
       newId: () => randomUUID(),

@@ -170,4 +170,16 @@ describe("job mirror", () => {
     mirror.apply(msg("download.progress", { jobId: "f", status: "downloading", progress: {} }));
     expect(mirror.list()[0]?.status).toBe("downloading");
   });
+
+  it("drops the error of a failed job once it is resumed", () => {
+    const mirror = createJobMirror();
+    mirror.apply(msg("download.failed", { jobId: "f", error: "boom" }));
+    expect(mirror.list()[0]?.error).toBe("boom");
+    mirror.apply(msg("download.progress", { jobId: "f", status: "queued", progress: {} }));
+    expect(mirror.list()[0]?.error).toBeUndefined();
+    mirror.apply(msg("download.completed", { jobId: "f", outputPath: "/dl/f.mp4" }));
+    const row = mirror.list()[0];
+    expect(row?.status).toBe("completed");
+    expect(row?.error).toBeUndefined();
+  });
 });

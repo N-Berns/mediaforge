@@ -52,6 +52,8 @@ export interface CoreServiceDeps {
   onActivity(): void;
   now(): number;
   newId(): string;
+  /** Opens a terminal window with the manager. Absent: `app.open` replies `no-terminal`. */
+  openManager?: () => Promise<"launched" | "no-terminal">;
   /** Every job, across sessions. The service writes each engine update into it. */
   history: HistoryStore;
   /** Moves files to the Recycle Bin or the Trash. */
@@ -89,6 +91,11 @@ const TERMINAL_SNAPSHOT_MAX_BYTES = 60_000_000;
 const MAX_ERROR_TEXT = 1000;
 /** Probed pages whose format ids are remembered, so a `variantId` can be checked. */
 const MAX_PROBED_URLS = 64;
+/**
+ * A new manager window takes a moment to connect. `app.open` within this long of a launch does
+ * not open a second window.
+ */
+const LAUNCH_MEMORY_MS = 10_000;
 /** Jobs that no longer run. A paused job counts: it does nothing until someone resumes it. */
 const TERMINAL = new Set(["completed", "failed", "cancelled", "paused"]);
 
@@ -134,10 +141,26 @@ export class CoreService {
   readonly #formats = new Map<string, Map<string, KnownFormat>>();
   /** The subtitle tracks each probed page offered, as `manual:en` or `auto:en`. */
   readonly #subtitles = new Map<string, Set<string>>();
+  /** When the manager window was last launched, for `LAUNCH_MEMORY_MS`. */
+  #lastLaunchAt: number | undefined;
+  /** The launch under way, shared by every `app.open` that arrives meanwhile. */
+  #launching: Promise<"launched" | "no-terminal"> | undefined;
   /** The last setup frame passed on, for throttling download progress per tool and phase. */
   #lastSetup:
     | { at: number; state: SetupStatus["state"]; tool?: string; phase?: string }
     | undefined;
+
+  async #launch(): Promise<"launched" | "no-terminal"> {
+    try {
+      const mode = (await this.#deps.openManager?.()) ?? "no-terminal";
+      if (mode === "launched") this.#lastLaunchAt = this.#deps.now();
+      return mode;
+    } catch {
+      return "no-terminal";
+    } finally {
+      this.#launching = undefined;
+    }
+  }
 
   constructor(deps: CoreServiceDeps) {
     this.#deps = deps;
@@ -407,9 +430,13 @@ export class CoreService {
           found = true;
           this.#reply(client, this.#deps.newId(), "app.attention", {});
         }
-        return this.#reply(state, message.id, "app.opened", {
-          mode: found ? "attention" : "no-terminal",
-        });
+        if (found) return this.#reply(state, message.id, "app.opened", { mode: "attention" });
+        const last = this.#lastLaunchAt;
+        if (last !== undefined && this.#deps.now() - last < LAUNCH_MEMORY_MS) {
+          return this.#reply(state, message.id, "app.opened", { mode: "launched" });
+        }
+        this.#launching ??= this.#launch();
+        return this.#reply(state, message.id, "app.opened", { mode: await this.#launching });
       }
       default: {
         // Compile-time: adding a message type without a case fails here. Runtime: say so.
@@ -697,8 +724,14 @@ export class CoreService {
   }
 
   async #sendSettings(state: ClientState, id: string): Promise<void> {
+    this.#reply(state, id, "settings.value", await this.#settingsValue());
+  }
+
+  async #settingsValue(): Promise<
+    Extract<HostToExtensionMessage, { type: "settings.value" }>["payload"]
+  > {
     const s = await this.#deps.settings.load();
-    this.#reply(state, id, "settings.value", {
+    return {
       extensionUi: s.extensionUi,
       keepRunning: s.keepRunning,
       askQuality: s.askQuality,
@@ -707,15 +740,23 @@ export class CoreService {
       limits: s.limits,
       ...(s.folder && { folder: s.folder }),
       ...(s.quality && { quality: s.quality }),
-    });
+    };
   }
 
   async #setSettings(
     state: ClientState,
     message: Extract<ExtensionToHostMessage, { type: "settings.set" }>,
   ): Promise<void> {
-    // Preset values are edited in MediaForge itself; the popup only picks the preset.
-    if (state.role !== "terminal" && message.payload.limits !== undefined) {
+    const current = await this.#deps.settings.load();
+    // The High, Med and Low values are edited in MediaForge itself; the popup may change Custom.
+    const limits = message.payload.limits;
+    if (
+      state.role !== "terminal" &&
+      limits !== undefined &&
+      (limits.high !== current.limits.high ||
+        limits.med !== current.limits.med ||
+        limits.low !== current.limits.low)
+    ) {
       this.#forbidden(state, message.id);
       return;
     }
@@ -727,14 +768,16 @@ export class CoreService {
       this.#error(state, message.id, "invalid-folder", problem);
       return;
     }
-    const current = await this.#deps.settings.load();
     const next = sanitizeSettings({ ...current, ...message.payload });
     await this.#deps.settings.save(next);
     this.#bandwidth.setSettings({ limitPreset: next.limitPreset, limits: next.limits });
     if (next.keepRunning !== current.keepRunning) {
       await this.#deps.applyAutostart(next.keepRunning);
     }
-    await this.#sendSettings(state, message.id);
+    const value = await this.#settingsValue();
+    this.#reply(state, message.id, "settings.value", value);
+    // Other clients (an open manager) show these settings and must not go stale.
+    this.#broadcast("settings.value", value, state);
   }
 
   #record(job: EngineJob): void {

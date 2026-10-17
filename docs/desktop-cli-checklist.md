@@ -166,11 +166,22 @@ Phase 2 has no buttons yet: send the requests with a small script through `CoreC
 - [ ] Kill the core in Task Manager while the manager is open: the banner says `Reconnecting to MediaForge…`, the rows stay, and they come back live once the core restarts.
 - [ ] With a manager open, send `app.open` from the extension (or a test client): the window flashes and `Opened from browser` shows for a few seconds. Check in conhost, Windows Terminal and one Linux terminal.
 - [ ] Kill the core during a download, reopen the manager: the notice banner shows; `R` resumes the paused downloads, `z` dismisses the notice.
-- [ ] Narrow the window from 120 to under 80 columns: Last try drops under 112, Type under 100, ETA under 90, Speed under 80; the rows still fit on one line each.
+- [ ] Narrow the window from 130 to under 70 columns: Origin turns into its icon under 120, Last try drops under 112, Type turns into its icon under 100, ETA drops under 90, Speed under 80, and Status turns into its icon (with the percent while downloading or paused) under 70; the rows still fit on one line each. Origin shows its icon and name (`◊ Extension`, `≡ Menu`, `■ Manager`, `▪ CLI`), and `8` or a header click sorts by it.
 - [ ] Type column: a download picked as Video only (menu or extension format list) reads `Video only`, an MP3 `Audio only`, a saved subtitle `Subtitle`, a plain download `Video`. `2` sorts by type; `f` → Type → Video only shows only those rows.
 - [ ] With sort by type on, pick a video-only format in the extension's format list: the file lands in `Video only`, not `Video`.
 - [ ] Load an extension build from before 2026-10-16 (protocol 2) against this app: the popup says `Update this extension: it is older than the MediaForge app on your computer.` With an older app, it says `Update MediaForge: the app on your computer is older than this extension.`
+- [ ] Colors follow the logo: the wordmark goes from cyan (MEDIA) to orange-red (FORGE), keys in hints are orange, headings cyan, warnings amber, errors red-orange, success green. Check conhost, Windows Terminal and one Linux terminal.
+- [ ] Manager with few downloads: the key bar sits on the terminal's last line, under a divider, with the version on the right; keys are colored like the Home screen's hints. Resize the window: it stays at the bottom.
+- [ ] Manager filter (`f`): one column per group (Status, Type, Origin; no Last try), options lined up with their icons (status icons in the table's colors, Paused `▌▌`); the focused option has a `>` before it and no highlight; ←→ picks the group, ↑↓ the option, Space toggles; the key bar shows only these keys while it is open. The header shows the active filters as their colored icons (`filter: ▌▌ ◊`).
+- [ ] Every menu and the folder picker mark the selected row with `>`, like the downloads table.
+- [ ] Manager header: the limit is green for High, amber for Med, red-orange for Low, cyan for Custom; `N active` is cyan above 0, gray at 0; `search:` and `filter:` are amber. A blank line sits under the column headers.
+- [ ] Manager action results show above the divider for a few seconds, with an icon and color: `√ Paused 1` green, `▲ … skipped` amber, `× … failed` red. Del asks `Delete N downloads from disk? Files go to the Recycle Bin.` (the Trash on Linux), then shows `√ Moved to the trash N`.
 - [ ] The key bar starts with `Space Tick  Ctrl+A All`; clicking `Ctrl+A All`, or the `[ ]` above the rows, ticks every visible row and shows `[•]` there; again unticks them.
+
+## Extension popup (phase 4)
+
+- [ ] The popup's Open MediaForge button launches `mediaforge --manager` in a new console window on Windows (conhost and Windows Terminal) and in the first available terminal on Linux.
+- [ ] About › Report a problem: pick App or Extension, type a description (empty is refused), the next screen lists the diagnostics (app, OS, tools, setup, last failed download); "Send with diagnostics" and "Send without diagnostics" both arrive in the form, the latter with "(not included)"; offline shows the error with Try again.
 
 ## Mouse (phase 3c)
 

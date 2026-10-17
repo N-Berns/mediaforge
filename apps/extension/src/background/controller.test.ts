@@ -57,6 +57,8 @@ function setup(
     openPopup?: (windowId: number | undefined) => Promise<boolean>;
     /** The error code folder.open fails with; it succeeds when absent. */
     folderOpenFails?: string;
+    /** A canned reply (or error) for a request type, ahead of the defaults. */
+    replyTo?: (type: string) => HostToExtensionMessage | Error | undefined;
   } = {},
 ) {
   let downloads = 0;
@@ -80,6 +82,9 @@ function setup(
     stop() {},
     async request(type: string, payload: Record<string, unknown>) {
       requests.push({ type, payload });
+      const canned = options.replyTo?.(type);
+      if (canned instanceof Error) throw canned;
+      if (canned) return canned;
       if (type === "settings.get") {
         return reply("settings.value", {
           extensionUi: "overlay",
@@ -980,6 +985,138 @@ describe("openFolder", () => {
       ok: false,
       message: "not allowed",
     });
+    expect(t.requests).toEqual([]);
+  });
+});
+
+describe("pause, resume and the app", () => {
+  const jobsResult = (failed: Array<{ jobId: string; message: string }> = []) =>
+    reply("jobs.result", { failed });
+
+  it("pauses and resumes one job through the core", async () => {
+    const t = setup({ replyTo: () => jobsResult() });
+    expect(await t.controller.handle({ kind: "pause", jobId: "j1" }, popup)).toEqual({ ok: true });
+    expect(await t.controller.handle({ kind: "resume", jobId: "j1" }, popup)).toEqual({ ok: true });
+    expect(t.requests).toEqual([
+      { type: "download.pause", payload: { jobIds: ["j1"] } },
+      { type: "download.resume", payload: { jobIds: ["j1"] } },
+    ]);
+  });
+
+  it("passes the core's reason on when a job cannot be paused", async () => {
+    const message = "Only queued or running downloads can be paused.";
+    const t = setup({ replyTo: () => jobsResult([{ jobId: "j1", message }]) });
+    expect(await t.controller.handle({ kind: "pause", jobId: "j1" }, popup)).toEqual({
+      ok: false,
+      message,
+    });
+  });
+
+  it("reports a rejected pause", async () => {
+    const t = setup({ replyTo: () => new Error("gone") });
+    expect(await t.controller.handle({ kind: "resume", jobId: "j1" }, popup)).toEqual({
+      ok: false,
+      message: "gone",
+    });
+  });
+
+  it("opens the app and returns how", async () => {
+    const t = setup({ replyTo: () => reply("app.opened", { mode: "attention" }) });
+    expect(await t.controller.handle({ kind: "openApp" }, popup)).toEqual({
+      ok: true,
+      mode: "attention",
+    });
+    expect(t.requests).toEqual([{ type: "app.open", payload: {} }]);
+  });
+
+  it("asks for an update when the core does not know app.open", async () => {
+    const { NativeRequestError } = await import("./native-client.ts");
+    const t = setup({ replyTo: () => new NativeRequestError("invalid-message", "bad") });
+    expect(await t.controller.handle({ kind: "openApp" }, popup)).toEqual({
+      ok: false,
+      message: "Update MediaForge to open it from the browser.",
+    });
+  });
+
+  it("sends the bandwidth preset as a setting", async () => {
+    const t = setup();
+    await t.controller.handle({ kind: "setSetting", key: "limitPreset", value: "low" }, popup);
+    expect(t.requests).toEqual([{ type: "settings.set", payload: { limitPreset: "low" } }]);
+  });
+
+  it("sets the Custom limit on top of the core's current preset values", async () => {
+    const current = { high: null, med: 2_000_000, low: 500_000, custom: null };
+    const t = setup({
+      replyTo: (type) =>
+        type === "settings.get"
+          ? reply("settings.value", {
+              extensionUi: "overlay",
+              keepRunning: false,
+              askQuality: false,
+              limits: current,
+            })
+          : undefined,
+    });
+    await t.controller.handle({ kind: "setCustomLimit", bytesPerSec: 3_000_000 }, popup);
+    expect(t.requests).toEqual([
+      { type: "settings.get", payload: {} },
+      { type: "settings.set", payload: { limits: { ...current, custom: 3_000_000 } } },
+    ]);
+  });
+
+  it("keeps the session notice from hello.ack and notice pushes, until dismissed", async () => {
+    const notice = { reason: "unexpected", pausedCount: 2, jobIds: ["a", "b"] };
+    const t = setup({
+      replyTo: (type) => (type === "notice.dismiss" ? reply("notice", {}) : undefined),
+    });
+    const push = (m: HostToExtensionMessage) => {
+      for (const l of t.pushListeners) l(m);
+    };
+    const notices = async () =>
+      ((await t.controller.handle({ kind: "getState", tabId: 1 }, popup)) as PopupState).notice;
+
+    push(reply("hello.ack", { notice }));
+    expect(await notices()).toEqual(notice);
+    push(reply("hello.ack", {}));
+    expect(await notices()).toBeUndefined();
+    push(reply("notice", { notice }));
+    expect(await notices()).toEqual(notice);
+    push(reply("notice", {}));
+    expect(await notices()).toBeUndefined();
+
+    push(reply("notice", { notice }));
+    expect(await t.controller.handle({ kind: "dismissNotice" }, popup)).toEqual({ ok: true });
+    expect(t.requests.some((r) => r.type === "notice.dismiss")).toBe(true);
+    expect(await notices()).toBeUndefined();
+  });
+
+  it("keeps the notice when dismissing fails", async () => {
+    const notice = { reason: "unexpected", pausedCount: 1, jobIds: ["a"] };
+    const t = setup({
+      replyTo: (type) => (type === "notice.dismiss" ? new Error("down") : undefined),
+    });
+    for (const l of t.pushListeners) l(reply("notice", { notice }));
+    expect(await t.controller.handle({ kind: "dismissNotice" }, popup)).toEqual({
+      ok: false,
+      message: "down",
+    });
+    const state = (await t.controller.handle({ kind: "getState", tabId: 1 }, popup)) as PopupState;
+    expect(state.notice).toEqual(notice);
+  });
+
+  it("rejects the new commands from content scripts", async () => {
+    const t = setup();
+    for (const command of [
+      { kind: "pause", jobId: "j1" },
+      { kind: "resume", jobId: "j1" },
+      { kind: "openApp" },
+      { kind: "dismissNotice" },
+    ] as const) {
+      expect(await t.controller.handle(command, sender)).toEqual({
+        ok: false,
+        message: "not allowed",
+      });
+    }
     expect(t.requests).toEqual([]);
   });
 });

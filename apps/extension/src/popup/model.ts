@@ -1,4 +1,13 @@
 import type { ProbedMedia } from "@mediaforge/shared-protocol";
+import {
+  DEFAULT_LIMITS,
+  formatBytes,
+  formatLimit,
+  formatRate,
+  LIMIT_PRESETS,
+  type LimitPreset,
+  type SpeedUnit,
+} from "@mediaforge/shared-types";
 import type { PopupState } from "../background/controller.ts";
 
 export interface ItemModel {
@@ -18,7 +27,40 @@ export interface JobRow {
   active: boolean;
   /** Finished with a file the core can show in the file manager. */
   openable: boolean;
+  /** The speed of a downloading job, in the unit the user chose. */
+  speedText?: string;
+  canPause: boolean;
+  canResume: boolean;
+  canRetry: boolean;
+  canCancel: boolean;
   error?: string;
+}
+
+/** What the popup says after asking to open MediaForge. */
+export interface OpenBanner {
+  text: string;
+  /** Text the popup offers to copy. */
+  copy?: string;
+  clearAfterMs?: number;
+}
+
+export const MANAGER_COMMAND = "mediaforge --manager";
+
+/** The note for an open request that needs no further action when it launched the app. */
+export function openResultBanner(
+  mode: "attention" | "launched" | "no-terminal",
+): OpenBanner | undefined {
+  switch (mode) {
+    case "attention":
+      return { text: "MediaForge is already open.", clearAfterMs: 5000 };
+    case "no-terminal":
+      return {
+        text: `Could not open a terminal. Run ${MANAGER_COMMAND}.`,
+        copy: MANAGER_COMMAND,
+      };
+    case "launched":
+      return undefined;
+  }
 }
 
 /**
@@ -49,6 +91,19 @@ export interface PopupModel {
   /** Set while connected: the core can open the download folder. */
   openFolder?: true;
   toggles?: { overlay: boolean; keepRunning: boolean };
+  /** The Open MediaForge button; always set, disabled with a tooltip when not connected. */
+  openApp: { enabled: boolean; tooltip?: string };
+  /** Why downloads were paused when MediaForge last started; set while connected. */
+  notice?: { text: string };
+  /** The bandwidth presets, set once settings arrive. */
+  presets?: {
+    current: LimitPreset;
+    options: Array<{ value: LimitPreset; label: string; detail: string }>;
+    /** The unit the Custom field reads and shows. */
+    unit: SpeedUnit;
+    /** The Custom value as the field shows it; empty for no limit. */
+    customText: string;
+  };
 }
 
 const INSTALL_URL = "https://github.com/N-Berns/mediaforge/releases/latest";
@@ -62,11 +117,6 @@ function duration(seconds: number | undefined): string {
   return h > 0 ? `${h}:${pad(m % 60)}:${pad(s % 60)}` : `${m}:${pad(s % 60)}`;
 }
 
-function megabytes(bytes: number): string {
-  const mb = bytes / (1024 * 1024);
-  return mb >= 1000 ? `${(mb / 1024).toFixed(1)} GB` : `${mb.toFixed(1)} MB`;
-}
-
 const MAX_JOBS = 5;
 const MAX_PROBE_ERROR = 120;
 
@@ -74,10 +124,22 @@ export const UNREACHABLE_TEXT = "Cannot reach the MediaForge extension. Reopen t
 
 /** Shown when the popup cannot talk to the background page. */
 export function unreachableModel(): PopupModel {
-  return { items: [], jobs: [], banner: { tone: "error", text: UNREACHABLE_TEXT } };
+  return {
+    items: [],
+    jobs: [],
+    banner: { tone: "error", text: UNREACHABLE_TEXT },
+    openApp: NOT_CONNECTED,
+  };
 }
 
 const ACTIVE = new Set(["queued", "downloading", "processing"]);
+const NOT_CONNECTED = { enabled: false, tooltip: "MediaForge is not connected." };
+const PRESET_LABELS: Record<LimitPreset, string> = {
+  high: "High",
+  med: "Med",
+  low: "Low",
+  custom: "Custom",
+};
 
 export type PageSource = Extract<ItemModel["action"], { type: "page" }>;
 
@@ -100,7 +162,12 @@ export function buildPopupModel(
   picker?: ProbedMedia,
   options: { hostAccess?: boolean } = {},
 ): PopupModel {
-  const model: PopupModel = { items: [], jobs: [] };
+  const connected = state?.connection.kind === "ready" || state?.connection.kind === "setting-up";
+  const model: PopupModel = {
+    items: [],
+    jobs: [],
+    openApp: connected ? { enabled: true } : NOT_CONNECTED,
+  };
   if (options.hostAccess === false) {
     model.access = { text: HOST_ACCESS_TEXT, button: "Allow access" };
   }
@@ -184,7 +251,7 @@ export function buildPopupModel(
         kind: f.hasVideo ? "video" : "audio",
         detail: [
           f.container,
-          f.approxBytes ? megabytes(f.approxBytes) : "",
+          f.approxBytes ? formatBytes(f.approxBytes) : "",
           f.hasVideo ? "" : "audio only",
         ]
           .filter(Boolean)
@@ -201,18 +268,53 @@ export function buildPopupModel(
     };
   }
 
-  model.jobs = state.jobs.slice(0, MAX_JOBS).map((j) => ({
-    id: j.id,
-    title: j.title ?? j.id,
-    ...(j.label && { label: j.label }),
-    status: j.status,
-    percentText: j.percent !== undefined ? `${Math.round(j.percent)}%` : "",
-    active: ACTIVE.has(j.status),
-    openable: j.status === "completed" && Boolean(j.outputPath),
-    ...(j.error && { error: j.error }),
-  }));
+  const unit = state.settings?.speedUnit ?? "bytes";
+  model.jobs = state.jobs.slice(0, MAX_JOBS).map((j) => {
+    const percent = j.percent !== undefined ? `${Math.round(j.percent)}%` : "";
+    const paused = j.status === "paused";
+    return {
+      id: j.id,
+      title: j.title ?? j.id,
+      ...(j.label && { label: j.label }),
+      status: j.status,
+      percentText: paused
+        ? `Paused${percent && ` ${percent}`}`
+        : j.status === "cancelled"
+          ? "Cancelled"
+          : percent,
+      active: ACTIVE.has(j.status),
+      openable: j.status === "completed" && Boolean(j.outputPath),
+      ...(j.status === "downloading" &&
+        j.speed !== undefined && { speedText: formatRate(j.speed, unit) }),
+      canPause: ACTIVE.has(j.status),
+      canResume: paused,
+      canRetry: j.status === "failed",
+      canCancel: ACTIVE.has(j.status) || paused,
+      // A cancel is the user's own choice, not a failure: it shows as a status, with no error.
+      ...(j.status === "failed" && j.error && { error: j.error }),
+    };
+  });
+
+  if (state.notice) {
+    const { reason, pausedCount } = state.notice;
+    const what =
+      reason === "unexpected" ? "MediaForge closed unexpectedly." : "MediaForge was restarted.";
+    const count = pausedCount === 1 ? "1 download was" : `${pausedCount} downloads were`;
+    model.notice = { text: `${what} ${count} paused.` };
+  }
 
   if (state.settings) {
+    const limits = state.settings.limits ?? DEFAULT_LIMITS;
+    model.presets = {
+      current: state.settings.limitPreset ?? "high",
+      options: LIMIT_PRESETS.map((value) => ({
+        value,
+        label: PRESET_LABELS[value],
+        detail: formatLimit(limits[value], unit),
+      })),
+      unit,
+      customText: limits.custom === null ? "" : formatRate(limits.custom, unit),
+    };
     model.toggles = {
       overlay: state.settings.extensionUi === "overlay",
       keepRunning: state.settings.keepRunning,
