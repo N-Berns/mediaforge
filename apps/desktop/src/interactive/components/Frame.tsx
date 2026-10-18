@@ -24,7 +24,7 @@ export interface FrameProps {
   title: string;
   hints: Hint[];
   /** Colour of the icon and title. */
-  tone?: "accent" | "ok" | "error" | "warn";
+  tone?: "accent" | "ok" | "error" | "warn" | "failed";
   /** What Ctrl+C does here. It cancels the running download on the download screens. */
   ctrlC?: "Quit" | "Cancel";
   /** The y/N question a click on the Ctrl+C hint asks. Defaults by `ctrlC`. */
@@ -49,6 +49,19 @@ const LOGO_ROWS = LOGO.map((line, row) => ({
 }));
 /** The wordmark is 39 columns wide; below this the plain name is shown instead. */
 const LOGO_MIN_WIDTH = 52;
+/** The two-line wordmark needs this many rows; a shorter window gets the one-line name. */
+const LOGO_MIN_ROWS = 28;
+
+/**
+ * The hints that fit in `room` columns, with `last` always kept. Hints are dropped from the end of
+ * `hints`, so a screen lists its most useful keys first.
+ */
+export function fitHints(hints: Hint[], last: Hint, room: number): Hint[] {
+  const length = (list: Hint[]) => list.map(([key, label]) => `${key} ${label}`).join("  ").length;
+  const shown = [...hints];
+  while (shown.length > 0 && length([...shown, last]) > room) shown.pop();
+  return [...shown, last];
+}
 
 /** The fixed chrome around every screen: title bar, breadcrumb, heading, key hints. */
 export function Frame({
@@ -72,8 +85,13 @@ export function Frame({
   const { columns, rows } = useTerminalSize();
   const width = Math.min(columns, MAX_WIDTH);
   const color = COLORS[tone === "accent" ? "accent" : tone];
-  // Ctrl+C works on every screen, so it is always the last key hint.
-  const shownHints: Hint[] = [...hints.filter(([key]) => key !== "Ctrl+C"), ["Ctrl+C", ctrlC]];
+  // Ctrl+C works on every screen, so it is always the last key hint. A narrow window drops the
+  // hints before it, leaving room for the version on the right.
+  const shownHints = fitHints(
+    hints.filter(([key]) => key !== "Ctrl+C"),
+    ["Ctrl+C", ctrlC],
+    columns - 2 - `v${version}`.length - 2,
+  );
   const mouse = useMouse();
   const [asking, setAsking] = useState(false);
   const answered = useRef(false);
@@ -95,9 +113,10 @@ export function Frame({
   const question = ctrlCQuestion ?? CTRL_C_QUESTION[ctrlC];
 
   return (
-    <Box flexDirection="column" width={width} height={rows ? rows - 1 : undefined}>
-      <Box paddingX={1} justifyContent="center">
-        {width >= LOGO_MIN_WIDTH ? (
+    <Box flexDirection="column" width={columns} height={rows ? rows - 1 : undefined}>
+      {/* As wide as the window, not the capped frame, so the logo stays in its middle. */}
+      <Box width={columns} flexShrink={0} justifyContent="center">
+        {width >= LOGO_MIN_WIDTH && (rows === undefined || rows >= LOGO_MIN_ROWS) ? (
           <Box flexDirection="column">
             {LOGO_ROWS.map((row) => (
               <Text key={row.id} bold>
@@ -116,29 +135,31 @@ export function Frame({
         )}
       </Box>
 
-      {/* A blank line keeps the breadcrumb clearly apart from the logo. */}
-      <Box paddingX={1} marginTop={1}>
-        <Text color={COLORS.muted}>{crumbs.join(` ${ICONS.chevron} `)}</Text>
-      </Box>
-
-      <Box flexDirection="column" paddingX={2} paddingTop={1} flexGrow={1}>
-        <Box marginBottom={1}>
-          <Text bold color={color}>
-            {icon} {title}
-          </Text>
+      {/* The content keeps a readable width; the rule and key hints below span the window. */}
+      <Box flexDirection="column" width={width} flexGrow={1}>
+        <Box paddingX={1} marginTop={1}>
+          <Text color={COLORS.muted}>{crumbs.join(` ${ICONS.chevron} `)}</Text>
         </Box>
-        {children}
-      </Box>
 
-      {visibleNotice ? (
-        <Box paddingX={2}>
-          <Text color={COLORS[visibleNotice.kind]}>
-            {ICONS[visibleNotice.kind]} {visibleNotice.text}
-          </Text>
+        <Box flexDirection="column" paddingX={2} paddingTop={1} flexGrow={1}>
+          <Box marginBottom={1}>
+            <Text bold color={color}>
+              {icon} {title}
+            </Text>
+          </Box>
+          {children}
         </Box>
-      ) : null}
+
+        {visibleNotice ? (
+          <Box paddingX={2}>
+            <Text color={COLORS[visibleNotice.kind]}>
+              {ICONS[visibleNotice.kind]} {visibleNotice.text}
+            </Text>
+          </Box>
+        ) : null}
+      </Box>
       <Box paddingX={1}>
-        <Text color={COLORS.muted}>{"─".repeat(Math.max(0, width - 2))}</Text>
+        <Text color={COLORS.muted}>{"─".repeat(Math.max(0, columns - 2))}</Text>
       </Box>
       <Box paddingX={1} justifyContent="space-between">
         {asking ? (

@@ -52,6 +52,8 @@ export type Command =
       tabId: number;
       source: { type: "candidate"; id: string } | { type: "page"; url: string; title?: string };
       variantId?: string;
+      /** With a silent `variantId`: no audio is added. */
+      videoOnly?: boolean;
       /** Save this subtitle track instead of the media. */
       subtitle?: SubtitleRequest;
     }
@@ -67,6 +69,14 @@ export type Command =
   /** The popup took the pending picker for this tab; it must not come back after Cancel. */
   | { kind: "clearPicker"; tabId: number }
   | { kind: "clearFinished" }
+  /** Hides one item from "On this page" for this tab. */
+  | {
+      kind: "removeItem";
+      tabId: number;
+      source: { type: "candidate"; id: string } | { type: "page"; url: string };
+    }
+  /** Hides every item from "On this page" for this tab. */
+  | { kind: "clearItems"; tabId: number; pageUrl?: string }
   | {
       kind: "setSetting";
       key: "extensionUi" | "keepRunning" | "askQuality" | "limitPreset";
@@ -133,6 +143,12 @@ function formatLabel(media: ProbedMedia, formatId: string): string | undefined {
   return format ? [format.label, format.container].filter(Boolean).join(" ") : undefined;
 }
 
+/** Marks a picture-only pick, so its job row is told apart from the same format with sound. */
+const videoLabel = (
+  label: string | undefined,
+  videoOnly: boolean | undefined,
+): string | undefined => (videoOnly && label ? `${label} video only` : label);
+
 const isWebUrl = (url: string): boolean => {
   try {
     const { protocol } = new URL(url);
@@ -155,6 +171,8 @@ const POPUP_KINDS = new Set([
   "openFolder",
   "clearPicker",
   "clearFinished",
+  "removeItem",
+  "clearItems",
   "setSetting",
   "setCustomLimit",
   "debug",
@@ -162,6 +180,8 @@ const POPUP_KINDS = new Set([
 
 export function createController(deps: ControllerDeps) {
   const probes = new Map<string, ProbeView>();
+  /** Page videos the user removed from the list; the page is not listed again until it reloads. */
+  const hiddenPages = new Set<string>();
   const inflight = new Map<string, Promise<ProbeView>>();
   const remember = (url: string, view: ProbeView): void => {
     probes.delete(url);
@@ -279,7 +299,13 @@ export function createController(deps: ControllerDeps) {
   /** Sends `download.start`; rejects with the core's error. */
   const send = async (
     candidate: MediaCandidate,
-    options: { variantId?: string; tabId?: number; subtitle?: SubtitleRequest; label?: string },
+    options: {
+      variantId?: string;
+      videoOnly?: boolean;
+      tabId?: number;
+      subtitle?: SubtitleRequest;
+      label?: string;
+    },
   ): Promise<DownloadResult> => {
     const s = await loadSettings();
     const profileId = s?.quality ?? DEFAULT_PROFILE_ID;
@@ -303,6 +329,7 @@ export function createController(deps: ControllerDeps) {
       candidate,
       profileId,
       ...(options.variantId && { variantId: options.variantId }),
+      ...(options.videoOnly && { videoOnly: true }),
       ...(options.subtitle && { subtitle: options.subtitle }),
       ...(context && { context }),
     });
@@ -324,7 +351,7 @@ export function createController(deps: ControllerDeps) {
 
   const start = (
     candidate: MediaCandidate,
-    options: { variantId?: string; tabId?: number; subtitle?: SubtitleRequest; label?: string },
+    options: Parameters<typeof send>[1],
   ): Promise<DownloadResult> =>
     send(candidate, options).catch((error: unknown) => ({
       status: "error",
@@ -336,6 +363,7 @@ export function createController(deps: ControllerDeps) {
     title: string | undefined,
     variantId: string | undefined,
     subtitle?: SubtitleRequest,
+    videoOnly?: boolean,
   ): Promise<DownloadResult> => {
     const view = await probe(url);
     if (view.state !== "ready") return { status: "nothing" };
@@ -350,8 +378,12 @@ export function createController(deps: ControllerDeps) {
     const base = title ?? view.media.title;
     if (!variantId) return start(pageCandidate(url, base), {});
     try {
-      const label = formatLabel(view.media, variantId);
-      return await send(pageCandidate(url, base), { variantId, ...(label && { label }) });
+      const label = videoLabel(formatLabel(view.media, variantId), videoOnly);
+      return await send(pageCandidate(url, base), {
+        variantId,
+        ...(videoOnly && { videoOnly }),
+        ...(label && { label }),
+      });
     } catch (error) {
       if (!(error instanceof NativeRequestError && error.code === "unknown-variant")) {
         return { status: "error", message: errorMessage(error) };
@@ -370,9 +402,10 @@ export function createController(deps: ControllerDeps) {
     if (!fresh.media.formats.some((f) => f.id === variantId)) {
       return { status: "needs-picker", media: fresh.media };
     }
-    const freshLabel = formatLabel(fresh.media, variantId);
+    const freshLabel = videoLabel(formatLabel(fresh.media, variantId), videoOnly);
     return start(pageCandidate(url, title ?? fresh.media.title), {
       variantId,
+      ...(videoOnly && { videoOnly }),
       ...(freshLabel && { label: freshLabel }),
     });
   };
@@ -390,9 +423,10 @@ export function createController(deps: ControllerDeps) {
           ...(s && { settings: s }),
           candidates: await deps.store.list(command.tabId),
           jobs: deps.mirror.list(),
-          probe: command.pageUrl
-            ? (probes.get(command.pageUrl) ?? { state: "idle" })
-            : { state: "idle" },
+          probe:
+            command.pageUrl && !hiddenPages.has(command.pageUrl)
+              ? (probes.get(command.pageUrl) ?? { state: "idle" })
+              : { state: "idle" },
           ...(picker && { picker }),
           ...(notice && { notice }),
         };
@@ -414,10 +448,22 @@ export function createController(deps: ControllerDeps) {
             command.source.title,
             command.variantId,
             command.subtitle,
+            command.videoOnly,
           );
         }
         if (result.status === "started") pendingPickers.delete(command.tabId);
         return result;
+      }
+      case "removeItem": {
+        if (command.source.type === "candidate") {
+          await deps.store.remove(command.tabId, command.source.id);
+        } else hiddenPages.add(command.source.url);
+        return { ok: true };
+      }
+      case "clearItems": {
+        await deps.store.clear(command.tabId);
+        if (command.pageUrl) hiddenPages.add(command.pageUrl);
+        return { ok: true };
       }
       case "cancel": {
         try {
@@ -589,7 +635,12 @@ export function createController(deps: ControllerDeps) {
       pendingPickers.delete(tabId);
       const urls = tabUrls.get(tabId);
       tabUrls.delete(tabId);
-      if (urls) for (const url of urls) probes.delete(url);
+      if (urls) {
+        for (const url of urls) {
+          probes.delete(url);
+          hiddenPages.delete(url);
+        }
+      }
     },
   };
 }

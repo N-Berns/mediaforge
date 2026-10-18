@@ -36,3 +36,12 @@ describe("about page data", () => {
     );
   });
 });
+
+describe("notice summary", () => {
+  it("names every tool with a short license on one line", async () => {
+    const { NOTICE_SUMMARY } = await import("./about.ts");
+    for (const notice of NOTICES)
+      expect(NOTICE_SUMMARY).toContain(`${notice.name} (${notice.short})`);
+    expect(NOTICE_SUMMARY).not.toContain("\n");
+  });
+});

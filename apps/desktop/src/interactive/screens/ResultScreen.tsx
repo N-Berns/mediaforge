@@ -80,8 +80,8 @@ export function ResultScreen({ job, onAction }: ResultScreenProps) {
   return (
     <Frame
       crumbs={["Home", "Download", cancelled ? "Cancelled" : "Failed"]}
-      icon={cancelled ? ICONS.warn : ICONS.error}
-      tone={cancelled ? "warn" : "error"}
+      icon={cancelled ? ICONS.stop : ICONS.error}
+      tone={cancelled ? "error" : "failed"}
       title={cancelled ? "Download cancelled" : "Download failed"}
       hints={[...hints]}
       hideNotice

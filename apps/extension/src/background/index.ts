@@ -226,6 +226,9 @@ api.runtime.onMessage.addListener((raw, sender, sendResponse) => {
       const tabId = (command as { tabId?: number }).tabId ?? from.tab?.id;
       if (command.kind === "probe" && tabId !== undefined) void updateBadge(tabId);
       if (command.kind === "setSetting") notifyOverlays();
+      if ((command.kind === "removeItem" || command.kind === "clearItems") && tabId !== undefined) {
+        void updateBadge(tabId);
+      }
       // A picker may now be waiting for an open popup.
       if (command.kind === "overlayDownload") broadcast();
       return result;

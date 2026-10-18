@@ -63,3 +63,14 @@ from `about:debugging` as a temporary add-on.
       and the picker list and its Download selected bar are fully visible.
 - [ ] Kill the core with a download running, restart it: the popup shows a notice banner with an
       Open MediaForge button; Dismiss clears it here and in the manager.
+
+## Video only, remove and clear
+
+- [ ] On a YouTube watch page, open the picker: Video, Video only and Audio only groups all show. A
+      silent 1080p stream is in both Video and Video only.
+- [ ] Download a silent stream from Video: the file has sound. From Video only: the file has no
+      sound. With "sort by type" on, they land in Video and Video only.
+- [ ] After "Download selected", On this page folds and Downloads opens.
+- [ ] Each item in On this page has an X button; it removes just that item. The Clear button in the
+      section header removes them all. The toolbar number drops to match.
+- [ ] A removed page video stays gone until the tab reloads.

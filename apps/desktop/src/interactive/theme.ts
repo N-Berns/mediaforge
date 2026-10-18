@@ -8,6 +8,8 @@ export const COLORS = {
   key: "#ff9a4d",
   ok: "#4ade80",
   error: "#f2542d",
+  /** A failed download: orange, apart from the red of a cancelled one and of errors in general. */
+  failed: "#ff9a4d",
   warn: "#ffc26b",
   /** Paused downloads, kept apart from cancelled ones (which use warn). */
   paused: "#7df0ff",
@@ -35,6 +37,8 @@ export const LOGO_COLORS = [
 export const ICONS = {
   app: "■",
   download: "▼",
+  /** The Downloads manager entry on the home menu: an arrow down, apart from the filled ▼ of a single download. */
+  downloads: "↓",
   settings: "≡",
   setup: "√",
   quit: "×",
@@ -57,11 +61,24 @@ export const ICONS = {
   ok: "√",
   error: "×",
   warn: "▲",
+  /** A cancelled download: the stop sign, a filled square. */
+  stop: "■",
   /** Two half blocks, the nearest WGL4 has to a pause sign (U+23F8 and U+2016 are not in it). */
-  paused: "▌▌",
+  paused: "││",
   info: "○",
   on: "●",
   off: "○",
+  /** One per setting, so no two rows in Settings share a sign. All are in the WGL4 set. */
+  askFolder: "⌂",
+  quality: "♦",
+  askQuality: "☼",
+  sortByType: "↕",
+  parallel: "║",
+  speedUnit: "÷",
+  bandwidth: "↔",
+  background: "∞",
+  videoButton: "◘",
+  reset: "↨",
   chevron: "›",
   ellipsis: "…",
 } as const;

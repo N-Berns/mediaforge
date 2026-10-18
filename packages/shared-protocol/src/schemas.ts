@@ -42,6 +42,7 @@ export const MediaCandidateSchema = z.object({
 export const DownloadRequestSchema = z.object({
   candidate: MediaCandidateSchema,
   variantId: z.string().optional(),
+  videoOnly: z.boolean().optional(),
   profileId: z.string(),
   outputDir: z.string().optional(),
   filename: z.string().optional(),

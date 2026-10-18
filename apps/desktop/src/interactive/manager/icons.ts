@@ -8,8 +8,8 @@ export const STATUS_STYLE: Record<StatusFilter, { icon: string; color: string }>
   queued: { icon: ICONS.info, color: COLORS.muted },
   paused: { icon: ICONS.paused, color: COLORS.paused },
   completed: { icon: ICONS.ok, color: COLORS.ok },
-  failed: { icon: ICONS.error, color: COLORS.error },
-  cancelled: { icon: ICONS.warn, color: COLORS.warn },
+  failed: { icon: ICONS.error, color: COLORS.failed },
+  cancelled: { icon: ICONS.stop, color: COLORS.error },
 };
 
 /** The download menu's type icons. */

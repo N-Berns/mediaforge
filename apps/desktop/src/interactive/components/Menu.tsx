@@ -111,78 +111,88 @@ export function Menu<T>({
     { isActive },
   );
 
+  // A trailing Back or Quit sits apart from the list, at the bottom of the screen's free space.
+  const last = items[items.length - 1];
+  const pinned =
+    items.length > 1 && !last?.divider && (last?.value === "back" || last?.value === "quit");
+  const listed = pinned ? items.length - 1 : items.length;
   const rows = items.map((item, position) => ({ item, position }));
-  const { start, end } = visibleWindow(index, items.length, maxVisible);
+  const { start, end } = visibleWindow(Math.min(index, listed - 1), listed, maxVisible);
+  const renderRow = ({ item, position }: { item: MenuItem<T>; position: number }) => {
+    if (item.divider) {
+      return (
+        <Box key={position}>
+          <Text color={COLORS.muted}>
+            {"  "}
+            {numbered ? "  " : ""}
+            {"─".repeat(Math.max(8, labelWidth + 2))}
+          </Text>
+        </Box>
+      );
+    }
+    const selected = position === index;
+    const color = item.heading
+      ? COLORS.accent
+      : item.disabled
+        ? COLORS.muted
+        : selected
+          ? COLORS.accent
+          : undefined;
+    return (
+      <Clickable
+        key={position}
+        active={isActive && !item.disabled}
+        onClick={() => {
+          if (item.disabled) return;
+          setIndex(position);
+          select(item);
+        }}
+      >
+        <Text color={COLORS.accent}>{selected ? `${ICONS.cursor} ` : "  "}</Text>
+        {numbered ? (
+          <Text color={selected ? COLORS.accent : COLORS.muted}>
+            {item.disabled ? "  " : `${numberOf[position]} `}
+          </Text>
+        ) : null}
+        <HoverText
+          color={color}
+          bold={selected || item.heading}
+          dimColor={item.disabled && !item.heading}
+        >
+          {item.icon ? `${item.icon} ` : ""}
+          {item.label.padEnd(labelWidth)}
+        </HoverText>
+        {item.hint ? <Text color={COLORS.muted}>{`  ${item.hint}`}</Text> : null}
+      </Clickable>
+    );
+  };
+
   const labelWidth = Math.min(LABEL_CAP, Math.max(...items.map((i) => i.label.length), 0));
 
   return (
     <Clickable
       flexDirection="column"
+      flexGrow={pinned ? 1 : 0}
+      justifyContent="space-between"
       active={isActive}
       onWheel={(step) => setIndex((i) => stepIndex(items, i, step))}
     >
-      {start > 0 && (
-        <Text color={COLORS.muted}>
-          {"  "}
-          {ICONS.warn} {start} more above
-        </Text>
-      )}
-      {rows.slice(start, end).map(({ item, position }) => {
-        if (item.divider) {
-          return (
-            <Box key={position}>
-              <Text color={COLORS.muted}>
-                {"  "}
-                {numbered ? "  " : ""}
-                {"─".repeat(Math.max(8, labelWidth + 2))}
-              </Text>
-            </Box>
-          );
-        }
-        const selected = position === index;
-        const color = item.heading
-          ? COLORS.accent
-          : item.disabled
-            ? COLORS.muted
-            : selected
-              ? COLORS.accent
-              : undefined;
-        return (
-          <Clickable
-            key={position}
-            active={isActive && !item.disabled}
-            onClick={(click) => {
-              if (item.disabled) return;
-              // The first click can scroll the list, so the second press of a double-click
-              // may land on another row: only the row already highlighted is picked.
-              if (click.double && position === index) select(item);
-              else setIndex(position);
-            }}
-          >
-            <Text color={COLORS.accent}>{selected ? `${ICONS.cursor} ` : "  "}</Text>
-            {numbered ? (
-              <Text color={selected ? COLORS.accent : COLORS.muted}>
-                {item.disabled ? "  " : `${numberOf[position]} `}
-              </Text>
-            ) : null}
-            <HoverText
-              color={color}
-              bold={selected || item.heading}
-              dimColor={item.disabled && !item.heading}
-            >
-              {item.icon ? `${item.icon} ` : ""}
-              {item.label.padEnd(labelWidth)}
-            </HoverText>
-            {item.hint ? <Text color={COLORS.muted}>{`  ${item.hint}`}</Text> : null}
-          </Clickable>
-        );
-      })}
-      {end < items.length && (
-        <Text color={COLORS.muted}>
-          {"  "}
-          {ICONS.download} {items.length - end} more below
-        </Text>
-      )}
+      <Box flexDirection="column">
+        {start > 0 && (
+          <Text color={COLORS.muted}>
+            {"  "}
+            {ICONS.warn} {start} more above
+          </Text>
+        )}
+        {rows.slice(start, end).map(renderRow)}
+        {end < listed && (
+          <Text color={COLORS.muted}>
+            {"  "}
+            {ICONS.download} {listed - end} more below
+          </Text>
+        )}
+      </Box>
+      {pinned && last ? renderRow({ item: last, position: items.length - 1 }) : null}
     </Clickable>
   );
 }

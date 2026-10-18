@@ -112,7 +112,7 @@ export function SettingsScreen({
     return (
       <Frame
         crumbs={["Home", "Settings", "Quality"]}
-        icon={ICONS.video}
+        icon={ICONS.quality}
         title="Default quality"
         hints={[
           ["↑↓", "Move"],
@@ -134,7 +134,7 @@ export function SettingsScreen({
     return (
       <Frame
         crumbs={["Home", "Settings", "Downloads at once"]}
-        icon={ICONS.download}
+        icon={ICONS.parallel}
         title="How many links download at the same time?"
         hints={[
           ["↑↓", "Move"],
@@ -250,55 +250,55 @@ export function SettingsScreen({
           { value: "folder", icon: ICONS.folder, label: "Default download folder", hint: folder },
           {
             value: "askFolder",
-            icon: ICONS.settings,
+            icon: ICONS.askFolder,
             label: "Ask for the folder each time",
             hint: yesNo(settings.askFolder),
           },
-          { value: "quality", icon: ICONS.video, label: "Default quality", hint: qualityName },
+          { value: "quality", icon: ICONS.quality, label: "Default quality", hint: qualityName },
           {
             value: "askQuality",
-            icon: ICONS.settings,
+            icon: ICONS.askQuality,
             label: "Ask for the quality each time",
             hint: yesNo(settings.askQuality),
           },
           {
             value: "sortByType",
-            icon: ICONS.folder,
+            icon: ICONS.sortByType,
             label: "Sort into folders by type",
             hint: `${settings.sortByType ? ICONS.on : ICONS.off} ${settings.sortByType ? "Yes (Video, Video only, Audio)" : "No, save straight into the folder"}`,
           },
           {
             value: "concurrency",
-            icon: ICONS.download,
+            icon: ICONS.parallel,
             label: "Downloads at once",
             hint: `${settings.concurrency} (when you give several links)`,
           },
           {
             value: "speedUnit",
-            icon: ICONS.download,
+            icon: ICONS.speedUnit,
             label: "Speed unit",
             hint:
               settings.speedUnit === "bits" ? "Mbps (bits per second)" : "MB/s (bytes per second)",
           },
           {
             value: "bandwidth",
-            icon: ICONS.download,
+            icon: ICONS.bandwidth,
             label: "Bandwidth limit",
             hint: `${PRESET_NAMES[settings.limitPreset]} (${formatLimit(settings.limits[settings.limitPreset], settings.speedUnit)})`,
           },
           {
             value: "keepRunning",
-            icon: ICONS.settings,
+            icon: ICONS.background,
             label: "Keep running in the background",
             hint: `${settings.keepRunning ? ICONS.on : ICONS.off} ${settings.keepRunning ? "Yes, start at login" : "No, start when the browser needs it"}`,
           },
           {
             value: "extensionUi",
-            icon: ICONS.video,
+            icon: ICONS.videoButton,
             label: "Download button on videos",
             hint: `${settings.extensionUi === "overlay" ? ICONS.on : ICONS.off} ${settings.extensionUi === "overlay" ? "Yes (browser extension)" : "No, toolbar popup only"}`,
           },
-          { value: "reset", icon: ICONS.retry, label: "Reset to built-in defaults" },
+          { value: "reset", icon: ICONS.reset, label: "Reset to built-in defaults" },
           { value: "back", icon: ICONS.back, label: "Back" },
         ]}
       />

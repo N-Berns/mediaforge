@@ -211,6 +211,43 @@ describe("controller", () => {
     expect(state.probe).toMatchObject({ state: "ready", media: { title: "Clip" } });
   });
 
+  it("removes one item, or clears the whole list, from the popup state", async () => {
+    const t = setup();
+    await t.store.add(1, candidate);
+    await t.controller.handle({ kind: "probe", tabId: 1, url: media.url }, popup);
+    const state = async () =>
+      (await t.controller.handle(
+        { kind: "getState", tabId: 1, pageUrl: media.url },
+        popup,
+      )) as PopupState;
+
+    await t.controller.handle(
+      { kind: "removeItem", tabId: 1, source: { type: "candidate", id: candidate.id } },
+      popup,
+    );
+    expect((await state()).candidates).toHaveLength(0);
+    expect((await state()).probe.state).toBe("ready");
+
+    await t.controller.handle(
+      { kind: "removeItem", tabId: 1, source: { type: "page", url: media.url } },
+      popup,
+    );
+    expect((await state()).probe).toEqual({ state: "idle" });
+  });
+
+  it("clearItems empties the tab's candidates and hides the page video", async () => {
+    const t = setup();
+    await t.store.add(1, candidate);
+    await t.controller.handle({ kind: "probe", tabId: 1, url: media.url }, popup);
+    await t.controller.handle({ kind: "clearItems", tabId: 1, pageUrl: media.url }, popup);
+    const state = (await t.controller.handle(
+      { kind: "getState", tabId: 1, pageUrl: media.url },
+      popup,
+    )) as PopupState;
+    expect(state.candidates).toHaveLength(0);
+    expect(state.probe).toEqual({ state: "idle" });
+  });
+
   it("maps an unsupported probe to the unsupported view and caches probe results", async () => {
     const t = setup({ probeFails: "unsupported-site" });
     await t.controller.handle({ kind: "probe", tabId: 1, url: media.url }, popup);

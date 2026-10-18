@@ -145,7 +145,13 @@ describe("buildPopupModel", () => {
         { lang: "fr", auto: false, name: "French" },
       ],
     });
-    expect(m.picker?.formats.map((f) => f.kind)).toEqual(["video", "video", "audio"]);
+    // A silent stream is listed twice: with audio added (video) and on its own (video-only).
+    expect(m.picker?.formats.map((f) => [f.id, f.kind])).toEqual([
+      ["137", "video"],
+      ["137", "video-only"],
+      ["18", "video"],
+      ["140", "audio"],
+    ]);
     expect(m.picker?.subtitles).toEqual([
       { key: "auto:en", lang: "en", auto: true, label: "en", detail: "Auto-generated" },
       { key: "manual:fr", lang: "fr", auto: false, label: "French", detail: "fr" },

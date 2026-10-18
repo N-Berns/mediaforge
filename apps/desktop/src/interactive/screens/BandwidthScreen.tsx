@@ -42,7 +42,7 @@ export function BandwidthScreen({ settings, note, onSave, onBack }: BandwidthScr
     return (
       <Frame
         crumbs={["Home", "Settings", "Bandwidth limit", PRESET_NAMES[editing]]}
-        icon={ICONS.download}
+        icon={ICONS.bandwidth}
         title={`Limit for ${PRESET_NAMES[editing]}`}
         hints={[
           ["Enter", "Save"],
@@ -78,7 +78,7 @@ export function BandwidthScreen({ settings, note, onSave, onBack }: BandwidthScr
   return (
     <Frame
       crumbs={["Home", "Settings", "Bandwidth limit"]}
-      icon={ICONS.download}
+      icon={ICONS.bandwidth}
       title="Bandwidth limit"
       hints={[
         ["↑↓", "Move"],

@@ -336,7 +336,7 @@ describe("ManagerScreen table", () => {
     const tiny = await mount({ jobs: three(), columns: 60 });
     await vi.waitFor(() => expect(tiny.frame()).toContain("Status"));
     const tinyRows = tableRows(tiny.frame()).join(" ");
-    expect(tinyRows).toContain("▌▌");
+    expect(tinyRows).toContain("││");
     expect(tinyRows).not.toMatch(/Completed|Paused|Downloading/);
     const wide = await mount({ jobs: three(), columns: 120 });
     await vi.waitFor(() => expect(wide.frame()).toContain("Last try"));
@@ -678,7 +678,7 @@ describe("ManagerScreen panels and banners", () => {
     await vi.waitFor(() => expect(m.frame()).toContain("Origin"));
     // The Status column: Active, Queued, Paused…
     await m.press(KEY.down, KEY.down, " ");
-    await vi.waitFor(() => expect(m.frame()).toContain("filter: ▌▌"));
+    await vi.waitFor(() => expect(m.frame()).toContain("filter: ││"));
     await m.press(KEY.esc);
     await vi.waitFor(() => expect(tableRows(m.frame())).toHaveLength(1));
     expect(tableRows(m.frame())[0]).toContain("Paused one");
@@ -687,7 +687,7 @@ describe("ManagerScreen panels and banners", () => {
   it("Esc clears search and filters before going back", async () => {
     const m = await mount({ jobs: [row("p1", { title: "Paused one", status: "paused" })] });
     await m.press("f", KEY.down, KEY.down, " ", KEY.enter);
-    await vi.waitFor(() => expect(m.frame()).toContain("filter: ▌▌"));
+    await vi.waitFor(() => expect(m.frame()).toContain("filter: ││"));
     await m.press(KEY.esc);
     await vi.waitFor(() => expect(m.frame()).not.toContain("filter:"));
     expect(m.props.onBack).not.toHaveBeenCalled();
@@ -1168,7 +1168,7 @@ describe("ManagerScreen panels and copy", () => {
     await vi.waitFor(() => expect(m.frame()).toContain("Paused"));
     const option = m.find("Paused");
     await m.click(option.x, option.y);
-    await vi.waitFor(() => expect(m.frame()).toContain("filter: ▌▌"));
+    await vi.waitFor(() => expect(m.frame()).toContain("filter: ││"));
     await vi.waitFor(() => expect(m.frame()).toContain("1 of 3 items"));
   });
 

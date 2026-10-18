@@ -41,9 +41,9 @@ export function rowStatus(job: EngineJob | undefined): string {
 export function rowLook(job: EngineJob | undefined): { icon: string; color: string } {
   if (!job || job.status === "queued") return { icon: ICONS.off, color: COLORS.muted };
   if (job.status === "completed") return { icon: ICONS.ok, color: COLORS.ok };
-  if (job.status === "failed") return { icon: ICONS.error, color: COLORS.error };
+  if (job.status === "failed") return { icon: ICONS.error, color: COLORS.failed };
   if (job.status === "paused") return { icon: ICONS.paused, color: COLORS.paused };
-  if (job.status === "cancelled") return { icon: ICONS.warn, color: COLORS.warn };
+  if (job.status === "cancelled") return { icon: ICONS.stop, color: COLORS.error };
   const active = job.steps?.find((s) => s.state === "active");
   return { icon: ICONS.pointer, color: active ? STEP_COLORS[active.kind] : COLORS.accent };
 }

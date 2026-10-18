@@ -4,12 +4,13 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { isRequired, type ToolReport } from "../../doctor.ts";
 import type { UpdateInfo, UpdateProgress } from "../../self-update.ts";
 import { SUPPORTED_SITES_URL } from "../../sites.ts";
-import { aboutRows, developerRows, NOTICES, SELECT_TIP } from "../about.ts";
+import { aboutRows, developerRows, NOTICE_SUMMARY, NOTICES, SELECT_TIP } from "../about.ts";
 import { Card } from "../components/Card.tsx";
 import { Frame } from "../components/Frame.tsx";
 import { Menu, type MenuItem } from "../components/Menu.tsx";
 import { ProgressBar } from "../components/ProgressBar.tsx";
 import { Spinner } from "../components/Spinner.tsx";
+import { useTerminalSize } from "../components/use-terminal-size.ts";
 import { useDeps } from "../deps.ts";
 import { describeInstallFailure } from "../install-progress.ts";
 import { COLORS, ICONS } from "../theme.ts";
@@ -25,6 +26,9 @@ type UpdateState =
 
 type Choice = "update" | "tools" | "report" | "back";
 
+/** From this many rows the About page shows every license notice; a shorter window gets a summary. */
+const FULL_NOTICES_ROWS = 33;
+
 export function AboutScreen({
   onBack,
   onSetup,
@@ -35,6 +39,9 @@ export function AboutScreen({
   onReport: () => void;
 }) {
   const deps = useDeps();
+  const { rows } = useTerminalSize();
+  /** The full license notices and the selection tip need about 4 more rows than a short window has. */
+  const roomy = rows === undefined || rows >= FULL_NOTICES_ROWS;
   const [reports, setReports] = useState<ToolReport[]>();
   const [update, setUpdate] = useState<UpdateState>({ kind: "checking" });
   const alive = useRef(true);
@@ -117,23 +124,26 @@ export function AboutScreen({
       ]}
     >
       <Card
+        bordered={false}
         rows={[
+          ["Version", `${deps.version} (${deps.target})`],
           ...aboutRows({
             version: deps.version,
             target: deps.target,
             configPath: deps.configPath,
-          }),
+          }).slice(2),
           ...developerRows(),
           ["Supported sites", SUPPORTED_SITES_URL],
         ]}
       />
-      {!reports ? (
-        <Spinner label="Looking for yt-dlp, ffmpeg and deno..." />
-      ) : (
-        <Box flexDirection="column" marginBottom={1}>
-          {reports.map((r) => (
+      <Box flexDirection="column" marginTop={1} marginBottom={1}>
+        {!reports ? (
+          <Spinner label="Looking for yt-dlp, ffmpeg and deno..." />
+        ) : (
+          reports.map((r) => (
             <Text
               key={r.tool}
+              wrap="truncate-end"
               color={r.found ? undefined : isRequired(r.tool) ? COLORS.error : COLORS.warn}
             >
               {r.found ? ICONS.ok : isRequired(r.tool) ? ICONS.error : ICONS.warn} {r.tool}
@@ -145,19 +155,25 @@ export function AboutScreen({
                     : "  not found (needed for YouTube)"}
               </Text>
             </Text>
-          ))}
-        </Box>
-      )}
-      <Box flexDirection="column" marginBottom={1}>
+          ))
+        )}
         <UpdateStatus state={update} />
       </Box>
       <Box flexDirection="column" marginBottom={1}>
-        {NOTICES.map((n) => (
-          <Text key={n.name} color={COLORS.muted}>
-            {n.name}: {n.license}. {n.url}
+        {roomy ? (
+          <>
+            {NOTICES.map((n) => (
+              <Text key={n.name} color={COLORS.muted} wrap="truncate-end">
+                {n.name}: {n.license}. {n.url}
+              </Text>
+            ))}
+            <Text color={COLORS.muted}>{SELECT_TIP}</Text>
+          </>
+        ) : (
+          <Text color={COLORS.muted} wrap="truncate-end">
+            {NOTICE_SUMMARY}
           </Text>
-        ))}
-        <Text color={COLORS.muted}>{SELECT_TIP}</Text>
+        )}
       </Box>
       {update.kind === "installing" ? null : (
         <Menu<Choice>

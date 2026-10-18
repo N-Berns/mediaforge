@@ -647,9 +647,11 @@ export class CoreService {
         );
         return;
       }
-      formatSelector = selectorFor(known);
+      // A silent stream gets the best audio added, unless the picture alone was asked for.
+      const pictureOnly = request.videoOnly === true && known.hasVideo && !known.hasAudio;
+      formatSelector = pictureOnly ? known.id : selectorFor(known);
       if (known.hasAudio && !known.hasVideo) profileId = "audio-m4a";
-      variantKind = !known.hasVideo ? "audio" : known.hasAudio ? "video-audio" : "video";
+      variantKind = !known.hasVideo ? "audio" : pictureOnly ? "video" : "video-audio";
     }
     // The profile actually used, which a variant may have changed.
     const profile = getProfile(profileId);

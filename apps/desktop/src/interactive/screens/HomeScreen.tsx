@@ -63,7 +63,7 @@ export function HomeScreen({ onPick }: { onPick: (choice: HomeChoice) => void })
           },
           {
             value: "downloads",
-            icon: ICONS.download,
+            icon: ICONS.downloads,
             label: "Downloads",
             hint: "every download: pause, resume, limit",
           },

@@ -1,3 +1,25 @@
+/* Thin scrollbars: Firefox reads scrollbar-width; Chromium browsers (Brave, Chrome) need the
+   webkit pseudo-elements, and ignore those once scrollbar-width is set, so each gets its own. */
+@supports (-moz-appearance: none) {
+  * {
+    scrollbar-width: thin;
+  }
+}
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-thumb {
+  background: color-mix(in srgb, GrayText 55%, transparent);
+  border-radius: 3px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: GrayText;
+}
+::-webkit-scrollbar-track,
+::-webkit-scrollbar-corner {
+  background: transparent;
+}
 :root {
   color-scheme: light dark;
   --accent: #ff7a2f;
@@ -409,14 +431,62 @@ button.icon-only span:empty {
   font: inherit;
   resize: vertical;
 }
-.custom-limit input {
-  font: inherit;
-  flex: 1;
-  min-width: 0;
+.seg-presets .seg-tab {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 1px;
+  min-width: 52px;
+  padding: 3px 8px;
+  line-height: 1.25;
+  cursor: pointer;
+  color: GrayText;
 }
-.custom-limit .field-error {
+.seg-presets .seg-tab + .seg-tab {
+  border-left: 1px solid color-mix(in srgb, GrayText 35%, transparent);
+}
+.seg-presets .seg-tab:hover {
+  background: color-mix(in srgb, CanvasText 10%, transparent);
+  color: CanvasText;
+}
+.seg-presets .seg-tab[aria-checked="true"] {
+  background: color-mix(in srgb, CanvasText 14%, transparent);
+  color: CanvasText;
+}
+.seg-value,
+.seg-bottom {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font-size: 0.85em;
+  opacity: 0.85;
+}
+.seg-value .icon {
+  width: 14px;
+  height: 14px;
+}
+.seg-custom .custom-number {
+  font: inherit;
+  width: 6ch;
+  padding: 1px 5px;
+  text-align: right;
+  color: CanvasText;
+  background: Canvas;
+  border: 1px solid color-mix(in srgb, GrayText 55%, transparent);
+  border-radius: 5px;
+  outline: none;
+}
+.seg-custom .custom-number:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 30%, transparent);
+}
+.seg-custom .seg-unit {
+  opacity: 0.8;
+}
+.preset-limit .field-error {
   color: #b00020;
 }
-.custom-limit .field-error:empty {
+.preset-limit .field-error:empty {
   display: none;
 }

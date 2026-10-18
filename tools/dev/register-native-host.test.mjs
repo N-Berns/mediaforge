@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { buildHostManifest, buildWrapperCmd, registryKey } from "./register-native-host.mjs";
+import {
+  buildChromiumHostManifest,
+  buildHostManifest,
+  buildWrapperCmd,
+  registryKey,
+} from "./register-native-host.mjs";
 
 const BS = String.fromCharCode(92);
 const win = (...parts) => parts.join(BS);
@@ -46,5 +51,21 @@ describe("buildWrapperCmd", () => {
       mainJs: win("C:", "100%", "main.js"),
     });
     expect(cmd).toContain(`"${win("C:", "a%%b", "node.exe")}" "${win("C:", "100%%", "main.js")}"`);
+  });
+});
+
+describe("buildChromiumHostManifest", () => {
+  it("allows only the given extension origin", () => {
+    const exePath = win("C:", "mf", "host.cmd");
+    const id = "a".repeat(32);
+    expect(
+      buildChromiumHostManifest({ exePath, extensionId: id, hostName: "com.mediaforge.host" }),
+    ).toEqual({
+      name: "com.mediaforge.host",
+      description: "MediaForge native messaging host",
+      path: exePath,
+      type: "stdio",
+      allowed_origins: [`chrome-extension://${id}/`],
+    });
   });
 });

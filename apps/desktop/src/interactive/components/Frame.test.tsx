@@ -7,7 +7,7 @@ import { MouseProvider } from "../mouse/MouseProvider.tsx";
 import { attachTestStdin, clickAt } from "../mouse/testing.ts";
 import { type NoticeApi, NoticeContext } from "../notice.tsx";
 import { ICONS } from "../theme.ts";
-import { Frame, type FrameProps, type Hint } from "./Frame.tsx";
+import { Frame, type FrameProps, fitHints, type Hint } from "./Frame.tsx";
 
 const deps = { version: "9.9.9" } as AppDeps;
 const tick = (ms = 40) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -164,5 +164,58 @@ describe("Frame hints and the mouse", () => {
     await vi.waitFor(() => expect(hintLine()).toContain("Cancel all downloads?"));
     app.stdin.write("\u0003");
     await vi.waitFor(() => expect(keys).toEqual(["ctrl+c"]));
+  });
+});
+
+describe("fitHints", () => {
+  const hints: Hint[] = [
+    ["↑↓", "Move"],
+    ["Enter", "Select"],
+    ["Esc", "Back"],
+  ];
+  const last: Hint = ["Ctrl+C", "Quit"];
+
+  it("keeps every hint when they fit", () => {
+    expect(fitHints(hints, last, 80)).toEqual([...hints, last]);
+  });
+
+  it("drops hints from the end, never Ctrl+C, when the window is narrow", () => {
+    expect(fitHints(hints, last, 35)).toEqual([hints[0], hints[1], last]);
+    expect(fitHints(hints, last, 33)).toEqual([hints[0], last]);
+    expect(fitHints(hints, last, 10)).toEqual([last]);
+  });
+});
+
+describe("Frame logo", () => {
+  const logoColumn = async (columns: number, rows?: number) => {
+    const app = render(
+      <DepsContext.Provider value={deps}>
+        <Frame crumbs={["Home"]} icon="*" title="Title" hints={[]}>
+          <Text>body</Text>
+        </Frame>
+      </DepsContext.Provider>,
+    );
+    // The test stdout reports a fixed size through getters; an own property overrides them.
+    Object.defineProperty(app.stdout, "columns", { value: columns, configurable: true });
+    if (rows !== undefined)
+      Object.defineProperty(app.stdout, "rows", { value: rows, configurable: true });
+    app.stdout.emit("resize");
+    await tick(250);
+    const lines = (app.lastFrame() ?? "").split("\n");
+    app.unmount();
+    return lines;
+  };
+
+  it("stays in the middle of a window wider than the frame", async () => {
+    const lines = await logoColumn(160);
+    const first = lines.find((line) => line.includes("█▀▄▀█")) ?? "";
+    // 121 spare columns: 60 on one side, 61 on the other.
+    expect(Math.abs(first.indexOf("█▀▄▀█") - 60.5)).toBeLessThanOrEqual(0.5);
+  });
+
+  it("falls back to the one-line name in a short window", async () => {
+    const lines = await logoColumn(100, 20);
+    expect(lines.some((line) => line.includes("█▀▄▀█"))).toBe(false);
+    expect(lines.some((line) => line.includes("MediaForge"))).toBe(true);
   });
 });

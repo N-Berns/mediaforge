@@ -1,5 +1,5 @@
 import type { ProbedMedia } from "@mediaforge/shared-protocol";
-import { parseRate, type SpeedUnit } from "@mediaforge/shared-types";
+import { type LimitPreset, parseRate } from "@mediaforge/shared-types";
 import type { DownloadResult, PopupState } from "../background/controller.ts";
 import {
   browserFromUserAgent,
@@ -124,6 +124,12 @@ const ICON_PATHS = {
   folder: ["M3 6h6l2 2h10v11H3z"],
   open: ["M14 4h6v6", "M20 4l-9 9", "M18 14v6H4V6h6"],
   pause: ["M8 5v14", "M16 5v14"],
+  infinity: ["M6 8a4 4 0 1 0 0 8c4 0 8-8 12-8a4 4 0 1 1 0 8c-4 0-8-8-12-8z"],
+  deaf: [
+    "M7 10a5 5 0 0 1 10 0c0 3-2.5 4-2.5 6.5a3 3 0 0 1-5.5 1.5",
+    "M10 10a2 2 0 0 1 4 0",
+    "M4 4l16 16",
+  ],
   play: ["M7 4l13 8-13 8z"],
   x: ["M6 6l12 12", "M18 6L6 18"],
   globe: [
@@ -194,12 +200,12 @@ function segmented<T extends string>(
   return group;
 }
 
-function row(title: string, sub: string, button: HTMLButtonElement): HTMLElement {
+function row(title: string, sub: string, ...buttons: HTMLButtonElement[]): HTMLElement {
   return el(
     "div",
     { className: "row" },
     el("div", {}, el("div", { text: title }), el("div", { className: "sub", text: sub })),
-    button,
+    ...(buttons.length > 1 ? [el("div", { className: "job-end" }, ...buttons)] : buttons),
   );
 }
 
@@ -250,6 +256,10 @@ const SUBTITLE_FORMATS: ReadonlyArray<Pick<"srt" | "vtt">> = [
  * The picker: every format, audio track and subtitle as a tickable row, and one bar to download
  * what is ticked. The best video starts ticked, so a single press still downloads the best.
  */
+/** The id of a picker row; a silent stream has two (with and without audio), so the kind is in it. */
+const rowKey = (f: { id: string; kind: string }): string =>
+  f.kind === "video-only" ? `v:${f.id}` : `f:${f.id}`;
+
 function pickerView(model: NonNullable<PopupModel["picker"]>, source: PageSource): HTMLElement {
   if (selectionFor !== source.url) {
     selectionFor = source.url;
@@ -288,15 +298,16 @@ function pickerView(model: NonNullable<PopupModel["picker"]>, source: PageSource
 
   const list: Node[] = [el("h2", { text: model.title, className: "picker-title" })];
   const groups = [
-    { kind: "video", title: "Video" },
-    { kind: "audio", title: "Audio only" },
+    { kind: "video", title: "Video", glyph: "video" },
+    { kind: "video-only", title: "Video only", glyph: "deaf" },
+    { kind: "audio", title: "Audio only", glyph: "audio" },
   ] as const;
   for (const group of groups) {
     const formats = model.formats.filter((f) => f.kind === group.kind);
     if (formats.length === 0) continue;
-    const rows = formats.map((f) => choice(`f:${f.id}`, f.label, f.detail));
-    const ids = formats.map((f) => `f:${f.id}`);
-    list.push(collapsible(`pick-${group.kind}`, group.title, rows, [], group.kind, counter(ids)));
+    const rows = formats.map((f) => choice(rowKey(f), f.label, f.detail));
+    const ids = formats.map(rowKey);
+    list.push(collapsible(`pick-${group.kind}`, group.title, rows, [], group.glyph, counter(ids)));
   }
   const subtitleRows: Node[] = [];
   if (!model.subtitlesSupported || model.subtitles.length === 0) {
@@ -581,13 +592,32 @@ function render(model: PopupModel): void {
       body.push(el("div", { className: "row" }, el("div", { text: model.placeholder })));
     }
     for (const item of model.items) {
-      const start = iconButton("download", "Download", `Download ${item.title}`);
-      start.className = "primary";
+      const start = iconButton("download", "", `Download ${item.title}`);
+      start.className = "primary icon-only";
       const source = item.action;
       guarded(start, () => download(source));
-      body.push(row(item.title, item.detail, start));
+      const remove = iconButton("x", "", `Remove ${item.title} from the list`);
+      remove.className = "icon-only";
+      guarded(remove, async () => {
+        await send({
+          kind: "removeItem",
+          tabId,
+          source: source.type === "page" ? { type: "page", url: source.url } : source,
+        });
+        await refresh();
+      });
+      body.push(row(item.title, item.detail, start, remove));
     }
-    if (body.length > 0) nodes.push(collapsible("page", "On this page", body));
+    if (body.length > 0) {
+      const clearItems = iconButton("trash", "Clear", "Remove every item from the list");
+      guarded(clearItems, async () => {
+        await send({ kind: "clearItems", tabId, ...(isWebUrl(tabUrl) && { pageUrl: tabUrl }) });
+        await refresh();
+      });
+      nodes.push(
+        collapsible("page", "On this page", body, model.items.length > 0 ? [clearItems] : []),
+      );
+    }
   }
 
   if (model.jobs.length > 0 || model.openFolder) {
@@ -654,37 +684,21 @@ function render(model: PopupModel): void {
       ),
     );
   }
-  if (model.presets) {
-    settings.push(
-      el(
-        "div",
-        { className: "field preset-field" },
-        el("span", { text: "Speed limit" }),
-        segmented(
-          "Speed limit",
-          model.presets.options.map((o) => ({ value: o.value, label: `${o.label} ${o.detail}` })),
-          model.presets.current,
-          (value) => {
-            void setting("limitPreset", value)
-              .catch(async (error: unknown) => {
-                notice = messageOf(error);
-                await refresh();
-              })
-              .catch(() => {});
-          },
-        ),
-      ),
-    );
-    if (model.presets.current === "custom") settings.push(customLimitField(model.presets));
-  }
+  if (model.presets) settings.push(speedLimitField(model.presets));
   nodes.push(collapsible("settings", "Settings", settings));
   nodes.push(diagnosticsSection());
   nodes.push(aboutSection());
   // The popup has a fixed size and scrolls inside, so a rebuild must not jump back to the top.
+  const typing = Boolean(customInput) && document.activeElement === customInput;
   const scrolled = app.scrollTop;
   const listScrolled = app.querySelector(".picker-list")?.scrollTop ?? 0;
   app.replaceChildren(...nodes);
   app.scrollTop = scrolled;
+  // Moving the Custom box through the rebuild would otherwise take the cursor out of it.
+  if ((typing || focusCustom) && customInput && app.contains(customInput)) {
+    customInput.focus();
+    focusCustom = false;
+  }
   const list = app.querySelector(".picker-list");
   if (list) list.scrollTop = listScrolled;
   lastRenderKey = key;
@@ -774,16 +788,23 @@ function fontSizeField(): HTMLElement {
   );
 }
 
-// The Custom limit field is one persistent element, like Diagnostics: progress pushes rebuild the
-// popup several times a second, and a fresh field would drop what the user is typing.
-let customField: HTMLElement | undefined;
+// The Custom tab is one persistent element, like Diagnostics: progress pushes rebuild the popup
+// several times a second, and a fresh input would drop what the user is typing.
+let customTab: HTMLElement | undefined;
+let customBottom: HTMLElement;
 let customInput: HTMLInputElement;
+let customUnitLabel: HTMLElement;
 let customError: HTMLElement;
-let customUnit: SpeedUnit = "bytes";
+/** The unit the box is read in: the saved value's own ("kB/s" for 500 kB/s), else MB/s or Mbps. */
+let customUnitText = "MB/s";
+let presetNow: LimitPreset = "high";
+/** Set when a click just picked Custom, so the box takes the cursor once it appears. */
+let focusCustom = false;
 
-/** Saves the Custom field: the app's rules, so "5", "5 MB/s" and "40 Mbps"; empty is no limit. */
+/** Saves the Custom number in the app's rules; empty or 0 is no limit. */
 async function saveCustomLimit(): Promise<void> {
-  const parsed = parseRate(customInput.value, customUnit);
+  const typed = customInput.value.trim();
+  const parsed = parseRate(typed && `${typed} ${customUnitText}`, "bytes");
   if (!parsed.ok) {
     customError.textContent = parsed.error;
     return;
@@ -797,31 +818,124 @@ async function saveCustomLimit(): Promise<void> {
   await refresh();
 }
 
-/** The Custom limit's value, shown while Custom is the picked preset. */
-function customLimitField(presets: NonNullable<PopupModel["presets"]>): HTMLElement {
-  customUnit = presets.unit;
-  if (!customField) {
+function setPreset(value: LimitPreset): void {
+  void setting("limitPreset", value)
+    .catch(async (error: unknown) => {
+      notice = messageOf(error);
+      await refresh();
+    })
+    .catch(() => {});
+}
+
+/** A limit's value under its label: the unlimited sign for no limit, else the rate. */
+function limitValue(detail: string, unlimited: boolean): HTMLElement {
+  if (!unlimited) return el("span", { className: "seg-value", text: detail });
+  return el(
+    "span",
+    { className: "seg-value", attrs: { title: "No limit", "aria-label": "No limit" } },
+    icon("infinity"),
+  );
+}
+
+/** Keeps digits and one decimal mark: no minus sign, no letters. */
+function onlyPositiveNumber(text: string): string {
+  const cleaned = text.replace(",", ".").replace(/[^\d.]/g, "");
+  const dot = cleaned.indexOf(".");
+  return dot < 0 ? cleaned : cleaned.slice(0, dot + 1) + cleaned.slice(dot + 1).replaceAll(".", "");
+}
+
+/** The Custom tab: "Custom" on top; below, the number box while picked, else the saved value. */
+function customSegment(
+  presets: NonNullable<PopupModel["presets"]>,
+  option: { detail: string; unlimited: boolean },
+): HTMLElement {
+  // "500 kB/s" reads as the number 500 in kB/s; nothing saved reads in MB/s (or Mbps).
+  const saved = /^([d.,]+)s*(.+)$/.exec(presets.customText);
+  customUnitText = saved?.[2] ?? (presets.unit === "bits" ? "Mbps" : "MB/s");
+  if (!customTab) {
     customInput = el("input", {
-      attrs: { type: "text", "aria-label": "Custom speed limit", spellcheck: "false" },
+      className: "custom-number",
+      attrs: {
+        type: "text",
+        inputmode: "decimal",
+        autocomplete: "off",
+        spellcheck: "false",
+        maxlength: "9",
+        placeholder: "0",
+        "aria-label": "Custom speed limit",
+      },
     });
+    customUnitLabel = el("span", { className: "seg-unit" });
     customError = el("div", { className: "sub field-error", attrs: { role: "alert" } });
+    customBottom = el("span", { className: "seg-bottom" });
+    customInput.addEventListener("input", () => {
+      const clean = onlyPositiveNumber(customInput.value);
+      if (clean !== customInput.value) customInput.value = clean;
+    });
     customInput.addEventListener("keydown", (event) => {
       if (event.key === "Enter") customInput.blur();
     });
     customInput.addEventListener("change", () => {
       void saveCustomLimit().catch(() => {});
     });
-    customField = el(
+    customTab = el(
       "div",
-      { className: "custom-limit" },
-      el("div", { className: "field" }, el("span", { text: "Custom" }), customInput),
-      customError,
+      { className: "seg-tab seg-custom", attrs: { role: "radio", tabindex: "0" } },
+      el("span", { className: "seg-label", text: "Custom" }),
+      customBottom,
     );
+    customTab.addEventListener("click", () => {
+      if (presetNow === "custom") return;
+      focusCustom = true;
+      setPreset("custom");
+    });
   }
-  customInput.placeholder = `no limit, or e.g. 5 ${presets.unit === "bits" ? "Mbps" : "MB/s"}`;
-  // Never overwrite what the user is typing; a saved or outside change shows once they leave.
-  if (document.activeElement !== customInput) customInput.value = presets.customText;
-  return customField;
+  const picked = presets.current === "custom";
+  customUnitLabel.textContent = customUnitText;
+  customInput.title = `Speed limit in ${customUnitText}. Empty or 0 is no limit.`;
+  customTab.setAttribute("aria-checked", String(picked));
+  if (picked) {
+    if (!customBottom.contains(customInput)) {
+      customBottom.replaceChildren(customInput, customUnitLabel);
+    }
+    // Never overwrite what the user is typing; a saved or outside change shows once they leave.
+    if (document.activeElement !== customInput) customInput.value = saved?.[1] ?? "";
+  } else {
+    customError.textContent = "";
+    customBottom.replaceChildren(limitValue(option.detail, option.unlimited));
+  }
+  return customTab;
+}
+
+/** Speed limit: each preset is a tab with its name on top and its value below. */
+function speedLimitField(presets: NonNullable<PopupModel["presets"]>): HTMLElement {
+  presetNow = presets.current;
+  const group = el("div", {
+    className: "segmented seg-presets",
+    attrs: { role: "radiogroup", "aria-label": "Speed limit" },
+  });
+  for (const option of presets.options) {
+    if (option.value === "custom") {
+      group.append(customSegment(presets, option));
+      continue;
+    }
+    const tab = el(
+      "button",
+      { className: "seg-tab", attrs: { "aria-label": `${option.label} speed limit` } },
+      el("span", { className: "seg-label", text: option.label }),
+      limitValue(option.detail, option.unlimited),
+    );
+    tab.setAttribute("role", "radio");
+    tab.setAttribute("aria-checked", String(option.value === presets.current));
+    tab.addEventListener("click", () => setPreset(option.value));
+    group.append(tab);
+  }
+  return el(
+    "div",
+    { className: "preset-limit" },
+    el("div", { className: "field preset-field" }, el("span", { text: "Speed limit" }), group),
+    customError ?? el("div"),
+  );
 }
 
 /** A three-way switch: System, Light, Dark. Applies at once and is remembered. */
@@ -1219,10 +1333,12 @@ async function downloadSelected(
 ): Promise<void> {
   const jobs: Array<{
     variantId?: string;
+    videoOnly?: boolean;
     subtitle?: { lang: string; auto: boolean; format: "srt" | "vtt" };
   }> = [];
   for (const f of media.formats) {
-    if (selection.has(`f:${f.id}`)) jobs.push({ variantId: f.id });
+    if (!selection.has(rowKey(f))) continue;
+    jobs.push(f.kind === "video-only" ? { variantId: f.id, videoOnly: true } : { variantId: f.id });
   }
   for (const t of media.subtitles) {
     if (selection.has(`s:${t.key}`)) {
@@ -1230,10 +1346,17 @@ async function downloadSelected(
     }
   }
   let failure: string | undefined;
+  let started = 0;
   for (const job of jobs) {
     const result = await send<DownloadResult>({ kind: "download", tabId, source, ...job });
     if (result.status === "error") failure ??= result.message;
     else if (result.status !== "started") failure ??= "Could not start every download.";
+    else started++;
+  }
+  if (started > 0) {
+    // The picked items are on their way: show the downloads, not the list they came from.
+    collapsed.add("page");
+    collapsed.delete("downloads");
   }
   notice = failure;
   picker = undefined;

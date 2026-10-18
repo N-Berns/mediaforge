@@ -64,10 +64,10 @@ export function openResultBanner(
 }
 
 /**
- * A picture format or a sound-only one. Silent video counts as video: the download adds the best
- * audio to it, so what the user gets always has sound.
+ * A picture format, a sound-only one, or a silent stream saved without sound. Under "video" a
+ * silent stream gets the best audio added, so what the user gets there always has sound.
  */
-export type FormatKind = "video" | "audio";
+export type FormatKind = "video" | "video-only" | "audio";
 
 export interface PopupModel {
   banner?: {
@@ -98,7 +98,7 @@ export interface PopupModel {
   /** The bandwidth presets, set once settings arrive. */
   presets?: {
     current: LimitPreset;
-    options: Array<{ value: LimitPreset; label: string; detail: string }>;
+    options: Array<{ value: LimitPreset; label: string; detail: string; unlimited: boolean }>;
     /** The unit the Custom field reads and shows. */
     unit: SpeedUnit;
     /** The Custom value as the field shows it; empty for no limit. */
@@ -245,18 +245,22 @@ export function buildPopupModel(
   if (picker) {
     model.picker = {
       title: picker.title ?? "Choose a quality",
-      formats: picker.formats.map((f) => ({
-        id: f.id,
-        label: f.label,
-        kind: f.hasVideo ? "video" : "audio",
-        detail: [
-          f.container,
-          f.approxBytes ? formatBytes(f.approxBytes) : "",
-          f.hasVideo ? "" : "audio only",
-        ]
-          .filter(Boolean)
-          .join(" · "),
-      })),
+      formats: picker.formats.flatMap((f) => {
+        const row = {
+          id: f.id,
+          label: f.label,
+          kind: f.hasVideo ? ("video" as const) : ("audio" as const),
+          detail: [
+            f.container,
+            f.approxBytes ? formatBytes(f.approxBytes) : "",
+            f.hasVideo ? "" : "audio only",
+          ]
+            .filter(Boolean)
+            .join(" · "),
+        };
+        // A silent stream is also offered on its own, without the audio the Video row adds.
+        return f.hasVideo && !f.hasAudio ? [row, { ...row, kind: "video-only" as const }] : [row];
+      }),
       subtitlesSupported: picker.subtitles !== undefined,
       subtitles: (picker.subtitles ?? []).map((t) => ({
         key: `${t.auto ? "auto" : "manual"}:${t.lang}`,
@@ -311,6 +315,7 @@ export function buildPopupModel(
         value,
         label: PRESET_LABELS[value],
         detail: formatLimit(limits[value], unit),
+        unlimited: limits[value] === null,
       })),
       unit,
       customText: limits.custom === null ? "" : formatRate(limits.custom, unit),

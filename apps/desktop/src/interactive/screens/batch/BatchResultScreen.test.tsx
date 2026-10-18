@@ -64,7 +64,7 @@ describe("BatchResultScreen", () => {
     expect(frame).not.toContain("Something went wrong.");
   });
 
-  it("marks a paused link with the paused icon and a cancelled one with the warning icon", async () => {
+  it("marks a paused link with the paused icon and a cancelled one with the stop icon", async () => {
     const app = render(
       <DepsContext.Provider value={deps}>
         <BatchResultScreen
@@ -93,7 +93,7 @@ describe("BatchResultScreen", () => {
     const frame = app.lastFrame() ?? "";
     app.unmount();
     expect(frame).toContain(`${ICONS.paused} First`);
-    expect(frame).toContain(`${ICONS.warn} Second`);
+    expect(frame).toContain(`${ICONS.stop} Second`);
     expect(frame).toMatch(/First\s+paused/);
     expect(frame).toMatch(/Second\s+cancelled/);
   });

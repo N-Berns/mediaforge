@@ -33,8 +33,8 @@ const STATUS_COLOR: Partial<Record<DownloadStatus, string>> = {
   queued: COLORS.muted,
   paused: COLORS.paused,
   completed: COLORS.ok,
-  failed: COLORS.error,
-  cancelled: COLORS.warn,
+  failed: COLORS.failed,
+  cancelled: COLORS.error,
 };
 
 /** One fixed-width cell, cut by display width so wide characters keep the columns aligned. */
@@ -50,7 +50,7 @@ function Cell({ width, text, color }: { width: number; text: string; color?: str
   );
 }
 
-/** The status as its filter icon, with the percent where there is one: "▼ 42%", "▌▌ 71%", "√". */
+/** The status as its filter icon, with the percent where there is one: "▼ 42%", "││ 71%", "√". */
 function statusIcon(job: DownloadJob): string {
   const filter =
     job.status === "downloading" || job.status === "processing" ? "active" : job.status;

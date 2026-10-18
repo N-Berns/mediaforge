@@ -797,17 +797,37 @@ describe("media.probe and variantId", () => {
     expect((t.fake.submitted[0] as { profileId: string }).profileId).toBe("audio-m4a");
   });
 
-  it("sorts a video-only variant into the Video only folder", async () => {
+  it("sorts a picture-only variant into the Video only folder", async () => {
     const t = await setup({ probe: async () => media, settings: { sortByType: true } });
     await t.send("media.probe", { url: media.url });
     await t.send("download.start", {
       candidate: { ...candidate, url: media.url, pageUrl: media.url },
       profileId: "best",
       variantId: "137",
+      videoOnly: true,
     });
     const request = t.fake.submitted[0] as { outputDir?: string };
     expect(request.outputDir).toBe(join(defaultOutputDir(), KIND_FOLDERS.video));
     expect(KIND_FOLDERS.video).toBe("Video only");
+  });
+
+  it("adds audio to a silent variant unless the picture alone was asked for", async () => {
+    const t = await setup({ probe: async () => media, settings: { sortByType: true } });
+    await t.send("media.probe", { url: media.url });
+    const start = (videoOnly?: boolean) =>
+      t.send("download.start", {
+        candidate: { ...candidate, url: media.url, pageUrl: media.url },
+        profileId: "best",
+        variantId: "137",
+        ...(videoOnly && { videoOnly }),
+      });
+    await start();
+    await start(true);
+    expect(t.fake.submitOptions[0]).toMatchObject({ formatSelector: "137+ba/137" });
+    expect(t.fake.submitOptions[1]).toMatchObject({ formatSelector: "137" });
+    expect((t.fake.submitted[0] as { outputDir?: string }).outputDir).toBe(
+      join(defaultOutputDir(), KIND_FOLDERS["video-audio"]),
+    );
   });
 
   it("records what a picked variant saves", async () => {
@@ -819,6 +839,7 @@ describe("media.probe and variantId", () => {
         candidate: { ...candidate, url: media.url, pageUrl: media.url },
         profileId: "best",
         variantId,
+        videoOnly: variantId === "137",
       });
     }
     expect(["job-1", "job-2", "job-3"].map((id) => t.history.get(id)?.kind)).toEqual([

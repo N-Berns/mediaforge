@@ -33,6 +33,14 @@ describe("tab store", () => {
     expect((await store.find(2, "https://cdn.test/b.mp4"))?.url).toBe("https://cdn.test/b.mp4");
   });
 
+  it("removes one candidate and leaves the others", async () => {
+    const store = createTabStore(memoryArea());
+    await store.add(1, c("https://cdn.test/a.mp4"));
+    await store.add(1, c("https://cdn.test/b.mp4"));
+    await store.remove(1, "https://cdn.test/a.mp4");
+    expect((await store.list(1)).map((x) => x.url)).toEqual(["https://cdn.test/b.mp4"]);
+  });
+
   it("survives a restart because it mirrors to the session area", async () => {
     const area = memoryArea();
     await createTabStore(area).add(7, c("https://cdn.test/a.mp4"));

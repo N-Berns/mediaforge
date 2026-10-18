@@ -15,6 +15,8 @@ export interface DownloadRequest {
   candidate: MediaCandidate;
   /** Explicit variant choice; when omitted, the profile picks one. */
   variantId?: string;
+  /** With a silent `variantId`: save the picture alone instead of adding the best audio. */
+  videoOnly?: boolean;
   profileId: string;
   outputDir?: string;
   filename?: string;

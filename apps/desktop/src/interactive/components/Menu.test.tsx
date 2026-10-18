@@ -1,3 +1,4 @@
+import { Box } from "ink";
 import { render } from "ink-testing-library";
 import type { ReactElement } from "react";
 import { describe, expect, it, vi } from "vitest";
@@ -176,31 +177,27 @@ describe("Menu mouse", () => {
     { value: "d", label: "Delta" },
   ];
 
-  it("a click highlights, a double-click picks", async () => {
+  it("one click picks the row", async () => {
     const onSelect = vi.fn();
     const app = withMouse(<Menu items={four} onSelect={onSelect} />);
     await tick();
     app.stdin.write(clickAt(4, 1));
-    await vi.waitFor(() => expect(app.lastFrame()).toMatch(/> 2 Bravo/));
-    expect(onSelect).not.toHaveBeenCalled();
+    await vi.waitFor(() => expect(onSelect).toHaveBeenCalledWith("b"));
+    expect(onSelect).toHaveBeenCalledTimes(1);
+  });
+
+  it("a double-click picks once", async () => {
+    const onSelect = vi.fn();
+    const app = withMouse(<Menu items={four} onSelect={onSelect} />);
+    await tick();
+    app.stdin.write(clickAt(4, 1));
     app.stdin.write(clickAt(4, 1));
     await vi.waitFor(() => expect(onSelect).toHaveBeenCalledWith("b"));
+    await tick();
+    expect(onSelect).toHaveBeenCalledTimes(1);
   });
 
-  it("two slow clicks are two single clicks", async () => {
-    let clock = 0;
-    const onSelect = vi.fn();
-    const app = withMouse(<Menu items={four} onSelect={onSelect} />, () => clock);
-    await tick();
-    app.stdin.write(clickAt(4, 1));
-    await vi.waitFor(() => expect(app.lastFrame()).toMatch(/> 2 Bravo/));
-    clock = 1000;
-    app.stdin.write(clickAt(4, 1));
-    await tick();
-    expect(onSelect).not.toHaveBeenCalled();
-  });
-
-  it("a double-click that scrolls the list picks nothing it did not first highlight", async () => {
+  it("clicking a row in a scrolled list picks that row", async () => {
     const ten: MenuItem<string>[] = [..."abcdefghij"].map((value) => ({
       value,
       label: value.toUpperCase(),
@@ -208,20 +205,8 @@ describe("Menu mouse", () => {
     const onSelect = vi.fn();
     const app = withMouse(<Menu items={ten} onSelect={onSelect} maxVisible={5} />);
     await tick();
-    // Rows 0-4 show a-e. The first click highlights e and scrolls the window, so the second
-    // press of the double-click lands on f.
     app.stdin.write(clickAt(2, 4));
-    await vi.waitFor(() => expect(app.lastFrame()).toMatch(/more above[\s\S]*> E/));
-    app.stdin.write(clickAt(2, 4));
-    await vi.waitFor(() => expect(app.lastFrame()).toMatch(/> F/));
-    await tick();
-    expect(onSelect).not.toHaveBeenCalled();
-    // A double-click on the row that is already highlighted picks it.
-    const at = (app.lastFrame() ?? "").split("\n").findIndex((line) => line.includes("> F"));
-    app.stdin.write(clickAt(2, at));
-    app.stdin.write(clickAt(2, at));
-    await vi.waitFor(() => expect(onSelect).toHaveBeenCalledWith("f"));
-    expect(onSelect).toHaveBeenCalledTimes(1);
+    await vi.waitFor(() => expect(onSelect).toHaveBeenCalledWith("e"));
   });
 
   it("ignores clicks on disabled rows", async () => {
@@ -271,5 +256,25 @@ describe("TextField mouse", () => {
     await tick();
     app.stdin.write("X");
     await vi.waitFor(() => expect(app.lastFrame()).toContain("abXcdef"));
+  });
+});
+
+describe("Menu pinned Back", () => {
+  it("puts a trailing Back or Quit on the last free row", () => {
+    const app = render(
+      <Box flexDirection="column" height={8}>
+        <Menu
+          items={[
+            { value: "a", label: "Alpha" },
+            { value: "back", label: "Back" },
+          ]}
+          onSelect={() => {}}
+        />
+      </Box>,
+    );
+    const lines = (app.lastFrame() ?? "").split("\n");
+    expect(lines.findIndex((l) => l.includes("Alpha"))).toBe(0);
+    expect(lines.findIndex((l) => l.includes("Back"))).toBe(7);
+    app.unmount();
   });
 });

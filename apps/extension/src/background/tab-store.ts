@@ -13,6 +13,8 @@ export interface TabStore {
   /** Resolves with whether the tab's list changed; a repeat of a known response changes nothing. */
   add(tabId: number, candidate: MediaCandidate): Promise<boolean>;
   clear(tabId: number): Promise<void>;
+  /** Drops one candidate from the tab's list. */
+  remove(tabId: number, id: string): Promise<void>;
   find(tabId: number, id: string): Promise<MediaCandidate | undefined>;
 }
 
@@ -81,6 +83,14 @@ export function createTabStore(area: SessionArea): TabStore {
         await area.set({ [keyOf(tabId)]: merged });
         memory.set(tabId, merged);
         return true;
+      }),
+    remove: (tabId, id) =>
+      queue(tabId, async () => {
+        const current = await load(tabId);
+        const kept = current.filter((c) => c.id !== id);
+        if (kept.length === current.length) return;
+        await area.set({ [keyOf(tabId)]: kept });
+        memory.set(tabId, kept);
       }),
     clear: (tabId) =>
       queue(tabId, async () => {
