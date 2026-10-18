@@ -50,10 +50,19 @@ export interface BatchFlowProps {
   onQuit: () => void;
   /** Told when downloads start and stop, so Ctrl+C can cancel them instead of quitting. */
   onDownloading?: (busy: boolean) => void;
+  /** Set: hand the plans back instead of downloading (Add link in the downloads manager). */
+  onPlans?: (plans: Plan[]) => void;
 }
 
 /** Several links: look them all up, choose a type for each (or per link), then download. */
-export function BatchFlow({ urls, onLinks, onHome, onQuit, onDownloading }: BatchFlowProps) {
+export function BatchFlow({
+  urls,
+  onLinks,
+  onHome,
+  onQuit,
+  onDownloading,
+  onPlans,
+}: BatchFlowProps) {
   const deps = useDeps();
   const notices = useContext(NoticeContext);
   const nav = useNav<Stage>({ name: "lookup" });
@@ -87,7 +96,8 @@ export function BatchFlow({ urls, onLinks, onHome, onQuit, onDownloading }: Batc
       // Without details there is no title yet; the link stands in for it.
       return plan.title ? plan : { ...plan, title: item.url };
     });
-    nav.push({ name: "download", plans, run: ++runs.current });
+    if (onPlans) onPlans(plans);
+    else nav.push({ name: "download", plans, run: ++runs.current });
   };
 
   /** After the types are settled: ask for the folder, or go straight to downloading. */
@@ -204,12 +214,14 @@ export function BatchFlow({ urls, onLinks, onHome, onQuit, onDownloading }: Batc
         <BatchDownloadScreen
           key={stage.run}
           plans={stage.plans}
-          concurrency={settings.concurrency}
           onDone={(jobs) => {
             // Cancelled before anything finished: nothing to report, go back a page and say so.
             // If some links were saved, show what happened to each.
-            if (jobs.length > 0 && jobs.every((j) => j.status === "cancelled")) {
-              notices.notify("warn", "Downloads cancelled");
+            const stopped = (j: EngineJob) => j.status === "cancelled" || j.status === "paused";
+            if (jobs.length > 0 && jobs.every(stopped)) {
+              if (jobs.some((j) => j.status === "paused")) {
+                notices.notify("paused", "Downloads paused");
+              } else notices.notify("warn", "Downloads cancelled");
               nav.back();
               return;
             }

@@ -1,6 +1,8 @@
+import { resolve } from "node:path";
 import { type Tool, ToolInstallError } from "@mediaforge/binary-resolver";
 import { render } from "ink-testing-library";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import { inProcessCore } from "../core/in-process.ts";
 import type { DownloadDeps } from "../download.ts";
 import { DownloadEngine, type EngineFs } from "../engine/index.ts";
 import type { ProcessRunner } from "../engine/process.ts";
@@ -12,6 +14,7 @@ import { App } from "./App.tsx";
 import type { AppDeps } from "./deps.ts";
 import type { FolderFs } from "./folder-browser.ts";
 import { memoryFolderFs } from "./folder-fs.ts";
+import { ICONS } from "./theme.ts";
 
 const KEY = {
   enter: "\r",
@@ -23,6 +26,8 @@ const KEY = {
 };
 
 const URL = "https://example.com/watch?v=abc";
+/** Settings that skip the folder and quality questions, so a link goes straight to downloading. */
+const SKIP_QUESTIONS = { askQuality: false, askFolder: false, quality: "mp4-720p" } as const;
 const found = async (tool: Tool) => ({ tool, path: `/bin/${tool}`, source: "path" as const });
 const fs: EngineFs = {
   mkdir: async () => {},
@@ -63,6 +68,7 @@ interface Options {
   /** What the release check finds; "offline" makes it fail. Default: already the newest. */
   update?: Partial<UpdateInfo> | "offline";
   installUpdate?: AppDeps["installUpdate"];
+  start?: "manager";
 }
 
 function setup(options: Options = {}) {
@@ -70,29 +76,34 @@ function setup(options: Options = {}) {
   const opened: string[] = [];
   const store = memorySettingsStore(options.settings);
   const runner = options.runner ?? succeed;
-  const engineOptions: ({ maxConcurrent?: number } | undefined)[] = [];
+  const notified: number[] = [];
+  const core = inProcessCore({
+    settings: store,
+    createEngine: (onUpdate) =>
+      new DownloadEngine({
+        resolve: found,
+        fs,
+        onUpdate,
+        run: (c, a, h, s) => {
+          seenArgs.push(a);
+          return runner(c, a, h, s);
+        },
+      }),
+  });
   const download: DownloadDeps = {
     env: {},
     isTTY: true,
     settings: store,
     onInterrupt: () => () => {},
-    createEngine: (onUpdate, engineOpts) => {
-      engineOptions.push(engineOpts);
-      return new DownloadEngine({
-        resolve: found,
-        fs,
-        onUpdate,
-        ...engineOpts,
-        run: (c, a, h, s) => {
-          seenArgs.push(a);
-          return runner(c, a, h, s);
-        },
-      });
-    },
+    core: core.connect,
   };
   const missing = new Set<Tool>(options.missing ?? []);
   const installed: Tool[] = [];
   const updated: string[] = [];
+  /** Each value the Run key was set for. */
+  const autostart: boolean[] = [];
+  /** When the window was flashed. */
+  const flashes: number[] = [];
   const deps: AppDeps = {
     download,
     fetchInfo: options.info ?? (async () => INFO),
@@ -140,6 +151,7 @@ function setup(options: Options = {}) {
         updated.push(info.latest);
       }),
     readClipboard: async () => ("clipboard" in options ? options.clipboard : URL),
+    writeClipboard: vi.fn(async () => true),
     openFolder: async (p) => void opened.push(p),
     fileSize: async () => 5 * 1024 * 1024,
     folders:
@@ -150,9 +162,42 @@ function setup(options: Options = {}) {
     defaultOutputDir: "/downloads",
     binDir: "/app/bin",
     version: "9.9.9",
+    managerCore: core.connectAs("manager"),
+    flash: () => void flashes.push(Date.now()),
+    sendReport: vi.fn(async () => ({ ok: true }) as const),
+    readHistory: async () =>
+      JSON.stringify({
+        jobs: [
+          {
+            id: "f1",
+            status: "failed",
+            updatedAt: 5,
+            error: "HTTP Error 403",
+            request: { candidate: { url: "https://x.test/f1", pageTitle: "Broken page" } },
+          },
+        ],
+      }),
+    osName: "Linux 6.8",
+    applyAutostart: async (enabled) => void autostart.push(enabled),
+    notifyCore: async () => {
+      notified.push(Date.now());
+      await (await core.service).applySettings();
+    },
   };
-  const app = render(<App deps={deps} />);
-  return { app, deps, store, seenArgs, opened, engineOptions, installed, updated };
+  const app = render(<App deps={deps} {...(options.start && { start: options.start })} />);
+  return {
+    app,
+    deps,
+    store,
+    seenArgs,
+    opened,
+    notified,
+    core,
+    installed,
+    updated,
+    autostart,
+    flashes,
+  };
 }
 
 type TestApp = ReturnType<typeof setup>["app"];
@@ -176,12 +221,12 @@ async function waitFor(app: TestApp, text: string, tries = 200) {
 
 /** Move the highlight down until the row with this label is selected. */
 async function moveTo(app: TestApp, label: string) {
-  for (let i = 0; i < 12; i++) {
+  for (let i = 0; i < 16; i++) {
     const frame = app.lastFrame() ?? "";
-    // The selection pointer sits at a fixed column; some unselected rows also use ► as their icon.
+    // The selection pointer sits at a fixed column; the cursor is a >.
     const selected = frame
       .split("\n")
-      .some((line) => line.startsWith("  ► ") && line.includes(label));
+      .some((line) => line.startsWith("  > ") && line.includes(label));
     if (selected) return;
     await press(app, KEY.down);
   }
@@ -195,6 +240,28 @@ async function press(app: TestApp, ...keys: string[]) {
   }
 }
 
+/** Home, then the clipboard link, straight into downloading (needs SKIP_QUESTIONS). */
+async function startDownload(t: ReturnType<typeof setup>) {
+  await waitFor(t.app, "What would you like to do?");
+  await press(t.app, KEY.enter);
+  await waitFor(t.app, URL);
+  await press(t.app, KEY.enter);
+}
+
+/** Make the core connector wait until the test releases it. */
+function gateCore(t: ReturnType<typeof setup>) {
+  const connect = t.deps.download.core;
+  let release: () => void = () => {};
+  const open = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  t.deps.download.core = async () => {
+    await open;
+    return connect();
+  };
+  return { release };
+}
+
 describe("home", () => {
   it("shows the title bar, the menu with icons, and key hints", async () => {
     const { app } = setup();
@@ -206,7 +273,7 @@ describe("home", () => {
     for (const label of ["Download media", "Settings", "Check setup", "About", "Quit"]) {
       expect(frame).toContain(label);
     }
-    expect(frame).toContain("►");
+    expect(frame).toContain("> ");
     expect(frame).toContain("Move");
     app.unmount();
   });
@@ -214,7 +281,7 @@ describe("home", () => {
   it("replaces the screen instead of stacking history", async () => {
     const { app } = setup();
     await waitFor(app, "What would you like to do?");
-    await press(app, KEY.down, KEY.enter);
+    await press(app, KEY.down, KEY.down, KEY.enter);
     await waitFor(app, "Default download folder");
     expect(app.lastFrame()).not.toContain("What would you like to do?");
     app.unmount();
@@ -446,7 +513,7 @@ describe("download flow", () => {
     await waitFor(app, "Download complete");
     const done = app.lastFrame() ?? "";
     expect(done).toContain("Clip.mp4");
-    expect(done).toContain("5.0 MB");
+    expect(done).toContain("5.2 MB");
     expect(done).toContain("Open folder");
     expect(seenArgs).toHaveLength(1);
     app.unmount();
@@ -550,6 +617,18 @@ describe("download flow", () => {
     t.app.unmount();
   });
 
+  it("sends a full path to the core when the environment folder is relative", async () => {
+    const t = setup({ settings: { ...SKIP_QUESTIONS, sortByType: false } });
+    t.deps.download.env = { MEDIAFORGE_OUTPUT_DIR: "relative/out" };
+    await startDownload(t);
+    await waitFor(t.app, "Download complete");
+    const args = t.seenArgs[0] as string[];
+    expect((args[args.indexOf("--paths") + 1] as string).replaceAll("\\", "/")).toContain(
+      resolve("relative/out").replaceAll("\\", "/"),
+    );
+    t.app.unmount();
+  });
+
   it("explains a failed lookup and can continue without details", async () => {
     const t = setup({
       info: async () => {
@@ -609,10 +688,79 @@ describe("settings", () => {
   async function openSettings(options: Options = {}) {
     const t = setup(options);
     await waitFor(t.app, "What would you like to do?");
-    await press(t.app, KEY.down, KEY.enter);
+    await press(t.app, KEY.down, KEY.down, KEY.enter);
     await waitFor(t.app, "Default download folder");
     return t;
   }
+
+  it("toggles the speed unit", async () => {
+    const t = await openSettings();
+    await moveTo(t.app, "Speed unit");
+    expect(t.app.lastFrame()).toContain("MB/s");
+    await press(t.app, KEY.enter);
+    await waitFor(t.app, "Saved");
+    expect((await t.store.load()).speedUnit).toBe("bits");
+    expect(t.app.lastFrame()).toContain("Mbps");
+    t.app.unmount();
+  });
+
+  it("picks the bandwidth preset and tells the core", async () => {
+    const t = await openSettings();
+    await moveTo(t.app, "Bandwidth limit");
+    expect(t.app.lastFrame()).toContain("High (no limit)");
+    await press(t.app, KEY.enter);
+    await waitFor(t.app, "e Edit value");
+    await moveTo(t.app, "Med");
+    // The hint to change a value follows the highlight.
+    const lines = (t.app.lastFrame() ?? "").split("\n");
+    expect(lines.find((line) => line.includes("Med"))).toContain("· e to change");
+    expect(lines.find((line) => line.includes("High"))).not.toContain("e to change");
+    await press(t.app, KEY.enter);
+    await waitFor(t.app, "Saved");
+    expect((await t.store.load()).limitPreset).toBe("med");
+    expect(t.app.lastFrame()).toContain("(in use)");
+    await vi.waitFor(() => expect(t.notified).toHaveLength(1));
+    await press(t.app, KEY.esc);
+    await waitFor(t.app, "Med (5.0 MB/s)");
+    t.app.unmount();
+  });
+
+  it("edits a preset value in the speed unit, with empty for no limit", async () => {
+    const t = await openSettings({ settings: { speedUnit: "bits" } });
+    await moveTo(t.app, "Bandwidth limit");
+    await press(t.app, KEY.enter);
+    await waitFor(t.app, "e Edit value");
+    await moveTo(t.app, "Low");
+    await press(t.app, "e");
+    await waitFor(t.app, "Empty or 0 for no limit");
+    await press(t.app, KEY.ctrlU, "2", "0", KEY.enter);
+    await waitFor(t.app, "Saved");
+    expect((await t.store.load()).limits.low).toBe(2_500_000);
+    expect((await t.store.load()).limitPreset).toBe("high");
+    expect(t.app.lastFrame()).toContain("20.0 Mbps");
+
+    await press(t.app, "e");
+    await waitFor(t.app, "Empty or 0 for no limit");
+    await press(t.app, KEY.ctrlU, KEY.enter);
+    // "Saved" is still on screen from the first save, so wait for the store instead.
+    await vi.waitFor(async () => expect((await t.store.load()).limits.low).toBeNull());
+    await waitFor(t.app, "Low       no limit");
+    t.app.unmount();
+  });
+
+  it("refuses a value it cannot read and keeps the old one", async () => {
+    const t = await openSettings();
+    await moveTo(t.app, "Bandwidth limit");
+    await press(t.app, KEY.enter);
+    await waitFor(t.app, "e Edit value");
+    await moveTo(t.app, "Med");
+    await press(t.app, "e");
+    await waitFor(t.app, "Empty or 0 for no limit");
+    await press(t.app, KEY.ctrlU, "f", "a", "s", "t", KEY.enter);
+    await waitFor(t.app, "Type a speed such as 5, 5 MB/s or 40 Mbps.");
+    expect((await t.store.load()).limits.med).toBe(5_000_000);
+    t.app.unmount();
+  });
 
   it("toggles whether to ask each time and saves it", async () => {
     const t = await openSettings();
@@ -646,14 +794,48 @@ describe("settings", () => {
     t.app.unmount();
   });
 
+  it("turns background running on and off", async () => {
+    const t = await openSettings();
+    await moveTo(t.app, "Keep running in the background");
+    await press(t.app, KEY.enter);
+    await waitFor(t.app, "Saved");
+    expect((await t.store.load()).keepRunning).toBe(true);
+    expect(t.autostart).toEqual([true]);
+
+    await press(t.app, KEY.enter);
+    await vi.waitFor(() => expect(t.autostart).toEqual([true, false]));
+    expect((await t.store.load()).keepRunning).toBe(false);
+    t.app.unmount();
+  });
+
+  it("leaves the login entry alone when another setting changes", async () => {
+    const t = await openSettings();
+    await moveTo(t.app, "Sort into folders by type");
+    await press(t.app, KEY.enter);
+    await waitFor(t.app, "Saved");
+    expect(t.autostart).toEqual([]);
+    t.app.unmount();
+  });
+
+  it("switches the browser button between popup and overlay", async () => {
+    const t = await openSettings();
+    await moveTo(t.app, "Download button on videos");
+    await press(t.app, KEY.enter);
+    await waitFor(t.app, "Saved");
+    expect((await t.store.load()).extensionUi).toBe("popup");
+    t.app.unmount();
+  });
+
   it("resets only after confirmation", async () => {
     const t = await openSettings({ settings: { folder: "/x", askQuality: false } });
     await moveTo(t.app, "Reset to built-in defaults");
     await press(t.app, KEY.enter);
     await waitFor(t.app, "Reset all settings?");
+    expect(t.app.lastFrame()).toContain("Background running is turned off");
     await press(t.app, KEY.enter);
     await waitFor(t.app, "Default download folder");
     expect((await t.store.load()).folder).toBe("/x");
+    expect(t.autostart).toEqual([]);
 
     await moveTo(t.app, "Reset to built-in defaults");
     await press(t.app, KEY.enter);
@@ -665,7 +847,35 @@ describe("settings", () => {
       askQuality: true,
       sortByType: true,
       concurrency: 2,
+      keepRunning: false,
+      extensionUi: "overlay",
+      speedUnit: "bytes",
+      limitPreset: "high",
+      limits: { high: null, med: 5_000_000, low: 1_000_000, custom: null },
+      managerSort: { column: "lastTry", descending: true },
     });
+    expect(t.autostart).toEqual([false]);
+    t.app.unmount();
+  });
+
+  it("tells the core when downloads-at-once changes", async () => {
+    const t = await openSettings();
+    await moveTo(t.app, "Downloads at once");
+    await press(t.app, KEY.enter);
+    await waitFor(t.app, "How many links download at the same time?");
+    await moveTo(t.app, "3 at a time");
+    await press(t.app, KEY.enter);
+    await waitFor(t.app, "Saved");
+    await vi.waitFor(() => expect(t.notified).toHaveLength(1));
+    t.app.unmount();
+  });
+
+  it("does not tell the core about other settings", async () => {
+    const t = await openSettings();
+    await moveTo(t.app, "Sort into folders by type");
+    await press(t.app, KEY.enter);
+    await waitFor(t.app, "Saved");
+    expect(t.notified).toEqual([]);
     t.app.unmount();
   });
 
@@ -673,6 +883,115 @@ describe("settings", () => {
     const t = await openSettings();
     await press(t.app, KEY.esc);
     await waitFor(t.app, "What would you like to do?");
+    t.app.unmount();
+  });
+});
+
+describe("downloads through the core", () => {
+  it("shows the download speed in the saved unit", async () => {
+    let finish: () => void = () => {};
+    const t = setup({
+      settings: { ...SKIP_QUESTIONS, speedUnit: "bits" },
+      runner: async (_c, args, h) => {
+        h.onStdoutLine("MFPROGRESS 1000 2000000 NA 6100000 5");
+        // Past the core's 250 ms progress throttle, so this update reaches the screen.
+        await tick(300);
+        h.onStdoutLine("MFPROGRESS 2000 2000000 NA 6100000 4");
+        // Stay downloading until the test has looked at the screen.
+        await new Promise<void>((resolve) => {
+          finish = resolve;
+        });
+        h.onStdoutLine(`MFFILE ${args[args.indexOf("--paths") + 1]}/Clip.mp4`);
+        return { exitCode: 0 };
+      },
+    });
+    await startDownload(t);
+    await waitFor(t.app, "48.8 Mbps");
+    finish();
+    await waitFor(t.app, "Download complete");
+    t.app.unmount();
+  });
+
+  it("keeps a download running in the core after the app quits", async () => {
+    let release: () => void = () => {};
+    const t = setup({
+      settings: SKIP_QUESTIONS,
+      runner: (_c, args, h) =>
+        new Promise((resolve) => {
+          release = () => {
+            h.onStdoutLine(`MFFILE ${args[args.indexOf("--paths") + 1]}/Clip.mp4`);
+            resolve({ exitCode: 0 });
+          };
+        }),
+    });
+    await startDownload(t);
+    await waitFor(t.app, "Downloading");
+    t.app.unmount();
+    release();
+    await vi.waitFor(async () => {
+      const client = await t.core.connect();
+      const list = await client.request("jobs.list", {});
+      client.close();
+      expect(list.type === "jobs.snapshot" && list.payload.jobs[0]?.status).toBe("completed");
+    });
+  });
+
+  it("cancels a download when Esc comes before the core answers", async () => {
+    const ran = vi.fn();
+    const t = setup({
+      settings: SKIP_QUESTIONS,
+      runner: (...args) => {
+        ran();
+        return succeed(...args);
+      },
+    });
+    const gate = gateCore(t);
+    await startDownload(t);
+    await waitFor(t.app, "Cancel download");
+    await press(t.app, KEY.esc);
+    gate.release();
+    await waitFor(t.app, "Download cancelled");
+    expect(ran).not.toHaveBeenCalled();
+    t.app.unmount();
+  });
+
+  it("shows a failure when the core goes away during a download", async () => {
+    const t = setup({ settings: SKIP_QUESTIONS, runner: () => new Promise(() => {}) });
+    const connect = t.deps.download.core;
+    t.deps.download.core = async () => {
+      const client = await connect();
+      setTimeout(() => client.close(), 20);
+      return client;
+    };
+    await startDownload(t);
+    await waitFor(t.app, "Download failed");
+    expect(t.app.lastFrame()).toMatch(/Lost the connection/);
+    t.app.unmount();
+  });
+
+  it("goes back with a notice when the download is paused from elsewhere", async () => {
+    const ran = vi.fn();
+    const t = setup({
+      settings: SKIP_QUESTIONS,
+      runner: (_c, _a, _h, signal) =>
+        new Promise((resolve) => {
+          ran();
+          if (signal.aborted) resolve({ exitCode: 1 });
+          else signal.addEventListener("abort", () => resolve({ exitCode: 1 }));
+        }),
+    });
+    await startDownload(t);
+    await vi.waitFor(() => expect(ran).toHaveBeenCalled());
+    const other = await t.core.connect();
+    await vi.waitFor(async () => {
+      const list = await other.request("jobs.list", {});
+      const id = list.type === "jobs.snapshot" ? list.payload.jobs[0]?.id : undefined;
+      expect(id).toBeDefined();
+      const reply = await other.request("download.pause", { jobIds: [id as string] });
+      expect(reply).toMatchObject({ payload: { failed: [] } });
+    });
+    await waitFor(t.app, `${ICONS.paused} Download paused`);
+    other.close();
     t.app.unmount();
   });
 });
@@ -696,7 +1015,7 @@ describe("folder picker", () => {
   async function toPicker(options: Options = {}) {
     const t = setup({ folders: memoryFolderFs(TREE, { unreadable: ["/secret"] }), ...options });
     await waitFor(t.app, "What would you like to do?");
-    await press(t.app, KEY.down, KEY.enter);
+    await press(t.app, KEY.down, KEY.down, KEY.enter);
     await waitFor(t.app, "Default download folder");
     await press(t.app, KEY.enter);
     await waitFor(t.app, "Choose a folder");
@@ -804,7 +1123,7 @@ describe("folder picker", () => {
     );
     const t = setup({ folders: fs, settings: { folder: "C:\\" } });
     await waitFor(t.app, "What would you like to do?");
-    await press(t.app, KEY.down, KEY.enter);
+    await press(t.app, KEY.down, KEY.down, KEY.enter);
     await waitFor(t.app, "Default download folder");
     await press(t.app, KEY.enter);
     await waitFor(t.app, "Choose a folder");
@@ -849,7 +1168,7 @@ describe("check setup", () => {
   it("shows each tool with its version and source", async () => {
     const { app } = setup();
     await waitFor(app, "What would you like to do?");
-    await press(app, KEY.down, KEY.down, KEY.enter);
+    await press(app, KEY.down, KEY.down, KEY.down, KEY.enter);
     await waitFor(app, "Everything is ready.");
     const frame = app.lastFrame() ?? "";
     expect(frame).toContain("yt-dlp");
@@ -866,7 +1185,7 @@ describe("check setup", () => {
       ],
     });
     await waitFor(app, "What would you like to do?");
-    await press(app, KEY.down, KEY.down, KEY.enter);
+    await press(app, KEY.down, KEY.down, KEY.down, KEY.enter);
     await waitFor(app, "Some tools are missing");
     expect(app.lastFrame()).toContain('Choose "Download missing tools" below.');
     expect(app.lastFrame()).not.toContain("MEDIAFORGE_FFMPEG_PATH");
@@ -888,7 +1207,7 @@ describe("check setup", () => {
       },
     });
     await waitFor(app, "What would you like to do?");
-    await press(app, KEY.down, KEY.down, KEY.enter);
+    await press(app, KEY.down, KEY.down, KEY.down, KEY.enter);
     await waitFor(app, "Download missing tools");
     await press(app, KEY.enter);
     await waitFor(app, "Could not reach github.com.");
@@ -937,7 +1256,7 @@ describe("missing tools", () => {
   it("is also offered from Check setup, without a Continue choice", async () => {
     const t = setup({ missing: ["ffmpeg"] });
     await waitFor(t.app, "What would you like to do?");
-    await press(t.app, KEY.down, KEY.down, KEY.enter);
+    await press(t.app, KEY.down, KEY.down, KEY.down, KEY.enter);
     await waitFor(t.app, "Download missing tools");
     await press(t.app, KEY.enter);
     await waitFor(t.app, "Everything is ready.");
@@ -995,8 +1314,6 @@ describe("missing tools", () => {
 describe("stale extractor", () => {
   const STALE =
     "ERROR: [generic] Unable to extract title; please report this issue on https://github.com/yt-dlp/yt-dlp/issues . Confirm you are on the latest version using yt-dlp -U";
-  const SKIP_QUESTIONS = { askQuality: false, askFolder: false, quality: "mp4-720p" } as const;
-
   it("offers to update yt-dlp, and retries the download after the update", async () => {
     let calls = 0;
     const t = setup({
@@ -1019,7 +1336,7 @@ describe("stale extractor", () => {
     expect(failed).toContain("Update yt-dlp and retry");
     // Nothing happens until the user picks it: "Try again" is the highlighted choice.
     expect(t.installed).toEqual([]);
-    expect(failed).toMatch(/► .*Try again/);
+    expect(failed).toMatch(/> .*Try again/);
 
     await moveTo(t.app, "Update yt-dlp and retry");
     await press(t.app, KEY.enter);
@@ -1279,6 +1596,68 @@ describe("about", () => {
   });
 });
 
+describe("reporting a problem", () => {
+  async function openReport() {
+    const t = setup({});
+    await waitFor(t.app, "What would you like to do?");
+    await moveTo(t.app, "About");
+    await press(t.app, KEY.enter);
+    await waitFor(t.app, "Report a problem");
+    await moveTo(t.app, "Report a problem");
+    await press(t.app, KEY.enter);
+    await waitFor(t.app, "What is the problem with?");
+    return t;
+  }
+
+  it("sends the type, the description and the diagnostics from About", async () => {
+    const t = await openReport();
+    await press(t.app, KEY.enter);
+    await waitFor(t.app, "What went wrong?");
+    await press(t.app, KEY.enter);
+    await waitFor(t.app, "Describe what went wrong first.");
+    t.app.stdin.write("Downloads stop at 99%");
+    await tick(30);
+    await press(t.app, KEY.enter);
+    await waitFor(t.app, "last failed download: Broken page");
+    expect(t.app.lastFrame()).toContain("app: 9.9.9 (linux-x64)");
+    await press(t.app, KEY.enter);
+    await waitFor(t.app, "Report sent");
+    expect(t.deps.sendReport).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "App",
+        description: "Downloads stop at 99%",
+        appVersion: "9.9.9",
+        os: "Linux 6.8",
+        browser: "n/a (app)",
+        details: expect.stringContaining("HTTP Error 403"),
+      }),
+    );
+    t.app.unmount();
+  });
+
+  it("can leave the diagnostics out, and offers a retry when sending fails", async () => {
+    const t = await openReport();
+    vi.mocked(t.deps.sendReport).mockResolvedValueOnce({ ok: false, message: "Offline." });
+    await moveTo(t.app, "The browser extension");
+    await press(t.app, KEY.enter);
+    await waitFor(t.app, "What went wrong?");
+    t.app.stdin.write("The overlay is missing");
+    await tick(30);
+    await press(t.app, KEY.enter);
+    await waitFor(t.app, "Send without diagnostics");
+    await moveTo(t.app, "Send without diagnostics");
+    await press(t.app, KEY.enter);
+    await waitFor(t.app, "Offline.");
+    expect(t.deps.sendReport).toHaveBeenLastCalledWith(
+      expect.objectContaining({ type: "Extension", details: undefined }),
+    );
+    await press(t.app, KEY.enter);
+    await waitFor(t.app, "Report sent");
+    expect(t.deps.sendReport).toHaveBeenCalledTimes(2);
+    t.app.unmount();
+  });
+});
+
 describe("updating MediaForge", () => {
   const NEWER = { latest: "10.0.0", tag: "v10.0.0", newer: true };
 
@@ -1410,7 +1789,7 @@ describe("bulk download", () => {
     await press(app, KEY.enter);
   }
 
-  it("downloads links from different sites with one choice, using the saved number at once", async () => {
+  it("downloads links from different sites with one choice", async () => {
     const t = await toReview({ settings: { concurrency: 3 } });
     const review = t.app.lastFrame() ?? "";
     expect(review).toContain("Tube Video");
@@ -1419,7 +1798,6 @@ describe("bulk download", () => {
     await startDownloads(t.app);
     await waitFor(t.app, "All 2 downloads complete");
     expect(t.seenArgs).toHaveLength(2);
-    expect(t.engineOptions).toContainEqual({ maxConcurrent: 3 });
     t.app.unmount();
   });
 
@@ -1596,6 +1974,24 @@ describe("bulk download", () => {
     t.app.unmount();
   });
 
+  it("cancels every link when Esc comes before the core answers", async () => {
+    const ran = vi.fn();
+    const t = await toReview({
+      runner: (...args) => {
+        ran();
+        return succeed(...args);
+      },
+    });
+    const gate = gateCore(t);
+    await startDownloads(t.app);
+    await waitFor(t.app, "Overall");
+    await press(t.app, KEY.esc);
+    gate.release();
+    await waitFor(t.app, "Downloads cancelled");
+    expect(ran).not.toHaveBeenCalled();
+    t.app.unmount();
+  });
+
   it("shows what was saved when a batch is cancelled after some links finished", async () => {
     let calls = 0;
     const t = await toReview({
@@ -1613,6 +2009,165 @@ describe("bulk download", () => {
     await press(t.app, KEY.esc);
     await waitFor(t.app, "saved");
     expect(t.app.lastFrame()).toContain("1 of 2 saved");
+    t.app.unmount();
+  });
+});
+
+describe("downloads manager", () => {
+  /** A download that runs until it is cancelled, so rows stay put. */
+  const hang: ProcessRunner = (_c, _a, _h, s) =>
+    new Promise((resolve) =>
+      s.addEventListener("abort", () => resolve({ exitCode: 1 }), { once: true }),
+    );
+  const MANAGER = "MediaForge · Downloads";
+
+  async function listed(t: ReturnType<typeof setup>) {
+    const client = await t.core.connect();
+    const reply = await client.request("jobs.list", {});
+    client.close();
+    return reply.type === "jobs.snapshot" ? reply.payload.jobs : [];
+  }
+
+  async function openManager(options: Options = {}) {
+    const t = setup({ start: "manager", runner: hang, ...options });
+    await waitFor(t.app, MANAGER);
+    for (let i = 0; i < 100 && t.app.lastFrame()?.includes("Connecting to MediaForge"); i++) {
+      await tick();
+    }
+    await tick(50);
+    return t;
+  }
+
+  it("Downloads opens the manager and Esc returns home", async () => {
+    const t = setup();
+    await waitFor(t.app, "What would you like to do?");
+    await moveTo(t.app, "Downloads");
+    await press(t.app, KEY.enter);
+    await waitFor(t.app, MANAGER);
+    await press(t.app, KEY.esc);
+    await waitFor(t.app, "What would you like to do?");
+    t.app.unmount();
+  });
+
+  it("start manager opens the manager first and Esc goes home", async () => {
+    const t = await openManager();
+    await press(t.app, KEY.esc);
+    await waitFor(t.app, "What would you like to do?");
+    t.app.unmount();
+  });
+
+  it("a adds one link and returns with the cursor on the new row", async () => {
+    const t = await openManager({ settings: SKIP_QUESTIONS });
+    await press(t.app, "a");
+    await waitFor(t.app, URL);
+    await press(t.app, KEY.enter);
+    await waitFor(t.app, "1 item");
+    await waitFor(t.app, MANAGER);
+    const cursorRow = (t.app.lastFrame() ?? "").split("\n").find((l) => l.startsWith(">["));
+    expect(cursorRow).toContain("My Test Video");
+    expect(t.app.lastFrame()).not.toContain("Downloading…");
+    const jobs = await listed(t);
+    expect(jobs.map((j) => j.origin)).toEqual(["manager"]);
+    t.app.unmount();
+  });
+
+  it("a with several links goes through the batch flow and returns", async () => {
+    const links = ["https://www.youtube.com/watch?v=1", "https://www.twitch.tv/videos/2"];
+    const t = await openManager({
+      settings: SKIP_QUESTIONS,
+      clipboard: links.join("\n"),
+      info: async (url) => ({ ...INFO, title: url.includes("twitch") ? "Stream" : "Tube" }),
+    });
+    await press(t.app, "a");
+    await waitFor(t.app, "Use the 2 links from the clipboard");
+    await press(t.app, KEY.enter);
+    await waitFor(t.app, "Ready to download 2 links");
+    await moveTo(t.app, "Start downloading");
+    await press(t.app, KEY.enter);
+    await waitFor(t.app, "2 items");
+    await waitFor(t.app, MANAGER);
+    const jobs = await listed(t);
+    expect(jobs.map((j) => j.origin)).toEqual(["manager", "manager"]);
+    const first = jobs.find((j) => j.request.candidate.url === links[0]);
+    const cursorRow = (t.app.lastFrame() ?? "").split("\n").find((l) => l.startsWith(">["));
+    expect(cursorRow).toContain(first?.request.candidate.pageTitle ?? "missing");
+    t.app.unmount();
+  });
+
+  it("backing out of the wizard returns to the manager with its view", async () => {
+    const t = await openManager();
+    await press(t.app, "/", "x", KEY.enter);
+    await waitFor(t.app, 'search: "x"');
+    await press(t.app, "a");
+    await waitFor(t.app, URL);
+    await press(t.app, KEY.esc);
+    await waitFor(t.app, MANAGER);
+    expect(t.app.lastFrame()).toContain('search: "x"');
+    t.app.unmount();
+  });
+
+  it("a second pick while Add link is starting does not start a menu download", async () => {
+    const t = await openManager({
+      settings: { askQuality: false, quality: "mp4-720p", askFolder: true },
+    });
+    // Hold the submit, as a slow core would.
+    const connect = t.deps.managerCore;
+    let release: () => void = () => {};
+    const open = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    t.deps.managerCore = async () => {
+      await open;
+      return connect();
+    };
+    await press(t.app, "a");
+    await waitFor(t.app, URL);
+    await press(t.app, KEY.enter);
+    await waitFor(t.app, "Where should it be saved?");
+    await press(t.app, KEY.enter);
+    // Past the menu's double-Enter lock: a real second pick.
+    await tick(400);
+    await press(t.app, KEY.enter);
+    await tick(100);
+    release();
+    await waitFor(t.app, "1 item");
+    const jobs = await listed(t);
+    expect(jobs.map((j) => j.origin)).toEqual(["manager"]);
+    t.app.unmount();
+  });
+
+  it("backing out of a second Add link keeps the cursor where it was", async () => {
+    const t = await openManager({ settings: SKIP_QUESTIONS });
+    for (let i = 0; i < 2; i++) {
+      await press(t.app, "a");
+      await waitFor(t.app, URL);
+      await press(t.app, KEY.enter);
+      await waitFor(t.app, i === 0 ? "1 item" : "2 items");
+      await waitFor(t.app, MANAGER);
+    }
+    // Both rows share a title: compare where the cursor is, not what it shows.
+    const cursorRow = () =>
+      (t.app.lastFrame() ?? "").split("\n").findIndex((l) => l.startsWith(">["));
+    const newest = cursorRow();
+    await press(t.app, KEY.down);
+    await tick(100);
+    const moved = cursorRow();
+    expect(moved).not.toBe(newest);
+    await press(t.app, "a");
+    await waitFor(t.app, URL);
+    await press(t.app, KEY.esc);
+    await waitFor(t.app, MANAGER);
+    await tick(200);
+    expect(cursorRow()).toBe(moved);
+    t.app.unmount();
+  });
+
+  it("the menu download shows the title before the file exists", async () => {
+    const t = setup({ settings: SKIP_QUESTIONS, runner: hang });
+    await startDownload(t);
+    await waitFor(t.app, "Downloading");
+    const jobs = await listed(t);
+    expect(jobs[0]?.request.candidate.pageTitle).toBe("My Test Video");
     t.app.unmount();
   });
 });

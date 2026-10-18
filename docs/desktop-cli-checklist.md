@@ -103,3 +103,99 @@ Running `mediaforge` with no arguments in a terminal opens a full-screen app. Th
 - [x] Manage a Deno download so YouTube works without a separate JavaScript runtime (pinned in `tools.lock.json` via `pnpm pin:deno`; `mediaforge setup` fetches it; optional for `doctor` and downloads; yt-dlp gets `--js-runtimes deno:<path>`; `update` leaves it alone)
 - [x] Self-update of MediaForge: check at startup (notice on Home) and on About with an "Update to ..." button, plus `mediaforge self-update`; stable releases only, SHA-256 checked, restart afterwards
 - [ ] winget and Scoop packages (Homebrew dropped with macOS)
+
+## Downloads in the core (downloads manager phase 1)
+
+- [ ] `mediaforge download <url>` with no core running starts one, downloads, prints the path, exits 0.
+- [ ] Ctrl+C during `mediaforge download` prints "Cancelled." and exits with the cancelled code.
+- [ ] A menu download keeps going after quitting the menu with Ctrl+C on the home screen; the file appears.
+- [ ] `history.json` sits beside `config.json` and lists the CLI, menu and extension downloads with their origin.
+- [ ] Kill the core in Task Manager (Windows) or with `kill -9` (Linux) during a download. Start the browser popup: the job shows as paused, and `history.json` has a notice with reason "unexpected".
+- [ ] Replace `history.json` with `{broken`. Start the core: `history.json.bak` holds the broken text and a new list starts.
+- [ ] Change "Downloads at once" in Settings while three downloads are queued: the new limit applies without restarting the core.
+- [ ] An older extension against this exe shows the "update" state rather than errors.
+- [ ] Press Esc on the menu download screen before the background service has answered: the download is cancelled and never starts.
+- [ ] `mediaforge download <url>` with the background service unreachable fails within about 10 seconds with "Could not start or reach the MediaForge background service." and exit code 1.
+
+## Job control (downloads manager phase 2)
+
+Phase 2 has no buttons yet: send the requests with a small script through `CoreClient` (terminal role), or wait for the manager in phase 3.
+
+- [ ] Pause a large real download: yt-dlp stops, `.mediaforge-<id>` keeps its `.part` file, the row is paused.
+- [ ] Resume it: the same id continues from the partial file (the byte count does not restart at 0).
+- [ ] Kill the core during a download, start it again, resume the paused job: it continues in the same folder with the same format.
+- [ ] A failed download (pull the network cable) keeps its partial file; resume retries and continues.
+- [ ] Cancel a paused job: its `.mediaforge-<id>` folder is gone.
+- [ ] Remove a completed job: the row goes, the file stays.
+- [ ] Trash a completed job on Windows: the file is in the Recycle Bin and restores to its folder.
+- [ ] Trash a file that is open in a video player on Windows: the job is reported as failed, the row stays, no dialog appears.
+- [ ] Trash a file on a USB stick or network drive on Windows: refused with "no Recycle Bin"; the file stays.
+- [ ] Trash a completed job on Linux: the file is in the desktop's Trash and restores to its folder.
+- [ ] Trash a file on another mount on Linux: it lands in that mount's `.Trash-<uid>` and the file manager's Trash shows it.
+- [ ] Dismiss the notice: `history.json` has no `notice`, and a new popup or terminal does not see it.
+- [ ] Resume every job a notice named: the notice clears by itself.
+- [ ] Pause a `mediaforge download` job from another client: the CLI prints the paused hint and exits 130.
+- [ ] Trash a file larger than the drive's Recycle Bin size on Windows, without confirmation: refused with code `too-large` and "too large for the Recycle Bin; it would be deleted permanently"; the file and its row stay.
+- [ ] Send `jobs.trash` again for that job with `permanent: true`: the file is deleted for good (not in the Recycle Bin) and the row is dropped.
+- [ ] With "Don't move files to the Recycle Bin" set for a drive on Windows, trash a file there: refused; the file stays.
+- [ ] Trash a file reached through a junction that points to another drive or a network share on Windows: checked against the real drive (refused for a share); never deleted for good.
+- [ ] Resume a paused download that needed browser cookies after restarting the core: it runs without them (it may fail on login-only sites; start it again from the browser).
+
+## Speed unit and bandwidth (downloads manager phase 3a)
+
+- [ ] Sizes in the menu, the download screen, About and `mediaforge formats` read kB/MB/GB (×1000); a 5 MiB file reads 5.2 MB.
+- [ ] Set Speed unit to Mbps: the menu download screen and the `mediaforge download` progress line show Mbps.
+- [ ] Set the Bandwidth limit to Low (1.0 MB/s) during one large real download: within about 3 s the speed drops to about 1 MB/s, the screen never shows Paused, and the byte count keeps growing from where it was.
+- [ ] Start a second download with Low still active: both settle near 0.5 MB/s.
+- [ ] Set the limit back to High: both speed up within about 3 s.
+- [ ] Edit Custom to `40 Mbps` with the unit on MB/s: it saves as 5.0 MB/s. Edit it to empty: it shows "no limit".
+- [ ] Change the preset while a download is merging (Processing): the merge is not interrupted.
+- [ ] Put `"limits": { "med": -5 }` in config.json by hand: Settings shows Med at 5.0 MB/s and the other values are kept.
+
+## Downloads manager (phase 3b)
+
+- [ ] `mediaforge --manager` opens the Downloads table; Esc goes to the home menu. Home → Downloads opens it too. `mediaforge --manager | more` (no terminal) prints `--manager needs a terminal.`
+- [ ] Press `3` (Size), quit, reopen: the table is still sorted by Size.
+- [ ] `/` with part of a title narrows the list and the header shows `search: "…"` and `x of N items`; `f` → Paused shows only paused rows; Esc clears both.
+- [ ] On a large real download: `p` pauses it, `r` resumes it from where it was, `c` then `y` cancels it.
+- [ ] `x` on a finished row asks `Remove 1 download from the list? Files stay on disk.`; `y` removes it and the file stays on disk. On a running row the prompt also says it will be cancelled.
+- [ ] `Del` then `y` on a finished row: the file is in the Recycle Bin (Windows) or the Trash (Linux) and can be restored.
+- [ ] `Del` on a file larger than the Recycle Bin allows: a second prompt says it will be deleted permanently; `y` deletes it.
+- [ ] During a real download: `l` cycles the header limit (High, Med, Low, Custom) and the speed follows within about 3 s; `L` → Low marks the row with `⏷`; `b` switches every speed to Mbps.
+- [ ] `a` with one link returns to the table with the cursor on the new row; `a` with two links (batch) returns with both rows.
+- [ ] Kill the core in Task Manager while the manager is open: the banner says `Reconnecting to MediaForge…`, the rows stay, and they come back live once the core restarts.
+- [ ] With a manager open, send `app.open` from the extension (or a test client): the window flashes and `Opened from browser` shows for a few seconds. Check in conhost, Windows Terminal and one Linux terminal.
+- [ ] Kill the core during a download, reopen the manager: the notice banner shows; `R` resumes the paused downloads, `z` dismisses the notice.
+- [ ] Narrow the window from 130 to under 70 columns: Origin turns into its icon under 120, Last try drops under 112, Type turns into its icon under 100, ETA drops under 90, Speed under 80, and Status turns into its icon (with the percent while downloading or paused) under 70; the rows still fit on one line each. Origin shows its icon and name (`◊ Extension`, `≡ Menu`, `■ Manager`, `▪ CLI`), and `8` or a header click sorts by it.
+- [ ] Type column: a download picked as Video only (menu or extension format list) reads `Video only`, an MP3 `Audio only`, a saved subtitle `Subtitle`, a plain download `Video`. `2` sorts by type; `f` → Type → Video only shows only those rows.
+- [ ] With sort by type on, pick a video-only format in the extension's format list: the file lands in `Video only`, not `Video`.
+- [ ] Load an extension build from before 2026-10-16 (protocol 2) against this app: the popup says `Update this extension: it is older than the MediaForge app on your computer.` With an older app, it says `Update MediaForge: the app on your computer is older than this extension.`
+- [ ] Colors follow the logo: the wordmark goes from cyan (MEDIA) to orange-red (FORGE), keys in hints are orange, headings cyan, warnings amber, errors red-orange, success green. Check conhost, Windows Terminal and one Linux terminal.
+- [ ] Manager with few downloads: the key bar sits on the terminal's last line, under a divider, with the version on the right; keys are colored like the Home screen's hints. Resize the window: it stays at the bottom.
+- [ ] Manager filter (`f`): one column per group (Status, Type, Origin; no Last try), options lined up with their icons (status icons in the table's colors, Paused `││`); the focused option has a `>` before it and no highlight; ←→ picks the group, ↑↓ the option, Space toggles; the key bar shows only these keys while it is open. The header shows the active filters as their colored icons (`filter: ││ ◊`).
+- [ ] Every menu and the folder picker mark the selected row with `>`, like the downloads table.
+- [ ] Manager header: the limit is green for High, amber for Med, red-orange for Low, cyan for Custom; `N active` is cyan above 0, gray at 0; `search:` and `filter:` are amber. A blank line sits under the column headers.
+- [ ] Manager action results show above the divider for a few seconds, with an icon and color: `√ Paused 1` green, `▲ … skipped` amber, `× … failed` red. Del asks `Delete N downloads from disk? Files go to the Recycle Bin.` (the Trash on Linux), then shows `√ Moved to the trash N`.
+- [ ] The key bar starts with `Space Tick  Ctrl+A All`; clicking `Ctrl+A All`, or the `[ ]` above the rows, ticks every visible row and shows `[•]` there; again unticks them.
+
+## Extension popup (phase 4)
+
+- [ ] The popup's Open MediaForge button launches `mediaforge --manager` in a new console window on Windows (conhost and Windows Terminal) and in the first available terminal on Linux.
+- [ ] About › Report a problem: pick App or Extension, type a description (empty is refused), the next screen lists the diagnostics (app, OS, tools, setup, last failed download); "Send with diagnostics" and "Send without diagnostics" both arrive in the form, the latter with "(not included)"; offline shows the error with Try again.
+
+## Mouse (phase 3c)
+
+Run each item in the classic console (cmd), Windows Terminal, the VS Code terminal and one Linux terminal.
+
+- [ ] Home: click a menu item highlights it; double-click opens it; the wheel moves the highlight, with the pointer anywhere on the screen. Clicking `Esc Back` on a sub-screen goes back.
+- [ ] Clicking `Ctrl+C Quit` shows `y/N  Quit MediaForge?`; `n` stays, `y` quits. On a download, `Ctrl+C Cancel` asks `Cancel the download?`. Pressing Ctrl+C on the keyboard still acts at once.
+- [ ] Link screen: a click in the field moves the text cursor there.
+- [ ] Folder picker: a click highlights a folder, a double-click opens it, the wheel moves.
+- [ ] Manager: click a row (cursor), its `[ ]` (tick), Ctrl+click another row (range), double-click (details), a header (sort, again reverses), the wheel (3 rows), `p Pause` in the key bar, `y` / `N` in a prompt.
+- [ ] Manager: with the filter, details or keys panel open, clicks on the list area do nothing; with a y/N prompt open, only `y` and `N` react.
+- [ ] Details: `y` copies the link, `Y` the path; paste them into Notepad or a text editor. Clicking the URL line copies it too.
+- [ ] Hover: moving the pointer over a menu row, a folder, a key hint, a manager row, a header, a key-bar word, a filter option or the detail URL/Path underlines it; moving away removes the underline; the `►` highlight and the cursor do not move. The classic console may show no hover (clicks still work).
+- [ ] Shift+drag selects text in Windows Terminal, VS Code and Linux.
+- [ ] Quit, then in the same window: clicking prints nothing, and in cmd ↑ still recalls the last command (the console input mode was restored).
+- [ ] Windows: right after start the keys work; within about a second clicks work too.
+- [ ] Windows: quit within one second of starting, then in cmd press ↑: it still recalls the last command.

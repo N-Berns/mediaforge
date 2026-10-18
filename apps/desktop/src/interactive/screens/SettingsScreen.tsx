@@ -1,4 +1,5 @@
 import { DEFAULT_PROFILE_ID, getProfile } from "@mediaforge/media-profiles";
+import { formatLimit } from "@mediaforge/shared-types";
 import { Box, Text } from "ink";
 import { useEffect, useState } from "react";
 import { DEFAULT_SETTINGS, MAX_CONCURRENCY, type Settings } from "../../settings.ts";
@@ -7,6 +8,7 @@ import { Menu } from "../components/Menu.tsx";
 import { useDeps } from "../deps.ts";
 import { effectiveFolder } from "../flow.ts";
 import { COLORS, ICONS } from "../theme.ts";
+import { BandwidthScreen, PRESET_NAMES } from "./BandwidthScreen.tsx";
 import { PathPickerScreen } from "./PathPickerScreen.tsx";
 import { profileItems } from "./QualityScreen.tsx";
 
@@ -17,15 +19,26 @@ type Choice =
   | "askQuality"
   | "sortByType"
   | "concurrency"
+  | "speedUnit"
+  | "bandwidth"
+  | "keepRunning"
+  | "extensionUi"
   | "reset"
   | "back";
-type Mode = "menu" | "folder" | "quality" | "concurrency" | "reset";
+type Mode = "menu" | "folder" | "quality" | "concurrency" | "bandwidth" | "reset";
 type Note = { tone: "ok" | "error"; text: string };
 
 const yesNo = (ask: boolean) =>
   `${ask ? ICONS.on : ICONS.off} ${ask ? "Yes" : "No, use the default"}`;
 
-export function SettingsScreen({ onBack }: { onBack: () => void }) {
+export function SettingsScreen({
+  onBack,
+  onSaved,
+}: {
+  onBack: () => void;
+  /** Told about every saved change, so the app can follow the speed unit. */
+  onSaved?: (settings: Settings) => void;
+}) {
   const deps = useDeps();
   const [settings, setSettings] = useState<Settings>();
   const [mode, setMode] = useState<Mode>("menu");
@@ -42,16 +55,29 @@ export function SettingsScreen({ onBack }: { onBack: () => void }) {
 
   if (!settings) return null;
 
-  const save = async (next: Settings) => {
+  /**
+   * Save `next`. With `syncAutostart`, a successful save also sets the login entry for
+   * `next.keepRunning`, so a core started at login matches the setting.
+   */
+  const save = async (next: Settings, syncAutostart = false, stay = false) => {
     try {
       await deps.download.settings.save(next);
+      // The core applies these live, so it re-reads the file at once.
+      const live =
+        next.concurrency !== settings.concurrency ||
+        next.limitPreset !== settings.limitPreset ||
+        JSON.stringify(next.limits) !== JSON.stringify(settings.limits);
+      if (live) void deps.notifyCore();
+      // Never rejects in practice; a failure here must not read as a failed save.
+      if (syncAutostart) await deps.applyAutostart(next.keepRunning).catch(() => {});
       setSettings(next);
+      onSaved?.(next);
       setNote({ tone: "ok", text: "Saved" });
     } catch (error) {
       const text = error instanceof Error ? error.message : String(error);
       setNote({ tone: "error", text: `Could not save settings: ${text}` });
     }
-    setMode("menu");
+    if (!stay) setMode("menu");
   };
 
   const folder = effectiveFolder(deps.download.env, settings, deps.defaultOutputDir);
@@ -68,11 +94,25 @@ export function SettingsScreen({ onBack }: { onBack: () => void }) {
     );
   }
 
+  if (mode === "bandwidth") {
+    return (
+      <BandwidthScreen
+        settings={settings}
+        note={note}
+        onSave={(next) => void save(next, false, true)}
+        onBack={() => {
+          setNote(undefined);
+          setMode("menu");
+        }}
+      />
+    );
+  }
+
   if (mode === "quality") {
     return (
       <Frame
         crumbs={["Home", "Settings", "Quality"]}
-        icon={ICONS.video}
+        icon={ICONS.quality}
         title="Default quality"
         hints={[
           ["↑↓", "Move"],
@@ -94,7 +134,7 @@ export function SettingsScreen({ onBack }: { onBack: () => void }) {
     return (
       <Frame
         crumbs={["Home", "Settings", "Downloads at once"]}
-        icon={ICONS.download}
+        icon={ICONS.parallel}
         title="How many links download at the same time?"
         hints={[
           ["↑↓", "Move"],
@@ -141,10 +181,26 @@ export function SettingsScreen({ onBack }: { onBack: () => void }) {
             All settings go back to the built-in defaults, and you will be asked each time.
           </Text>
         </Box>
+        <Box marginBottom={1}>
+          <Text color={COLORS.muted}>
+            Background running is turned off too, so MediaForge no longer starts at login.
+          </Text>
+        </Box>
         <Menu<boolean>
           initial={false}
           onBack={() => setMode("menu")}
-          onSelect={(yes) => (yes ? void save({ ...DEFAULT_SETTINGS }) : setMode("menu"))}
+          onSelect={(yes) =>
+            yes
+              ? void save(
+                  {
+                    ...DEFAULT_SETTINGS,
+                    limits: { ...DEFAULT_SETTINGS.limits },
+                    managerSort: { ...DEFAULT_SETTINGS.managerSort },
+                  },
+                  true,
+                )
+              : setMode("menu")
+          }
           items={[
             { value: false, icon: ICONS.back, label: "No, keep my settings" },
             { value: true, icon: ICONS.retry, label: "Yes, reset" },
@@ -179,36 +235,70 @@ export function SettingsScreen({ onBack }: { onBack: () => void }) {
             void save({ ...settings, askQuality: !settings.askQuality });
           } else if (choice === "sortByType") {
             void save({ ...settings, sortByType: !settings.sortByType });
+          } else if (choice === "keepRunning") {
+            void save({ ...settings, keepRunning: !settings.keepRunning }, true);
+          } else if (choice === "speedUnit") {
+            void save({ ...settings, speedUnit: settings.speedUnit === "bits" ? "bytes" : "bits" });
+          } else if (choice === "extensionUi") {
+            void save({
+              ...settings,
+              extensionUi: settings.extensionUi === "overlay" ? "popup" : "overlay",
+            });
           } else setMode(choice);
         }}
         items={[
           { value: "folder", icon: ICONS.folder, label: "Default download folder", hint: folder },
           {
             value: "askFolder",
-            icon: ICONS.settings,
+            icon: ICONS.askFolder,
             label: "Ask for the folder each time",
             hint: yesNo(settings.askFolder),
           },
-          { value: "quality", icon: ICONS.video, label: "Default quality", hint: qualityName },
+          { value: "quality", icon: ICONS.quality, label: "Default quality", hint: qualityName },
           {
             value: "askQuality",
-            icon: ICONS.settings,
+            icon: ICONS.askQuality,
             label: "Ask for the quality each time",
             hint: yesNo(settings.askQuality),
           },
           {
             value: "sortByType",
-            icon: ICONS.folder,
+            icon: ICONS.sortByType,
             label: "Sort into folders by type",
             hint: `${settings.sortByType ? ICONS.on : ICONS.off} ${settings.sortByType ? "Yes (Video, Video only, Audio)" : "No, save straight into the folder"}`,
           },
           {
             value: "concurrency",
-            icon: ICONS.download,
+            icon: ICONS.parallel,
             label: "Downloads at once",
             hint: `${settings.concurrency} (when you give several links)`,
           },
-          { value: "reset", icon: ICONS.retry, label: "Reset to built-in defaults" },
+          {
+            value: "speedUnit",
+            icon: ICONS.speedUnit,
+            label: "Speed unit",
+            hint:
+              settings.speedUnit === "bits" ? "Mbps (bits per second)" : "MB/s (bytes per second)",
+          },
+          {
+            value: "bandwidth",
+            icon: ICONS.bandwidth,
+            label: "Bandwidth limit",
+            hint: `${PRESET_NAMES[settings.limitPreset]} (${formatLimit(settings.limits[settings.limitPreset], settings.speedUnit)})`,
+          },
+          {
+            value: "keepRunning",
+            icon: ICONS.background,
+            label: "Keep running in the background",
+            hint: `${settings.keepRunning ? ICONS.on : ICONS.off} ${settings.keepRunning ? "Yes, start at login" : "No, start when the browser needs it"}`,
+          },
+          {
+            value: "extensionUi",
+            icon: ICONS.videoButton,
+            label: "Download button on videos",
+            hint: `${settings.extensionUi === "overlay" ? ICONS.on : ICONS.off} ${settings.extensionUi === "overlay" ? "Yes (browser extension)" : "No, toolbar popup only"}`,
+          },
+          { value: "reset", icon: ICONS.reset, label: "Reset to built-in defaults" },
           { value: "back", icon: ICONS.back, label: "Back" },
         ]}
       />

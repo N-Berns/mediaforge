@@ -1,11 +1,14 @@
 import { describe, expect, it } from "vitest";
+import type { EngineJob } from "../engine/engine.ts";
 import type { MediaInfo } from "../formats.ts";
 import {
   assignAll,
   assignKind,
   type BatchItem,
+  batchPercent,
   choiceFor,
   clearChoices,
+  countJobs,
   downloadable,
   isUnusable,
   presetChoice,
@@ -122,5 +125,37 @@ describe("assigning a type", () => {
     const next = assignKind(items, "audio", "mp3");
     expect(downloadable(next).map((i) => i.url)).toEqual([video.url, track.url, blind.url]);
     expect(downloadable(items)).toEqual([]);
+  });
+});
+
+describe("counting links", () => {
+  const job = (status: EngineJob["status"]): EngineJob => ({
+    id: status,
+    request: {
+      candidate: {
+        id: "u",
+        pageUrl: "https://e.com/v",
+        url: "https://e.com/v",
+        kind: "video",
+        streamType: "progressive",
+        source: "dom",
+        variants: [],
+        detectedAt: 0,
+      },
+      profileId: "best",
+    },
+    status,
+    progress: { bytesDownloaded: 0 },
+    createdAt: 0,
+    updatedAt: 0,
+  });
+
+  it("counts a paused link with the cancelled ones, not as running", () => {
+    const counts = countJobs([job("paused"), job("cancelled"), job("downloading")]);
+    expect(counts).toMatchObject({ cancelled: 2, running: 1 });
+  });
+
+  it("counts a paused link as finished in the batch percent", () => {
+    expect(batchPercent([job("paused"), job("completed")])).toBe(100);
   });
 });

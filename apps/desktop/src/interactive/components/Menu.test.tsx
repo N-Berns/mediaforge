@@ -1,5 +1,10 @@
+import { Box } from "ink";
 import { render } from "ink-testing-library";
+import type { ReactElement } from "react";
 import { describe, expect, it, vi } from "vitest";
+import { InputHub } from "../mouse/input.ts";
+import { MouseProvider } from "../mouse/MouseProvider.tsx";
+import { attachTestStdin, clickAt, moveAt, wheelAt } from "../mouse/testing.ts";
 import { dividerItem, Menu, type MenuItem } from "./Menu.tsx";
 import { TextField } from "./TextField.tsx";
 import { ENTER_LOCK_MS } from "./use-enter-lock.ts";
@@ -14,10 +19,29 @@ const items: MenuItem<string>[] = [
 ];
 
 describe("Menu number labels", () => {
+  it("reports the highlighted value as it moves", async () => {
+    const seen: string[] = [];
+    const app = render(
+      <Menu<string>
+        items={[
+          { value: "a", label: "A" },
+          { value: "b", label: "B" },
+        ]}
+        onSelect={() => {}}
+        onHighlight={(value) => seen.push(value)}
+      />,
+    );
+    await tick();
+    app.stdin.write("\u001B[B");
+    await tick();
+    expect(seen).toEqual(["a", "b"]);
+    app.unmount();
+  });
+
   it("numbers each selectable row and leaves disabled rows blank", () => {
     const app = render(<Menu items={items} onSelect={() => {}} />);
     const frame = app.lastFrame() ?? "";
-    expect(frame).toMatch(/► 1 Alpha/);
+    expect(frame).toMatch(/> 1 Alpha/);
     expect(frame).toMatch(/ {2}2 Bravo/);
     expect(frame).not.toMatch(/3 Charlie/);
     app.unmount();
@@ -129,6 +153,128 @@ describe("double Enter", () => {
     await tick(90);
     expect(onSubmit).toHaveBeenCalledTimes(1);
     expect(onSubmit).toHaveBeenCalledWith("hello");
+    app.unmount();
+  });
+});
+
+/** `now` is the clock the double-click check reads; tests move it by hand. */
+function withMouse(tree: ReactElement, now: () => number = () => 0) {
+  const hub = new InputHub();
+  const app = render(
+    <MouseProvider hub={hub} now={now}>
+      {tree}
+    </MouseProvider>,
+  );
+  attachTestStdin(hub, app.stdin);
+  return app;
+}
+
+describe("Menu mouse", () => {
+  const four: MenuItem<string>[] = [
+    { value: "a", label: "Alpha" },
+    { value: "b", label: "Bravo" },
+    { value: "c", label: "Charlie", disabled: true },
+    { value: "d", label: "Delta" },
+  ];
+
+  it("one click picks the row", async () => {
+    const onSelect = vi.fn();
+    const app = withMouse(<Menu items={four} onSelect={onSelect} />);
+    await tick();
+    app.stdin.write(clickAt(4, 1));
+    await vi.waitFor(() => expect(onSelect).toHaveBeenCalledWith("b"));
+    expect(onSelect).toHaveBeenCalledTimes(1);
+  });
+
+  it("a double-click picks once", async () => {
+    const onSelect = vi.fn();
+    const app = withMouse(<Menu items={four} onSelect={onSelect} />);
+    await tick();
+    app.stdin.write(clickAt(4, 1));
+    app.stdin.write(clickAt(4, 1));
+    await vi.waitFor(() => expect(onSelect).toHaveBeenCalledWith("b"));
+    await tick();
+    expect(onSelect).toHaveBeenCalledTimes(1);
+  });
+
+  it("clicking a row in a scrolled list picks that row", async () => {
+    const ten: MenuItem<string>[] = [..."abcdefghij"].map((value) => ({
+      value,
+      label: value.toUpperCase(),
+    }));
+    const onSelect = vi.fn();
+    const app = withMouse(<Menu items={ten} onSelect={onSelect} maxVisible={5} />);
+    await tick();
+    app.stdin.write(clickAt(2, 4));
+    await vi.waitFor(() => expect(onSelect).toHaveBeenCalledWith("e"));
+  });
+
+  it("ignores clicks on disabled rows", async () => {
+    const app = withMouse(<Menu items={four} onSelect={() => {}} />);
+    await tick();
+    app.stdin.write(clickAt(4, 2));
+    await tick();
+    expect(app.lastFrame()).toMatch(/> 1 Alpha/);
+  });
+
+  it("hover does not move the highlight", async () => {
+    const onSelect = vi.fn();
+    const app = withMouse(<Menu items={four} onSelect={onSelect} />);
+    await tick();
+    app.stdin.write(moveAt(4, 3));
+    await tick(60);
+    expect(app.lastFrame()).toMatch(/> 1 Alpha/);
+    app.stdin.write(ENTER);
+    await vi.waitFor(() => expect(onSelect).toHaveBeenCalledWith("a"));
+  });
+
+  it("disabled rows take no clicks", async () => {
+    const app = withMouse(<Menu items={four} onSelect={() => {}} />);
+    await tick();
+    app.stdin.write(clickAt(4, 2));
+    app.stdin.write(clickAt(4, 2));
+    await tick(60);
+    expect(app.lastFrame()).toMatch(/> 1 Alpha/);
+  });
+
+  it("the wheel moves the highlight, skipping disabled rows", async () => {
+    const app = withMouse(<Menu items={four} onSelect={() => {}} />);
+    await tick();
+    app.stdin.write(wheelAt(4, 0, 1));
+    app.stdin.write(wheelAt(4, 0, 1));
+    await vi.waitFor(() => expect(app.lastFrame()).toMatch(/> 4 Delta/));
+  });
+});
+
+describe("TextField mouse", () => {
+  it("a click puts the cursor on the clicked character", async () => {
+    const onSubmit = vi.fn();
+    const app = withMouse(<TextField initial="abcdef" onSubmit={onSubmit} onCancel={() => {}} />);
+    await tick();
+    // Border (1) + padding (1) + "> " (2): the text starts at column 4. Column 6 is "c".
+    app.stdin.write(clickAt(6, 1));
+    await tick();
+    app.stdin.write("X");
+    await vi.waitFor(() => expect(app.lastFrame()).toContain("abXcdef"));
+  });
+});
+
+describe("Menu pinned Back", () => {
+  it("puts a trailing Back or Quit on the last free row", () => {
+    const app = render(
+      <Box flexDirection="column" height={8}>
+        <Menu
+          items={[
+            { value: "a", label: "Alpha" },
+            { value: "back", label: "Back" },
+          ]}
+          onSelect={() => {}}
+        />
+      </Box>,
+    );
+    const lines = (app.lastFrame() ?? "").split("\n");
+    expect(lines.findIndex((l) => l.includes("Alpha"))).toBe(0);
+    expect(lines.findIndex((l) => l.includes("Back"))).toBe(7);
     app.unmount();
   });
 });

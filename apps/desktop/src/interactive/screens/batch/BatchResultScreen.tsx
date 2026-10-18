@@ -82,17 +82,18 @@ export function BatchResultScreen({ plans, jobs, onAction }: BatchResultScreenPr
               </Text>
             );
           }
-          const cancelled = job.status === "cancelled";
+          const paused = job.status === "paused";
+          const cancelled = job.status === "cancelled" || paused;
+          const color = paused ? COLORS.paused : cancelled ? COLORS.error : COLORS.failed;
+          const icon = paused ? ICONS.paused : cancelled ? ICONS.stop : ICONS.error;
           return (
             <Box key={plan.url} flexDirection="column">
               <Text>
-                <Text color={cancelled ? COLORS.warn : COLORS.error}>
-                  {cancelled ? ICONS.warn : ICONS.error}{" "}
-                </Text>
+                <Text color={color}>{icon} </Text>
                 {shorten(plan.title ?? plan.url, width)}
               </Text>
               {cancelled ? (
-                <Text color={COLORS.muted}>{"   cancelled"}</Text>
+                <Text color={COLORS.muted}>{`   ${job.status}`}</Text>
               ) : (
                 <>
                   <Text

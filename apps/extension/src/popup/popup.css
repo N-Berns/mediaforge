@@ -1,0 +1,492 @@
+/* Thin scrollbars: Firefox reads scrollbar-width; Chromium browsers (Brave, Chrome) need the
+   webkit pseudo-elements, and ignore those once scrollbar-width is set, so each gets its own. */
+@supports (-moz-appearance: none) {
+  * {
+    scrollbar-width: thin;
+  }
+}
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-thumb {
+  background: color-mix(in srgb, GrayText 55%, transparent);
+  border-radius: 3px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: GrayText;
+}
+::-webkit-scrollbar-track,
+::-webkit-scrollbar-corner {
+  background: transparent;
+}
+:root {
+  color-scheme: light dark;
+  --accent: #ff7a2f;
+  --accent-ink: #14161c;
+}
+:root[data-theme="light"] {
+  color-scheme: light;
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
+}
+html,
+body {
+  background: Canvas;
+  color: CanvasText;
+}
+/* A fixed size: the browser resizes the popup panel whenever the page's size changes, and that
+   resize flashes. The content scrolls inside instead, so folding a section never resizes it. */
+body {
+  width: 340px;
+  height: 480px;
+  margin: 0;
+  overflow: hidden;
+  font:
+    var(--fs, 12px) / 1.4 system-ui,
+    sans-serif;
+}
+#app {
+  box-sizing: border-box;
+  height: 100%;
+  overflow-y: auto;
+  padding: 12px;
+  display: grid;
+  align-content: start;
+  gap: 10px;
+}
+.banner {
+  padding: 8px 10px;
+  border-radius: 6px;
+  background: Canvas;
+  border: 1px solid GrayText;
+}
+.banner[data-tone="warn"] {
+  border-color: #b26a00;
+}
+.banner[data-tone="error"] {
+  border-color: #b00020;
+}
+.topbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding-bottom: 6px;
+  border-bottom: 1px solid color-mix(in srgb, GrayText 40%, transparent);
+}
+.banner-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 6px;
+}
+.preset-field {
+  flex-wrap: wrap;
+}
+.row {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 8px;
+  align-items: center;
+}
+select {
+  font: inherit;
+}
+.row .sub,
+.choice .sub {
+  color: GrayText;
+  font-size: 0.92em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+button {
+  font: inherit;
+  padding: 4px 10px;
+  color: CanvasText;
+  background: color-mix(in srgb, CanvasText 7%, Canvas);
+  border: 1px solid color-mix(in srgb, GrayText 50%, transparent);
+  border-radius: 6px;
+  cursor: pointer;
+  transition:
+    background-color 0.12s,
+    border-color 0.12s,
+    filter 0.12s;
+}
+button:hover:not(:disabled) {
+  background: color-mix(in srgb, CanvasText 14%, Canvas);
+  border-color: GrayText;
+}
+button:active:not(:disabled) {
+  background: color-mix(in srgb, CanvasText 22%, Canvas);
+  transform: translateY(1px);
+}
+button:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+button:disabled {
+  cursor: default;
+  opacity: 0.55;
+}
+.tag {
+  display: inline-block;
+  margin-top: 2px;
+  padding: 0 6px;
+  border-radius: 999px;
+  font-size: 0.85em;
+  color: GrayText;
+  border: 1px solid color-mix(in srgb, GrayText 45%, transparent);
+}
+progress {
+  width: 100%;
+}
+.toggle {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+.field {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  justify-content: space-between;
+}
+.section-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding-bottom: 4px;
+  border-bottom: 1px solid color-mix(in srgb, GrayText 40%, transparent);
+}
+h2 {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.92em;
+  margin: 0;
+  color: GrayText;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.font-size {
+  display: grid;
+  gap: 6px;
+}
+.font-size input[type="range"] {
+  flex: 1;
+  margin: 0;
+}
+.segmented {
+  display: inline-flex;
+  border: 1px solid color-mix(in srgb, GrayText 45%, transparent);
+  border-radius: 6px;
+  overflow: hidden;
+}
+.segmented button {
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: GrayText;
+  padding: 3px 9px;
+}
+.segmented button + button {
+  border-left: 1px solid color-mix(in srgb, GrayText 35%, transparent);
+}
+.segmented button:hover:not(:disabled) {
+  background: color-mix(in srgb, CanvasText 10%, transparent);
+  border-color: transparent;
+  color: CanvasText;
+}
+.segmented button:active:not(:disabled) {
+  background: color-mix(in srgb, CanvasText 20%, transparent);
+}
+.segmented button[aria-checked="true"] {
+  background: color-mix(in srgb, CanvasText 14%, transparent);
+  color: CanvasText;
+}
+#app.picking {
+  display: flex;
+  flex-direction: column;
+}
+/* The sections under the picker keep their own height; without this, open sections with many
+   downloads squeezed the picker to nothing. The popup scrolls when they do not all fit. */
+#app.picking > :not(.picker) {
+  flex: none;
+}
+.picker {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  flex: 1;
+  min-height: 260px;
+}
+.picker-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+}
+.choice {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 8px;
+  align-items: center;
+  padding: 4px 6px;
+  border-radius: 6px;
+  cursor: pointer;
+}
+.choice:hover {
+  background: color-mix(in srgb, CanvasText 8%, transparent);
+}
+.pickbar {
+  display: flex;
+  gap: 8px;
+  flex: none;
+  padding-top: 10px;
+  border-top: 1px solid color-mix(in srgb, GrayText 40%, transparent);
+}
+.pickbar .primary {
+  flex: 1;
+  justify-content: center;
+}
+button.primary {
+  border: 1px solid var(--accent);
+  border-radius: 6px;
+  background: var(--accent);
+  color: var(--accent-ink);
+  font-weight: 600;
+}
+button.primary:hover:not(:disabled) {
+  background: var(--accent);
+  border-color: var(--accent);
+  filter: brightness(1.12);
+}
+button.primary:active:not(:disabled) {
+  background: var(--accent);
+  filter: brightness(0.9);
+}
+.icon {
+  width: 14px;
+  height: 14px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  flex: none;
+}
+button:has(.icon) {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+.section-actions,
+.job-end {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+button.icon-only {
+  padding: 4px 6px;
+}
+button.icon-only span:empty {
+  display: none;
+}
+
+.diagnostics > summary,
+.collapsible > summary {
+  list-style: none;
+  cursor: pointer;
+  user-select: none;
+}
+.diagnostics > summary::-webkit-details-marker,
+.collapsible > summary::-webkit-details-marker {
+  display: none;
+}
+.collapsible > summary h2 {
+  flex: 1;
+}
+.diagnostics > summary:hover h2,
+.collapsible > summary:hover h2 {
+  color: CanvasText;
+}
+.chevron {
+  width: 7px;
+  height: 7px;
+  margin-right: 3px;
+  border-right: 2px solid GrayText;
+  border-bottom: 2px solid GrayText;
+  transform: rotate(-45deg);
+  transition: transform 0.15s ease;
+}
+.diagnostics[open] > summary .chevron,
+.collapsible[open] > summary .chevron {
+  transform: rotate(45deg);
+}
+.collapsible-body {
+  display: grid;
+  gap: 10px;
+  margin-top: 8px;
+}
+.diagnostics-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 8px;
+}
+.diagnostics-text {
+  white-space: pre-wrap;
+  word-break: break-all;
+  font-size: 11px;
+  max-height: 240px;
+  overflow: auto;
+  user-select: text;
+}
+
+.count {
+  margin-left: auto;
+  color: GrayText;
+  font-size: 0.92em;
+  white-space: nowrap;
+}
+.error-link {
+  padding: 0 6px;
+  color: #b00020;
+  background: none;
+  border: 0;
+  text-decoration: underline;
+}
+.modal {
+  position: fixed;
+  inset: 0;
+  z-index: 10;
+  display: grid;
+  place-items: center;
+  padding: 12px;
+  background: color-mix(in srgb, CanvasText 45%, transparent);
+}
+.modal-card {
+  display: grid;
+  gap: 8px;
+  max-width: 100%;
+  max-height: 100%;
+  overflow: auto;
+  padding: 12px;
+  border-radius: 8px;
+  background: Canvas;
+  border: 1px solid GrayText;
+}
+.modal-card pre {
+  max-height: 240px;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.about-info,
+.report {
+  display: grid;
+  gap: 6px;
+  margin-top: 8px;
+}
+.about-heading {
+  margin-top: 6px;
+}
+.about-info a {
+  color: var(--accent);
+}
+.credit {
+  align-items: baseline;
+}
+.credit .sub {
+  text-align: right;
+}
+.report-status {
+  padding: 6px 10px;
+  border-left: 3px solid GrayText;
+  border-radius: 4px;
+  background: color-mix(in srgb, GrayText 12%, transparent);
+}
+.report-status:empty {
+  display: none;
+}
+.report-status[data-tone="pending"] {
+  color: GrayText;
+}
+.report-status[data-tone="ok"] {
+  border-color: #1e8e3e;
+  background: color-mix(in srgb, #1e8e3e 14%, transparent);
+}
+.report-status[data-tone="error"] {
+  border-color: #b00020;
+  background: color-mix(in srgb, #b00020 14%, transparent);
+}
+.report textarea {
+  font: inherit;
+  resize: vertical;
+}
+.seg-presets .seg-tab {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 1px;
+  min-width: 52px;
+  padding: 3px 8px;
+  line-height: 1.25;
+  cursor: pointer;
+  color: GrayText;
+}
+.seg-presets .seg-tab + .seg-tab {
+  border-left: 1px solid color-mix(in srgb, GrayText 35%, transparent);
+}
+.seg-presets .seg-tab:hover {
+  background: color-mix(in srgb, CanvasText 10%, transparent);
+  color: CanvasText;
+}
+.seg-presets .seg-tab[aria-checked="true"] {
+  background: color-mix(in srgb, CanvasText 14%, transparent);
+  color: CanvasText;
+}
+.seg-value,
+.seg-bottom {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font-size: 0.85em;
+  opacity: 0.85;
+}
+.seg-value .icon {
+  width: 14px;
+  height: 14px;
+}
+.seg-custom .custom-number {
+  font: inherit;
+  width: 6ch;
+  padding: 1px 5px;
+  text-align: right;
+  color: CanvasText;
+  background: Canvas;
+  border: 1px solid color-mix(in srgb, GrayText 55%, transparent);
+  border-radius: 5px;
+  outline: none;
+}
+.seg-custom .custom-number:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 30%, transparent);
+}
+.seg-custom .seg-unit {
+  opacity: 0.8;
+}
+.preset-limit .field-error {
+  color: #b00020;
+}
+.preset-limit .field-error:empty {
+  display: none;
+}

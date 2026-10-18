@@ -1,4 +1,5 @@
 import { basename, dirname } from "node:path";
+import { formatBytes } from "@mediaforge/shared-types";
 import { Box, Text } from "ink";
 import { useEffect, useState } from "react";
 import type { EngineJob } from "../../engine/index.ts";
@@ -7,7 +8,7 @@ import { Card } from "../components/Card.tsx";
 import { Frame } from "../components/Frame.tsx";
 import { Menu, type MenuItem } from "../components/Menu.tsx";
 import { useDeps } from "../deps.ts";
-import { failureHint, formatBytes } from "../hints.ts";
+import { failureHint } from "../hints.ts";
 import { COLORS, ICONS } from "../theme.ts";
 
 export type ResultAction = "open" | "again" | "retry" | "update" | "quality" | "home" | "quit";
@@ -79,8 +80,8 @@ export function ResultScreen({ job, onAction }: ResultScreenProps) {
   return (
     <Frame
       crumbs={["Home", "Download", cancelled ? "Cancelled" : "Failed"]}
-      icon={cancelled ? ICONS.warn : ICONS.error}
-      tone={cancelled ? "warn" : "error"}
+      icon={cancelled ? ICONS.stop : ICONS.error}
+      tone={cancelled ? "error" : "failed"}
       title={cancelled ? "Download cancelled" : "Download failed"}
       hints={[...hints]}
       hideNotice

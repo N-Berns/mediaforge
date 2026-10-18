@@ -1,4 +1,5 @@
 import type { Tool } from "@mediaforge/binary-resolver";
+import { formatBytes } from "@mediaforge/shared-types";
 import { type ResolveTool, requireTool, resolveTool } from "./binaries.ts";
 import type { Io } from "./commands.ts";
 import { FORMAT_SORT } from "./engine/args.ts";
@@ -7,7 +8,6 @@ import { classifyFailure } from "./engine/progress.ts";
 import { CliError, ExitCode } from "./exit-codes.ts";
 import { detectJsRuntimeArgs } from "./js-runtime.ts";
 import { parseCommandArgs, parseHttpUrl } from "./parse.ts";
-import { formatBytes } from "./progress-view.ts";
 import { withUpdateHint } from "./stale-extractor.ts";
 import { defaultEnsureTools } from "./tool-runtime.ts";
 
@@ -37,7 +37,19 @@ export interface MediaInfo {
   channel?: string;
   /** Seconds. */
   duration?: number;
+  /** yt-dlp's extractor name, e.g. "Youtube" or "Generic". */
+  extractor_key?: string;
   formats?: RawFormat[];
+  /** Uploaded subtitles: language -> files in each format. */
+  subtitles?: Record<string, RawSubtitle[]>;
+  /** Machine-generated captions, including YouTube's auto-translations. */
+  automatic_captions?: Record<string, RawSubtitle[]>;
+}
+
+export interface RawSubtitle {
+  ext?: string;
+  url?: string;
+  name?: string;
 }
 
 /** "avc1.640028" -> "avc1"; "none" or missing -> "-". */
@@ -85,6 +97,8 @@ export interface FormatsDeps {
   ensureTools?: (tools: Tool[]) => Promise<void>;
   /** Extra yt-dlp flags that enable a JavaScript runtime. Default: none. */
   jsRuntimeArgs?: () => Promise<string[]>;
+  /** Stops yt-dlp when aborted. Default: never aborted. */
+  signal?: AbortSignal;
 }
 
 const defaultFormatsDeps = (): FormatsDeps => ({
@@ -116,7 +130,7 @@ export async function fetchMediaInfo(
       url,
     ],
     { onStdoutLine: (l) => stdout.push(l), onStderrLine: (l) => stderr.push(l) },
-    new AbortController().signal,
+    deps.signal ?? new AbortController().signal,
   );
   if (exitCode !== 0) {
     const failure = classifyFailure(stderr, exitCode);

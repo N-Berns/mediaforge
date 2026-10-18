@@ -1,10 +1,11 @@
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import { run } from "../cli.ts";
 import type { EngineJob } from "../engine/index.ts";
 import { ExitCode } from "../exit-codes.ts";
+import { powershellPath } from "../powershell.ts";
 import { DEFAULT_SETTINGS } from "../settings.ts";
-import { clipboardCommands, readClipboard } from "./clipboard.ts";
+import { clipboardCommands, copyCommands, readClipboard, writeClipboard } from "./clipboard.ts";
 import { clipboardHint, shorten } from "./clipboard-hint.ts";
 import { stepIndex, visibleWindow } from "./components/Menu.tsx";
 import { renderBar } from "./components/ProgressBar.tsx";
@@ -76,7 +77,7 @@ describe("progress bar", () => {
 
 describe("clipboard", () => {
   it("picks the right tool per platform", () => {
-    expect(clipboardCommands("win32", {})[0]?.command).toBe("powershell.exe");
+    expect(clipboardCommands("win32", {})[0]?.command).toBe(powershellPath({}));
     expect(clipboardCommands("linux", { WAYLAND_DISPLAY: "w" })[0]?.command).toBe("wl-paste");
     expect(clipboardCommands("linux", {})[0]?.command).toBe("xclip");
   });
@@ -104,6 +105,55 @@ describe("clipboard", () => {
         {},
       ),
     ).toBeUndefined();
+  });
+
+  it("copies with Set-Clipboard on Windows, the text on stdin", () => {
+    const [first] = copyCommands("win32", {});
+    expect(first?.command).toBe(powershellPath({}));
+    expect(first?.args.join(" ")).toContain("Set-Clipboard");
+    expect(first?.args.join(" ")).toContain("[Console]::OpenStandardInput()");
+  });
+
+  it("leaves the shared console's code pages alone on Windows", () => {
+    for (const { args } of [...clipboardCommands("win32", {}), ...copyCommands("win32", {})]) {
+      expect(args.join(" ")).not.toContain("InputEncoding");
+      expect(args.join(" ")).not.toContain("OutputEncoding");
+    }
+    expect(clipboardCommands("win32", {})[0]?.args.join(" ")).toContain(
+      "[Console]::OpenStandardOutput()",
+    );
+  });
+
+  it("copies with wl-copy, then xclip, then xsel on Linux", () => {
+    expect(copyCommands("linux").map((c) => c.command)).toEqual(["wl-copy", "xclip", "xsel"]);
+  });
+
+  it("writeClipboard tries the tools in order and passes the text on stdin", async () => {
+    const calls: [string, string][] = [];
+    const ok = await writeClipboard(
+      "https://example.com/v",
+      async (command, _args, input) => {
+        calls.push([command, input]);
+        if (command === "wl-copy") throw new Error("no wayland");
+      },
+      "linux",
+    );
+    expect(ok).toBe(true);
+    expect(calls).toEqual([
+      ["wl-copy", "https://example.com/v"],
+      ["xclip", "https://example.com/v"],
+    ]);
+  });
+
+  it("writeClipboard is false when no tool works", async () => {
+    const ok = await writeClipboard(
+      "x",
+      async () => {
+        throw new Error("missing");
+      },
+      "linux",
+    );
+    expect(ok).toBe(false);
   });
 
   it("finds every link in clipboard text, ignoring prose and punctuation", () => {
@@ -212,7 +262,8 @@ describe("flow", () => {
       url: draft.url,
       title: "T",
       profileId: "best",
-      outputDir: "/o",
+      kind: "video-audio",
+      outputDir: resolve("/o"),
       formatSelector: "18",
     });
   });
@@ -222,10 +273,15 @@ describe("type folders", () => {
   const draft = { url: "https://e.com/v", profileId: "best", outputDir: "/o" };
 
   it("sorts into a subfolder per kind, following the profile when no kind was picked", () => {
-    expect(toPlan(draft, true).outputDir).toBe(join("/o", "Video"));
-    expect(toPlan({ ...draft, kind: "video" }, true).outputDir).toBe(join("/o", "Video only"));
-    expect(toPlan({ ...draft, profileId: "audio-m4a" }, true).outputDir).toBe(join("/o", "Audio"));
-    expect(toPlan({ ...draft, kind: "audio" }, false).outputDir).toBe("/o");
+    expect(toPlan(draft, true).outputDir).toBe(join(resolve("/o"), "Video"));
+    expect(toPlan({ ...draft, kind: "video" }, true).outputDir).toBe(
+      join(resolve("/o"), "Video only"),
+    );
+    expect(toPlan({ ...draft, profileId: "audio-m4a" }, true).outputDir).toBe(
+      join(resolve("/o"), "Audio"),
+    );
+    expect(toPlan({ ...draft, kind: "audio" }, false).outputDir).toBe(resolve("/o"));
+    expect(toPlan({ ...draft, outputDir: "rel/out" }, false).outputDir).toBe(resolve("rel/out"));
   });
 
   it("names the subfolder only while sorting is on", () => {
@@ -259,10 +315,18 @@ describe("hints", () => {
   });
 
   it("summarises progress with whatever is known", () => {
-    expect(describeProgress({ bytesDownloaded: 1024 })).toBe("1.0 KB");
+    expect(describeProgress({ bytesDownloaded: 1024 })).toBe("1.0 kB");
     expect(
-      describeProgress({ bytesDownloaded: 1024, totalBytes: 2048, speed: 512, etaSec: 2 }),
-    ).toBe("1.0 KB of 2.0 KB · 512 B/s · ETA 2s");
+      describeProgress({
+        bytesDownloaded: 1024,
+        totalBytes: 2048,
+        speed: 512,
+        etaSec: 2,
+      }),
+    ).toBe("1.0 kB of 2.0 kB · 512 B/s · ETA 2s");
+    expect(describeProgress({ bytesDownloaded: 1024, speed: 512 }, "bits")).toBe(
+      "1.0 kB · 4.1 kbps",
+    );
   });
 
   it("labels the download stage from the running step", () => {
@@ -287,7 +351,7 @@ describe("hints", () => {
     ];
     expect(
       activeDetail({ status: "downloading", steps, progress: { bytesDownloaded: 0 } } as EngineJob),
-    ).toBe("1.0 KB of 2.0 KB");
+    ).toBe("1.0 kB of 2.0 kB");
     expect(
       activeDetail({
         status: "processing",
@@ -438,7 +502,7 @@ describe("formatChoices", () => {
       },
       "video",
     );
-    expect(rows[0]?.hint).toMatch(/47\.7 MB$/);
+    expect(rows[0]?.hint).toMatch(/50\.0 MB$/);
     expect(rows[1]?.hint).toMatch(/ -$/);
     expect(rows[2]?.hint).toMatch(/~\d/);
   });
@@ -460,6 +524,19 @@ describe("openCommand", () => {
       verbatim: true,
     });
     expect(openCommand("/a/c.mp4", "linux")).toMatchObject({ command: "xdg-open" });
+  });
+
+  it("opens a folder itself, without selecting anything in it", () => {
+    expect(openCommand("C:\\a b\\Media", "win32", false)).toEqual({
+      command: "explorer.exe",
+      args: ['"C:\\a b\\Media"'],
+      verbatim: true,
+    });
+    expect(openCommand("/a/Media", "linux", false)).toEqual({
+      command: "xdg-open",
+      args: ["/a/Media"],
+      verbatim: false,
+    });
   });
 });
 

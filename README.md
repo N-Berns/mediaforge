@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="assets/brand/png/icon-128.png" alt="MediaForge logo" width="96" height="96">
+</p>
+
 # MediaForge
 
 Cross-platform media downloader: a browser extension, a desktop host/CLI, and an Android app, built on shared TypeScript packages.

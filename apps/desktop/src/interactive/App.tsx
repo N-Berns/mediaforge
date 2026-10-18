@@ -1,3 +1,4 @@
+import type { SpeedUnit } from "@mediaforge/shared-types";
 import { useApp, useInput } from "ink";
 import { useEffect, useRef, useState } from "react";
 import { isRequired } from "../doctor.ts";
@@ -23,11 +24,15 @@ import { FormatsScreen } from "./screens/FormatsScreen.tsx";
 import { HomeScreen } from "./screens/HomeScreen.tsx";
 import { LinkScreen } from "./screens/LinkScreen.tsx";
 import { LookupScreen } from "./screens/LookupScreen.tsx";
+import { ManagerScreen, type ManagerView } from "./screens/ManagerScreen.tsx";
 import { QualityScreen } from "./screens/QualityScreen.tsx";
+import { ReportScreen } from "./screens/ReportScreen.tsx";
 import { type ResultAction, ResultScreen } from "./screens/ResultScreen.tsx";
 import { SettingsScreen } from "./screens/SettingsScreen.tsx";
 import { SetupScreen } from "./screens/SetupScreen.tsx";
 import { UpdateScreen } from "./screens/UpdateScreen.tsx";
+import { SpeedUnitContext } from "./speed-unit.ts";
+import { submitPlans } from "./submit.ts";
 
 type Screen =
   | { name: "home" }
@@ -43,23 +48,44 @@ type Screen =
   | { name: "batch"; urls: string[] }
   | { name: "settings" }
   | { name: "setup"; prompt?: boolean; autoDownload?: boolean }
-  | { name: "about" };
+  | { name: "about" }
+  | { name: "report" }
+  /** `focusId`: the row Add link just started; `note`: why it could not start one. */
+  | { name: "manager"; focusId?: string; note?: string };
 
 /** How long to wait for the tool check before opening the link screen anyway. */
 const TOOL_CHECK_GRACE_MS = 150;
 const SETUP_PROMPT: Screen = { name: "setup", prompt: true };
+const MANAGER: Screen = { name: "manager" };
 const wait = (ms: number) => new Promise<undefined>((resolve) => setTimeout(resolve, ms));
 
-export function App({ deps }: { deps: AppDeps }) {
+export function App({ deps, start }: { deps: AppDeps; start?: "manager" }) {
   const { exit } = useApp();
-  const nav = useNav<Screen>({ name: "home" });
+  const nav = useNav<Screen>({ name: "home" }, ...(start === "manager" ? [MANAGER] : []));
   const notices = useNoticeState();
   const screen = nav.current;
   /** Counts downloads started, so each (including retries) gets a fresh screen instance. */
   const runCounter = useRef(0);
   const [batchBusy, setBatchBusy] = useState(false);
+  const [speedUnit, setSpeedUnit] = useState<SpeedUnit>("bytes");
+  useEffect(() => {
+    let live = true;
+    deps.download.settings
+      .load()
+      .then((s) => live && setSpeedUnit(s.speedUnit))
+      .catch(() => {});
+    return () => {
+      live = false;
+    };
+  }, [deps]);
   /** True while Home checks the tools, so a second pick does not stack another screen. */
   const checkingTools = useRef(false);
+  /** The manager's search, filters, ticks and cursor, kept while the wizard runs on top. */
+  const managerView = useRef<ManagerView | undefined>(undefined);
+  /** Set while the wizard runs for the manager's Add link: it submits and returns there. */
+  const addFromManager = useRef(false);
+  /** True while those plans are being sent: a second pick in the wizard must not send again. */
+  const submitting = useRef(false);
   /** Deno is offered once per session; saying no must not block every later download. */
   const offeredOptional = useRef(false);
   const screenName = useRef(screen.name);
@@ -125,6 +151,33 @@ export function App({ deps }: { deps: AppDeps }) {
     if (key.ctrl && input === "c" && !downloading) exit();
   });
 
+  /** Start the plans for the manager and go back to it, with the cursor on the first new row. */
+  const submitForManager = async (plans: Plan[]) => {
+    if (submitting.current) return;
+    submitting.current = true;
+    let focusId: string | undefined;
+    let note: string | undefined;
+    try {
+      const { ids, errors } = await submitPlans(deps.managerCore, plans, "manager");
+      focusId = ids[0];
+      if (errors[0]) note = `Could not start: ${errors[0]}`;
+    } catch (error) {
+      note = `Could not start: ${error instanceof Error ? error.message : String(error)}`;
+    }
+    submitting.current = false;
+    addFromManager.current = false;
+    nav.reset(
+      { name: "home" },
+      { name: "manager", ...(focusId && { focusId }), ...(note && { note }) },
+    );
+  };
+
+  // Back on the table, also after backing out of the wizard: no Add link is pending. An effect
+  // on the entry, so a redraw while Add link opens the wizard does not clear it.
+  useEffect(() => {
+    if (screen.name === "manager" && !submitting.current) addFromManager.current = false;
+  }, [screen]);
+
   /**
    * Work out what is still needed for this draft, using the latest saved settings, and go there.
    * `replace` is for waiting screens (the lookup) that should not stay in the history.
@@ -134,7 +187,9 @@ export function App({ deps }: { deps: AppDeps }) {
     const folderDefault = effectiveFolder(deps.download.env, settings, deps.defaultOutputDir);
     const next = nextStep(draft, settings, folderDefault);
     const go = how === "push" ? nav.push : nav.replace;
-    if (next.step === "download") {
+    if (next.step === "download" && addFromManager.current) {
+      await submitForManager([toPlan(next.draft, settings.sortByType)]);
+    } else if (next.step === "download") {
       go({
         name: "download",
         plan: toPlan(next.draft, settings.sortByType),
@@ -183,6 +238,7 @@ export function App({ deps }: { deps: AppDeps }) {
             onPick={(choice) => {
               if (choice === "quit") exit();
               else if (choice === "download") void openDownload();
+              else if (choice === "downloads") nav.push(MANAGER);
               else if (choice === "settings") nav.push({ name: "settings" });
               else if (choice === "setup") nav.push({ name: "setup" });
               else nav.push({ name: "about" });
@@ -265,11 +321,13 @@ export function App({ deps }: { deps: AppDeps }) {
             plan={screen.plan}
             onDone={(job) => {
               // The result page reports success and failure itself, so its notice shows only once
-              // the user leaves it. A cancelled download has no page: say so on the one before.
+              // the user leaves it. A cancelled or paused download has no page: say so on the one
+              // before.
               if (job.status === "cancelled") notices.notify("warn", "Download cancelled");
+              else if (job.status === "paused") notices.notify("paused", "Download paused");
               else if (job.status === "completed") notices.notify("ok", "Download complete");
               else notices.notify("error", "Download failed");
-              if (job.status === "cancelled") nav.back();
+              if (job.status === "cancelled" || job.status === "paused") nav.back();
               else nav.replace({ name: "result", plan: screen.plan, draft: screen.draft, job });
             }}
           />
@@ -301,10 +359,13 @@ export function App({ deps }: { deps: AppDeps }) {
             onHome={() => nav.reset({ name: "home" })}
             onQuit={exit}
             onDownloading={setBatchBusy}
+            {...(addFromManager.current && {
+              onPlans: (plans: Plan[]) => void submitForManager(plans),
+            })}
           />
         );
       case "settings":
-        return <SettingsScreen onBack={nav.back} />;
+        return <SettingsScreen onBack={nav.back} onSaved={(s) => setSpeedUnit(s.speedUnit)} />;
       case "setup":
         return (
           <SetupScreen
@@ -313,19 +374,43 @@ export function App({ deps }: { deps: AppDeps }) {
             autoDownload={screen.autoDownload}
           />
         );
+      case "manager":
+        return (
+          <ManagerScreen
+            {...(managerView.current && { view: managerView.current })}
+            onView={(view) => {
+              managerView.current = view;
+            }}
+            {...(screen.focusId && { focusId: screen.focusId })}
+            {...(screen.note && { note: screen.note })}
+            // Used once: coming back to this entry later must not jump the cursor again.
+            onFocused={() => nav.replace({ name: "manager" })}
+            onBack={() => nav.reset({ name: "home" })}
+            onAdd={() => {
+              addFromManager.current = true;
+              void openDownload();
+            }}
+            onSpeedUnit={setSpeedUnit}
+          />
+        );
       case "about":
         return (
           <AboutScreen
             onBack={nav.back}
             onSetup={() => nav.reset({ name: "home" }, { name: "setup", autoDownload: true })}
+            onReport={() => nav.push({ name: "report" })}
           />
         );
+      case "report":
+        return <ReportScreen onBack={nav.back} />;
     }
   })();
 
   return (
     <DepsContext.Provider value={deps}>
-      <NoticeContext.Provider value={notices}>{body}</NoticeContext.Provider>
+      <SpeedUnitContext.Provider value={speedUnit}>
+        <NoticeContext.Provider value={notices}>{body}</NoticeContext.Provider>
+      </SpeedUnitContext.Provider>
     </DepsContext.Provider>
   );
 }

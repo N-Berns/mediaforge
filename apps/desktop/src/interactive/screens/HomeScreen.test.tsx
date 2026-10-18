@@ -43,3 +43,24 @@ describe("HomeScreen quit confirmation", () => {
     }
   });
 });
+
+describe("HomeScreen items", () => {
+  it("lists Downloads second", async () => {
+    const onPick = vi.fn();
+    const app = mount(onPick);
+    await tick();
+    const frame = app.lastFrame() ?? "";
+    const download = frame.indexOf("Download media");
+    const downloads = frame.indexOf("Downloads");
+    const settings = frame.indexOf("Settings");
+    expect(download).toBeGreaterThan(-1);
+    expect(downloads).toBeGreaterThan(download);
+    expect(settings).toBeGreaterThan(downloads);
+    app.stdin.write("\u001B[B");
+    await tick();
+    app.stdin.write("\r");
+    await tick();
+    expect(onPick).toHaveBeenCalledWith("downloads");
+    app.unmount();
+  });
+});

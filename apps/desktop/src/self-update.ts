@@ -15,10 +15,10 @@ import {
   ToolInstallError,
   targetKey,
 } from "@mediaforge/binary-resolver";
+import { formatBytes } from "@mediaforge/shared-types";
 import type { Io } from "./commands.ts";
 import { ExitCode } from "./exit-codes.ts";
 import { parseCommandArgs } from "./parse.ts";
-import { formatBytes } from "./progress-view.ts";
 import { toCliError } from "./tool-runtime.ts";
 import { VERSION } from "./version.ts";
 

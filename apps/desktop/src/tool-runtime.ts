@@ -12,10 +12,10 @@ import {
   ToolInstallError,
   UnsupportedTargetError,
 } from "@mediaforge/binary-resolver";
+import { formatBytes } from "@mediaforge/shared-types";
 import { forgetResolvedTools, type ResolveTool, resolveTool } from "./binaries.ts";
 import { isRequired } from "./doctor.ts";
 import { CliError, ExitCode } from "./exit-codes.ts";
-import { formatBytes } from "./progress-view.ts";
 
 /** Points the yt-dlp lookup at another release server. Used by the release smoke test. */
 export const YTDLP_REPO_ENV = "MEDIAFORGE_YTDLP_REPO_URL";

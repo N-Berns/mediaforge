@@ -1,6 +1,8 @@
 import { getProfile } from "@mediaforge/media-profiles";
+import type { SpeedUnit } from "@mediaforge/shared-types";
 import { Box, Text, useInput } from "ink";
 import { useContext, useEffect, useRef, useState } from "react";
+import { startJob } from "../../core/job-watch.ts";
 import { candidateFor } from "../../download.ts";
 import type { EngineJob, Step, StepKind } from "../../engine/index.ts";
 import { Card } from "../components/Card.tsx";
@@ -12,6 +14,8 @@ import { useDeps } from "../deps.ts";
 import type { Plan } from "../flow.ts";
 import { describeProgress } from "../hints.ts";
 import { NoticeContext } from "../notice.tsx";
+import { useSpeedUnit } from "../speed-unit.ts";
+import { startPayload } from "../submit.ts";
 import { COLORS, ICONS, STEP_BAR, STEP_COLORS } from "../theme.ts";
 
 export interface DownloadScreenProps {
@@ -44,11 +48,11 @@ export function stageLabel(job: EngineJob | undefined): string {
 }
 
 /** The line under the overall bar: bytes and speed while downloading, the step name otherwise. */
-export function activeDetail(job: EngineJob | undefined): string {
+export function activeDetail(job: EngineJob | undefined, unit: SpeedUnit = "bytes"): string {
   const active = job?.steps?.find((s) => s.state === "active");
-  if (active?.progress) return describeProgress(active.progress);
+  if (active?.progress) return describeProgress(active.progress, unit);
   if (active) return `${STEP_ACTIONS[active.kind]}…`;
-  return job && job.status !== "queued" ? describeProgress(job.progress) : " ";
+  return job && job.status !== "queued" ? describeProgress(job.progress, unit) : " ";
 }
 
 /** Stable keys: the kind, plus a count when a kind repeats ("video", "video-2"). */
@@ -93,6 +97,7 @@ function StepRow({ step, width }: { step: Step; width: number }) {
 export function DownloadScreen({ plan, onDone }: DownloadScreenProps) {
   const deps = useDeps();
   const { columns } = useTerminalSize();
+  const speedUnit = useSpeedUnit();
   const [job, setJob] = useState<EngineJob>();
   const control = useRef<{ cancel: () => void }>({ cancel: () => {} });
   const { clear } = useContext(NoticeContext);
@@ -105,25 +110,53 @@ export function DownloadScreen({ plan, onDone }: DownloadScreenProps) {
     const profile = getProfile(plan.profileId);
     if (!profile) return;
     let live = true;
-    const engine = deps.download.createEngine((update) => {
-      if (live) setJob(update);
-    });
-    const { id } = engine.submit(
-      {
-        candidate: candidateFor(plan.url, profile.kind),
-        profileId: profile.id,
-        outputDir: plan.outputDir,
+    let close = () => {};
+    let cancelled = false;
+    // Esc before the core answers must still stop the download.
+    control.current = {
+      cancel: () => {
+        cancelled = true;
       },
-      {
-        ...(plan.formatSelector && { formatSelector: plan.formatSelector }),
-        ...(plan.steps && { plan: plan.steps }),
-      },
-    );
-    control.current = { cancel: () => void engine.cancel(id) };
-    void engine.whenSettled(id)?.then((final) => live && onDone(final));
+    };
+    const finish = (status: "failed" | "cancelled", error?: unknown) => {
+      if (!live) return;
+      const now = Date.now();
+      onDone({
+        id: "",
+        request: { candidate: candidateFor(plan.url, profile.kind), profileId: profile.id },
+        status,
+        progress: { bytesDownloaded: 0 },
+        ...(error !== undefined && {
+          error: error instanceof Error ? error.message : String(error),
+        }),
+        createdAt: now,
+        updatedAt: now,
+      });
+    };
+    const fail = (error: unknown) => finish("failed", error);
+    void (async () => {
+      try {
+        const client = await deps.download.core();
+        close = () => client.close();
+        if (!live) return close();
+        if (cancelled) {
+          close();
+          return finish("cancelled");
+        }
+        const watched = await startJob(client, startPayload(plan, "menu"), (update) => {
+          if (live) setJob(update);
+        });
+        control.current = { cancel: () => void watched.cancel() };
+        if (cancelled) void watched.cancel();
+        watched.settled.then((final) => live && onDone(final), fail);
+      } catch (error) {
+        fail(error);
+      }
+    })();
     return () => {
+      // Leaving the screen does not stop the download: it keeps running in the core.
       live = false;
-      engine.cancel(id);
+      close();
     };
   }, []);
 
@@ -161,7 +194,7 @@ export function DownloadScreen({ plan, onDone }: DownloadScreenProps) {
         </Box>
         <Text color={COLORS.muted}>
           {" ".repeat(NAME_WIDTH)}
-          {activeDetail(job)}
+          {activeDetail(job, speedUnit)}
         </Text>
       </Box>
       {showSteps ? (
