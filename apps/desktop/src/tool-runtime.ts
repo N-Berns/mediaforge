@@ -1,32 +1,85 @@
+import { readFileSync } from "node:fs";
 import { createInterface } from "node:readline/promises";
 import {
   BinaryNotFoundError,
   cacheDir,
+  checkTool,
   defaultInstallDeps,
+  type InstallDeps,
   type InstallProgress,
   type InstallResult,
   installTool,
+  isOutdated,
+  pinnedSource,
   type ResolvedBinary,
+  resolveFfmpegSource,
   resolveTarget,
+  resolveYtDlpSource,
   type Tool,
+  type ToolCheck,
   ToolInstallError,
+  type ToolsLock,
   UnsupportedTargetError,
+  validateLock,
+  type YtDlpChannel,
 } from "@mediaforge/binary-resolver";
 import { formatBytes } from "@mediaforge/shared-types";
 import { forgetResolvedTools, type ResolveTool, resolveTool } from "./binaries.ts";
 import { isRequired } from "./doctor.ts";
 import { CliError, ExitCode } from "./exit-codes.ts";
+import { defaultSettingsStore } from "./settings.ts";
 
-/** Points the yt-dlp lookup at another release server. Used by the release smoke test. */
-export const YTDLP_REPO_ENV = "MEDIAFORGE_YTDLP_REPO_URL";
+/**
+ * Testing only: a JSON file that replaces the built-in list of pinned tool downloads. It lets the
+ * release smoke test install from a local server. A tool is only ever checked against the hash in
+ * the list in use, so whoever controls this variable controls what gets installed.
+ */
+export const TOOLS_LOCK_ENV = "MEDIAFORGE_TOOLS_LOCK";
+
+/** The lock named by `MEDIAFORGE_TOOLS_LOCK`, or undefined when it is not set. */
+export function lockFromEnv(env: Record<string, string | undefined>): ToolsLock | undefined {
+  const path = env[TOOLS_LOCK_ENV];
+  if (!path) return undefined;
+  let lock: ToolsLock;
+  try {
+    lock = JSON.parse(readFileSync(path, "utf8")) as ToolsLock;
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    throw new CliError(`${TOOLS_LOCK_ENV} is not readable JSON: ${detail}`, ExitCode.Usage);
+  }
+  const problems = validateLock(lock);
+  if (problems.length > 0) {
+    throw new CliError(`${TOOLS_LOCK_ENV} is not a usable lock: ${problems[0]}`, ExitCode.Usage);
+  }
+  return lock;
+}
+
+export interface InstallOptions {
+  channel?: YtDlpChannel;
+  /** ffmpeg only: install the newest release instead of the pinned build. */
+  live?: boolean;
+}
 
 /** Everything the tool commands need from the outside world. Tests replace all of it. */
 export interface ToolRuntime {
   resolve: ResolveTool;
-  install: (tool: Tool, onProgress: (progress: InstallProgress) => void) => Promise<InstallResult>;
+  /**
+   * Download a tool. yt-dlp comes from `opts.channel`, else from the saved setting; `stable` is the
+   * pinned build. ffmpeg and deno come from the pinned lock, except ffmpeg with `opts.live`, which
+   * takes the newest verified release.
+   */
+  install: (
+    tool: Tool,
+    onProgress: (progress: InstallProgress) => void,
+    opts?: InstallOptions,
+  ) => Promise<InstallResult>;
+  /** Ask the release feeds what is newest, for each tool. Downloads and installs nothing. */
+  check: (tools: Tool[], opts?: { channel?: YtDlpChannel }) => Promise<ToolCheck[]>;
   /** True when a person can answer: stdin and stderr are terminals. */
   interactive: boolean;
   ask: (question: string) => Promise<boolean>;
+  /** True when the copy MediaForge installed is not the pinned build. Absent: never. */
+  outdated?: (tool: Tool) => Promise<boolean>;
 }
 
 export async function tryResolve(
@@ -89,7 +142,9 @@ export async function acquireTool(
   }
 
   try {
-    const result = await rt.install(tool, options.onProgress);
+    // First-time setup stays on the pinned build: it is verified without any lookup, so a fresh
+    // install never depends on a release feed. Updating to a live channel is a separate choice.
+    const result = await rt.install(tool, options.onProgress, { channel: "stable" });
     return { tool, status: "installed", path: result.path, version: result.version };
   } catch (error) {
     throw toCliError(error);
@@ -207,23 +262,67 @@ export function createInstallPrinter(
   };
 }
 
+/** Replaces parts of the real machine; tests only. */
+export interface RuntimeTestHooks {
+  deps?: Partial<Omit<InstallDeps, "resolveSource">>;
+  loadChannel?: () => Promise<YtDlpChannel>;
+}
+
 export function defaultToolRuntime(
   env: Record<string, string | undefined> = process.env,
+  hooks: RuntimeTestHooks = {},
 ): ToolRuntime {
   const dir = cacheDir(env);
-  const repo = env[YTDLP_REPO_ENV];
-  const deps = { ...defaultInstallDeps(), ...(repo && { ytDlpRepoUrl: repo }) };
+  const lock = lockFromEnv(env);
+  const deps = { ...defaultInstallDeps(), ...(lock && { lock }), ...hooks.deps };
+  const savedChannel =
+    hooks.loadChannel ?? (async () => (await defaultSettingsStore().load()).ytDlpChannel);
+  const channelOf = async (given?: YtDlpChannel): Promise<YtDlpChannel> => {
+    if (given) return given;
+    try {
+      return await savedChannel();
+    } catch {
+      return "stable";
+    }
+  };
+  /** Deps whose resolver looks yt-dlp (per channel) and ffmpeg (when live) up; the rest is pinned. */
+  const depsFor = (channel: YtDlpChannel, liveFfmpeg: boolean): InstallDeps => ({
+    ...deps,
+    resolveSource: async (tool, target) => {
+      if (tool === "yt-dlp" && channel !== "stable") {
+        return resolveYtDlpSource(target, channel, deps.fetch);
+      }
+      if (tool === "ffmpeg" && liveFfmpeg) return resolveFfmpegSource(target, deps.fetch);
+      return pinnedSource(tool, target, deps.lock);
+    },
+  });
   return {
     resolve: resolveTool,
-    install: async (tool, onProgress) => {
+    install: async (tool, onProgress, opts = {}) => {
+      const channel = await channelOf(opts.channel);
       try {
-        return await installTool({ tool, target: resolveTarget(), dir, onProgress }, deps);
+        return await installTool(
+          { tool, target: resolveTarget(), dir, onProgress },
+          depsFor(channel, opts.live === true),
+        );
       } finally {
         forgetResolvedTools();
       }
     },
+    check: async (tools, opts = {}) => {
+      const channel = await channelOf(opts.channel);
+      const target = resolveTarget();
+      const live = depsFor(channel, true);
+      return Promise.all(tools.map((tool) => checkTool(tool, target, dir, live)));
+    },
     interactive: Boolean(process.stdin.isTTY && process.stderr.isTTY),
     ask: (question) => askYesNo(question),
+    outdated: async (tool) => {
+      // A live channel is fetched only on request, so it is outdated only when the cached build is
+      // older than the pin this app ships (a newer nightly is never replaced by an older pin).
+      const live = tool === "yt-dlp" && (await channelOf()) !== "stable";
+      return isOutdated(tool, resolveTarget(), dir, deps, live ? "older" : "differs");
+    },
   };
 }
 

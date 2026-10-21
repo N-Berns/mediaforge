@@ -16,7 +16,6 @@ import {
   createPageProbe,
   PROBE_TIMEOUT_MS,
   type RunCoreDeps,
-  refreshStampPath,
   runCore,
   startCoreProcess,
 } from "./run-core.ts";
@@ -151,7 +150,6 @@ async function setup(overrides: Partial<RunCoreDeps> = {}) {
   const deps: RunCoreDeps = {
     pipe: testPath(),
     tokenFile: join(dir, "core.token"),
-    stampFile: join(dir, "refresh.stamp"),
     settings: memorySettingsStore(),
     toolRuntime: rt,
     createEngine: () => fakeEngine(),
@@ -553,28 +551,41 @@ describe("runCore", () => {
       expect(loads).toBeLessThan(20);
     });
 
-    it("refreshes yt-dlp from the poll once the stamp goes stale", async () => {
-      const core = await launch({ settings: memorySettingsStore({ keepRunning: true }) });
-      // The first refresh is the startup one: no stamp yet counts as stale.
-      await vi.waitFor(() => expect(core.log.installed).toEqual(["yt-dlp"]));
-      await vi.waitFor(async () => expect((await stat(core.deps.stampFile)).isFile()).toBe(true));
+    it("replaces an outdated yt-dlp from the poll, once", async () => {
+      const { rt, log } = makeRuntime({
+        present: ["yt-dlp", "ffmpeg", "deno"],
+        outdated: ["yt-dlp"],
+      });
+      const core = await launch({
+        toolRuntime: rt,
+        settings: memorySettingsStore({ keepRunning: true }),
+      });
+      await vi.waitFor(() => expect(log.installed).toEqual(["yt-dlp"]));
       await sleep(100);
-      expect(core.log.installed).toEqual(["yt-dlp"]);
-      const old = new Date(Date.now() - 2 * 24 * 60 * 60 * 1000);
-      await utimes(core.deps.stampFile, old, old);
-      await vi.waitFor(() => expect(core.log.installed).toEqual(["yt-dlp", "yt-dlp"]));
+      expect(log.installed).toEqual(["yt-dlp"]);
+      core.stop.abort();
+      await core.exit;
     });
 
-    it("does not refresh from the poll while a job is still running", async () => {
+    it("leaves yt-dlp alone when it is the pinned build", async () => {
+      const core = await launch({ settings: memorySettingsStore({ keepRunning: true }) });
+      await sleep(200);
+      expect(core.log.installed).toEqual([]);
+    });
+
+    it("does not replace yt-dlp from the poll while a job is still running", async () => {
+      const { rt, log, outdated } = makeRuntime({ present: ["yt-dlp", "ffmpeg", "deno"] });
       const core = await launch({
+        toolRuntime: rt,
         settings: memorySettingsStore({ keepRunning: true }),
         createEngine: () => fakeEngine(() => [{ status: "downloading" }]),
       });
-      await vi.waitFor(async () => expect((await stat(core.deps.stampFile)).isFile()).toBe(true));
-      const old = new Date(Date.now() - 2 * 24 * 60 * 60 * 1000);
-      await utimes(core.deps.stampFile, old, old);
+      await sleep(100);
+      outdated.add("yt-dlp");
       await sleep(200);
-      expect(core.log.installed).toEqual(["yt-dlp"]);
+      expect(log.installed).toEqual([]);
+      core.stop.abort();
+      await core.exit;
     });
 
     it("still exits at idle when setup has failed", async () => {
@@ -639,16 +650,6 @@ describe("history", () => {
     await vi.waitFor(() => expect(setMaxConcurrent).toHaveBeenCalledWith(4));
     core.stop.abort();
     await core.exit;
-  });
-});
-
-describe("refreshStampPath", () => {
-  it("is yt-dlp-refresh.stamp beside the token file", () => {
-    const env = { XDG_CONFIG_HOME: join("home", "u", ".config") };
-    const path = refreshStampPath(env, "linux", join("home", "u"));
-    expect(path).toBe(
-      join(dirname(tokenPath(env, "linux", join("home", "u"))), "yt-dlp-refresh.stamp"),
-    );
   });
 });
 

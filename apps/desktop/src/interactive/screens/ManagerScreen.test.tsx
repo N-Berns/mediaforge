@@ -38,6 +38,7 @@ const fs: EngineFs = {
   exists: async () => false,
   list: async () => [],
   readText: async () => "",
+  writePrivate: async () => {},
 };
 
 type Row = DownloadJob & { files: string[] };
@@ -1210,5 +1211,122 @@ describe("ManagerScreen panels and copy", () => {
     await m.press("?");
     await vi.waitFor(() => expect(m.frame()).toContain("Ctrl+click"));
     expect(m.frame()).toContain("Shift+drag selects text");
+  });
+});
+
+/** The core passes progress on at most every 250 ms; a later line must wait that long. */
+const PAST_THROTTLE = () => new Promise((r) => setTimeout(r, 300));
+
+/** A download that reports 50 of 100 bytes, then lets the test push more output. */
+function liveRunner() {
+  let push: (line: string) => void = () => {};
+  const runner: ProcessRunner = async (_c, args, h, signal) => {
+    push = h.onStdoutLine;
+    await PAST_THROTTLE();
+    h.onStdoutLine("MFPROGRESS 50 100 NA 10 5");
+    await new Promise<void>((r) => signal?.addEventListener("abort", () => r()));
+    h.onStdoutLine(`MFFILE ${args[args.indexOf("--paths") + 1]}/Clip.mp4`);
+    return { exitCode: signal?.aborted ? 1 : 0 };
+  };
+  return { runner, push: (line: string) => push(line) };
+}
+
+async function startPlanned(
+  m: Awaited<ReturnType<typeof mount>>,
+  title: string,
+  plan?: { kind: "download" | "video" | "audio" | "merge" | "convert" }[],
+): Promise<string> {
+  const client = await m.core.connect();
+  const reply = await client.request("download.start", {
+    candidate: row("x", { title }).request.candidate,
+    profileId: "mp4-720p",
+    outputDir: "/dl",
+    ...(plan && { plan }),
+  });
+  client.close();
+  const id = (reply.payload as { jobId: string }).jobId;
+  await vi.waitFor(() => expect(m.history.get(id)?.status).toBe("downloading"));
+  await vi.waitFor(() => expect(m.frame()).toContain(title));
+  return id;
+}
+
+describe("ManagerScreen detail progress", () => {
+  it("shows the download progress of an active job like the download screen", async () => {
+    const live = liveRunner();
+    const m = await mount({ runner: live.runner });
+    await startPlanned(m, "Running one");
+    await m.press(KEY.enter);
+    await vi.waitFor(() => expect(m.frame()).toContain("Details"));
+    await vi.waitFor(() => expect(m.frame()).toContain("Overall"));
+    await vi.waitFor(() => expect(m.frame()).toContain("50%"));
+    expect(m.frame()).toContain("Downloading");
+    expect(m.frame()).toContain("ETA");
+    expect(m.frame()).toContain("50 B of 100 B");
+    expect(m.frame()).not.toContain("waiting");
+    m.app.unmount();
+  });
+
+  it("follows the job as its percent changes", async () => {
+    const live = liveRunner();
+    const m = await mount({ runner: live.runner });
+    await startPlanned(m, "Running one");
+    await m.press(KEY.enter);
+    await vi.waitFor(() => expect(m.frame()).toContain("50%"));
+    await PAST_THROTTLE();
+    live.push("MFPROGRESS 80 100 NA 10 2");
+    await vi.waitFor(() => expect(m.frame()).toContain("80%"));
+    expect(m.frame()).not.toContain("50%");
+    m.app.unmount();
+  });
+
+  it("lists the steps of a multi-step job, pending ones as waiting", async () => {
+    const live = liveRunner();
+    const m = await mount({ runner: live.runner });
+    await startPlanned(m, "Running one", [{ kind: "download" }, { kind: "convert" }]);
+    await m.press(KEY.enter);
+    await vi.waitFor(() => expect(m.frame()).toContain("Convert"));
+    await vi.waitFor(() => expect(m.frame()).toContain("50%"));
+    expect(m.frame()).toContain("Download");
+    expect(m.frame()).toContain("waiting");
+    m.app.unmount();
+  });
+
+  it("shows paused instead of speed on a paused job", async () => {
+    const live = liveRunner();
+    const m = await mount({ runner: live.runner });
+    const id = await startPlanned(m, "Running one");
+    await vi.waitFor(() => expect(m.frame()).toContain("50%"));
+    const client = await m.core.connect();
+    await client.request("download.pause", { jobIds: [id] });
+    client.close();
+    await vi.waitFor(() => expect(m.history.get(id)?.status).toBe("paused"));
+    await vi.waitFor(() => expect(m.frame()).toContain("Paused"));
+    await m.press(KEY.enter);
+    await vi.waitFor(() => expect(m.frame()).toContain("Overall"));
+    expect(m.frame()).toContain("paused");
+    expect(m.frame()).not.toContain("ETA");
+    m.app.unmount();
+  });
+
+  it("shows no progress for a finished job", async () => {
+    const m = await mount({ jobs: [row("d", { title: "Done", lastTryAt: 1 })] });
+    await m.press(KEY.enter);
+    await vi.waitFor(() => expect(m.frame()).toContain("Details"));
+    expect(m.frame()).not.toContain("Overall");
+    m.app.unmount();
+  });
+
+  it("stays within the window in a small terminal", async () => {
+    const live = liveRunner();
+    const m = await mount({ runner: live.runner, columns: 40, rows: 14 });
+    await startPlanned(m, "Clip", [{ kind: "download" }, { kind: "convert" }]);
+    const list = m.frame().split("\n").length;
+    await m.press(KEY.enter);
+    await vi.waitFor(() => expect(m.frame()).toContain("Overall"));
+    const lines = m.frame().split("\n");
+    expect(lines.length).toBeLessThanOrEqual(list);
+    expect(Math.max(...lines.map((l) => l.length))).toBeLessThanOrEqual(40);
+    expect(m.frame()).toContain("Esc close");
+    m.app.unmount();
   });
 });

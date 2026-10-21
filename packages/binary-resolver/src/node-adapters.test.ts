@@ -118,6 +118,7 @@ describe("installTool with the real adapters", () => {
     const lock: ToolsLock = {
       schema: 1,
       deno: {},
+      "yt-dlp": {},
       ffmpeg: {
         [key]: {
           version: "9.9",

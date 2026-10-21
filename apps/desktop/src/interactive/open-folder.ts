@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { dirname } from "node:path";
+import { dirname, win32 } from "node:path";
 
 export interface OpenCommand {
   command: string;
@@ -18,6 +18,15 @@ export function openCommand(
   select = true,
 ): OpenCommand {
   if (platform === "win32") {
+    // A quote would end the verbatim argument early and let the rest act as more arguments.
+    // Windows file names cannot hold one, so a path with one is not ours: open its parent only.
+    if (path.includes('"')) {
+      return {
+        command: "explorer.exe",
+        args: [win32.dirname(path.replaceAll('"', ""))],
+        verbatim: false,
+      };
+    }
     return {
       command: "explorer.exe",
       args: [select ? `/select,"${path}"` : `"${path}"`],

@@ -46,4 +46,6 @@ export interface InstallResult {
   path: string;
   sha256: string;
   url: string;
+  /** The version the cache manifest held for this tool before this install, if any. */
+  previous?: string;
 }

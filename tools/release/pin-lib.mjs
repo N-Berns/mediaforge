@@ -89,3 +89,20 @@ export const DENO_TARGETS = {
   "linux-x64": { asset: "deno-x86_64-unknown-linux-gnu.zip", member: "deno" },
   "linux-arm64": { asset: "deno-aarch64-unknown-linux-gnu.zip", member: "deno" },
 };
+
+/** yt-dlp release assets per target. Windows on ARM runs the x64 build, like the other tools. */
+export const YTDLP_TARGETS = {
+  "win32-x64": { asset: "yt-dlp.exe" },
+  "linux-x64": { asset: "yt-dlp_linux" },
+  "linux-arm64": { asset: "yt-dlp_linux_aarch64" },
+};
+
+/** Read a `SHA2-256SUMS` file: lines of `<hex>  <name>` or `<hex> *<name>`. */
+export function parseSha256Sums(text) {
+  const sums = new Map();
+  for (const line of text.split(/\r?\n/)) {
+    const match = /^([0-9a-fA-F]{64})\s+\*?(.+?)\s*$/.exec(line);
+    if (match) sums.set(match[2], match[1].toLowerCase());
+  }
+  return sums;
+}

@@ -20,7 +20,12 @@ const found = async (tool: Tool) => ({ tool, path: `/bin/${tool}`, source: "path
 
 function fakeFs(existing: string[] = []) {
   const files = new Set(existing);
-  const calls = { mkdir: [] as string[], rename: [] as [string, string][], rm: [] as string[] };
+  const calls = {
+    mkdir: [] as string[],
+    rename: [] as [string, string][],
+    rm: [] as string[],
+    private: [] as [string, string][],
+  };
   const fs: EngineFs = {
     mkdir: async (p) => void calls.mkdir.push(p),
     rename: async (a, b) => {
@@ -31,6 +36,7 @@ function fakeFs(existing: string[] = []) {
     exists: async (p) => files.has(p),
     list: async () => [],
     readText: async () => "",
+    writePrivate: async (p, text) => void calls.private.push([p, text]),
   };
   return { fs, calls, removed: calls.rm };
 }
@@ -234,8 +240,8 @@ describe("DownloadEngine", () => {
     expect(seen[seen.indexOf("--js-runtimes") + 1]).toBe("node:/usr/bin/node");
   });
 
-  it("passes the request context to yt-dlp and keeps its secrets out of the job and errors", async () => {
-    const { fs } = fakeFs();
+  it("hands the request context to yt-dlp in a private file, not on its command line", async () => {
+    const { fs, calls } = fakeFs();
     let seen: string[] = [];
     const updates: string[] = [];
     const engine = new DownloadEngine({
@@ -253,9 +259,12 @@ describe("DownloadEngine", () => {
     expect(job?.status).toBe("failed");
     expect(job?.error).not.toContain("abc123def");
     expect(job?.error).toContain("[redacted]");
-    expect(seen).toContain("--add-header");
-    expect(seen).toContain("Cookie:session=abc123def");
-    expect(seen.indexOf("Cookie:session=abc123def")).toBeLessThan(seen.indexOf("--"));
+    expect(seen.join(" ")).not.toContain("abc123def");
+    const at = seen.indexOf("--config-locations");
+    expect(at).toBeGreaterThanOrEqual(0);
+    expect(at).toBeLessThan(seen.indexOf("--"));
+    expect(calls.private).toEqual([[seen[at + 1], '--add-header "Cookie:session=abc123def"\n']]);
+    expect(calls.rm).toContain(seen[at + 1]);
     const stored = engine.get(submitted.id);
     expect(stored).not.toHaveProperty("context");
     expect(JSON.stringify(stored)).not.toContain("abc123def");
@@ -263,14 +272,17 @@ describe("DownloadEngine", () => {
   });
 
   it("keeps redacting after earlier jobs with a context have finished", async () => {
-    const { fs } = fakeFs();
+    const { fs, calls } = fakeFs();
     const engine = new DownloadEngine({
       resolve: found,
       fs,
       maxConcurrent: 1,
       run: runner(async (h, _s, args) => {
-        const cookie = args.find((a) => a.startsWith("Cookie:")) ?? "";
-        h.onStderrLine(`ERROR: denied ${cookie.slice(7)}`);
+        // yt-dlp reads the cookie from the private config file, so the fake does the same.
+        const file = args[args.indexOf("--config-locations") + 1];
+        const config = calls.private.find(([path]) => path === file)?.[1] ?? "";
+        const cookie = /Cookie:([^"]*)/.exec(config)?.[1] ?? "";
+        h.onStderrLine(`ERROR: denied ${cookie}`);
         return 1;
       }),
     });

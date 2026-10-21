@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { join } from "node:path";
 import type { InstallFs } from "./install-types.ts";
 import { binaryFileName, type OsName } from "./target.ts";
@@ -52,7 +53,7 @@ export async function writeManifest(
 ): Promise<void> {
   await fs.mkdir(dir);
   // Write then rename, so a crash never leaves a half-written manifest.
-  const temp = join(dir, `${MANIFEST_FILE}.tmp`);
+  const temp = join(dir, `${MANIFEST_FILE}.${randomUUID()}.tmp`);
   await fs.writeText(temp, `${JSON.stringify(manifest, null, 2)}\n`);
   await fs.rename(temp, join(dir, MANIFEST_FILE));
 }

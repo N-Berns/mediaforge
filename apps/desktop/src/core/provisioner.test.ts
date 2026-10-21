@@ -71,6 +71,7 @@ describe("startProvisioning", () => {
       },
     }).ready();
     expect(log.installed).toEqual(["yt-dlp"]);
+    expect(log.installOptions).toEqual([{ channel: "stable" }]);
     expect(stamped).toBe(true);
   });
 
@@ -179,6 +180,7 @@ describe("startProvisioning", () => {
       provisioner.onChange((s) => seen.push(`${s.state}:${s.phase ?? ""}`));
       await provisioner.refreshIfStale();
       expect(log.installed).toEqual(["yt-dlp"]);
+      expect(log.installOptions).toEqual([{ channel: "stable" }]);
       expect(option.state.stamps).toBe(1);
       expect(seen).toEqual(["installing:refreshing", "ready:"]);
       expect(provisioner.status()).toEqual({ state: "ready" });

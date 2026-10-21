@@ -1,6 +1,7 @@
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
+import { YTDLP_CHANNELS, type YtDlpChannel } from "@mediaforge/binary-resolver";
 import { getProfile } from "@mediaforge/media-profiles";
 import {
   DEFAULT_LIMITS,
@@ -54,6 +55,13 @@ export interface Settings {
   limits: Limits;
   /** The downloads manager's sort column and direction. */
   managerSort: ManagerSort;
+  /**
+   * Let the browser extension fetch links that point at this computer or its local network.
+   * Off by default; edit the config file to turn it on.
+   */
+  allowPrivateUrls: boolean;
+  /** Which yt-dlp build to install and update from. */
+  ytDlpChannel: YtDlpChannel;
 }
 
 export const MAX_CONCURRENCY = 4;
@@ -69,6 +77,8 @@ export const DEFAULT_SETTINGS: Settings = {
   limitPreset: "high",
   limits: { ...DEFAULT_LIMITS },
   managerSort: { column: "lastTry", descending: true },
+  allowPrivateUrls: false,
+  ytDlpChannel: "stable",
 };
 
 /** Per-user config file location for each OS. */
@@ -85,6 +95,9 @@ export function settingsPath(
 
 const isPreset = (value: unknown): value is LimitPreset =>
   LIMIT_PRESETS.includes(value as LimitPreset);
+
+const isYtDlpChannel = (value: unknown): value is YtDlpChannel =>
+  YTDLP_CHANNELS.includes(value as YtDlpChannel);
 
 /** Each preset on its own: a whole positive number up to 1 PB/s, or null; else its default. */
 function sanitizeLimits(raw: unknown): Limits {
@@ -132,6 +145,8 @@ export function sanitizeSettings(raw: unknown): Settings {
     limitPreset: isPreset(o.limitPreset) ? o.limitPreset : DEFAULT_SETTINGS.limitPreset,
     limits: sanitizeLimits(o.limits),
     managerSort: sanitizeSort(o.managerSort),
+    allowPrivateUrls: o.allowPrivateUrls === true,
+    ytDlpChannel: isYtDlpChannel(o.ytDlpChannel) ? o.ytDlpChannel : DEFAULT_SETTINGS.ytDlpChannel,
   };
   if (typeof o.folder === "string" && o.folder.trim()) settings.folder = o.folder.trim();
   if (typeof o.quality === "string" && getProfile(o.quality)) settings.quality = o.quality;

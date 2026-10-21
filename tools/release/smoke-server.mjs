@@ -3,7 +3,7 @@
 //
 //   node tools/release/smoke-server.mjs [port]      (default port 8765)
 //
-//   /repo/...      a yt-dlp nightly repository: the "latest" redirect, SHA2-256SUMS and assets
+//   /ytdlp/...     the yt-dlp assets, and /lock.json, a tools lock that pins them (for MEDIAFORGE_TOOLS_LOCK)
 //   /release/...   a MediaForge release: SHA256SUMS and the five binaries
 //   /corrupt/...   the same release, but the binaries do not match SHA256SUMS
 import { createHash } from "node:crypto";
@@ -12,17 +12,42 @@ import { pathToFileURL } from "node:url";
 import { TARGETS } from "./targets.mjs";
 
 export const FAKE_TAG = "2099.01.01.000000";
-const YTDLP_ASSETS = ["yt-dlp.exe", "yt-dlp_linux", "yt-dlp_linux_aarch64"];
+const YTDLP_TARGET_ASSETS = {
+  "win32-x64": "yt-dlp.exe",
+  "linux-x64": "yt-dlp_linux",
+  "linux-arm64": "yt-dlp_linux_aarch64",
+};
+const YTDLP_ASSETS = Object.values(YTDLP_TARGET_ASSETS);
 const sha256 = (data) => createHash("sha256").update(data).digest("hex");
 
 const ytDlpBody = Buffer.from("not a real yt-dlp\n");
 const releaseBody = (file) => Buffer.from(`fake mediaforge binary: ${file}\n`);
 const corruptBody = Buffer.from("corrupt\n");
 
+/** A tools lock whose yt-dlp entries point at `base` and hash to the fake yt-dlp this server serves. */
+export function smokeLock(base) {
+  const entry = (asset) => ({
+    version: FAKE_TAG,
+    url: `${base}${asset}`,
+    sha256: sha256(ytDlpBody),
+    archive: "none",
+    member: asset,
+    license: "Unlicense",
+    buildInfo: "https://example.test/smoke",
+  });
+  return {
+    schema: 1,
+    ffmpeg: {},
+    deno: {},
+    "yt-dlp": Object.fromEntries(
+      Object.entries(YTDLP_TARGET_ASSETS).map(([target, asset]) => [target, entry(asset)]),
+    ),
+  };
+}
+
 export function createSmokeServer() {
-  const ytDlpSums = YTDLP_ASSETS.map((asset) => `${sha256(ytDlpBody)}  ${asset}\n`).join("");
   const releaseSums = TARGETS.map((t) => `${sha256(releaseBody(t.file))}  ${t.file}\n`).join("");
-  const downloads = `/repo/releases/download/${FAKE_TAG}/`;
+  const downloads = "/ytdlp/";
 
   return createServer((request, response) => {
     const path = new URL(request.url ?? "/", "http://localhost").pathname;
@@ -31,10 +56,10 @@ export function createSmokeServer() {
       response.end(body);
     };
 
-    if (path === "/repo/releases/latest") {
-      return send(302, "", { location: `/repo/releases/tag/${FAKE_TAG}` });
+    if (path === "/lock.json") {
+      const base = `http://${request.headers.host}${downloads}`;
+      return send(200, JSON.stringify(smokeLock(base)), { "content-type": "application/json" });
     }
-    if (path === `${downloads}SHA2-256SUMS`) return send(200, ytDlpSums);
     if (path.startsWith(downloads) && YTDLP_ASSETS.includes(path.slice(downloads.length))) {
       return send(200, ytDlpBody);
     }

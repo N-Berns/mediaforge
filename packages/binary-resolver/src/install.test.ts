@@ -1,24 +1,31 @@
 import { createHash } from "node:crypto";
 import { describe, expect, it } from "vitest";
 import { ToolInstallError } from "./errors.ts";
-import { type InstallDeps, installTool } from "./install.ts";
+import { checkTool, type InstallDeps, installTool, isOutdated } from "./install.ts";
 import type { ToolsLock } from "./lock.ts";
 import { memoryInstallFs, routeFetch, streamResponse } from "./test-helpers.ts";
 
 const DIR = "/cache/bin";
-const REPO = "https://example.test/ytdlp";
-const TAG = "2026.10.08.1";
+const TAG = "2026.10.08";
+const URL_BASE = "https://example.test/ytdlp";
 const NOW = new Date("2026-10-08T12:00:00.000Z");
 const LINUX = { os: "linux", arch: "x64" } as const;
 const sha = (text: string) => createHash("sha256").update(text).digest("hex");
 
-function ytDlpRoutes(asset: string, content: string, sums = `${sha(content)}  ${asset}\n`) {
-  return {
-    [`${REPO}/releases/latest`]: () =>
-      new Response(null, { status: 302, headers: { location: `${REPO}/releases/tag/${TAG}` } }),
-    [`${REPO}/releases/download/${TAG}/SHA2-256SUMS`]: () => new Response(sums),
-    [`${REPO}/releases/download/${TAG}/${asset}`]: () => streamResponse(content),
+const ytDlpUrl = (asset: string) => `${URL_BASE}/${asset}`;
+
+/** A lock that pins `asset` (for both targets used here) to the hash `sum`, default that of `content`. */
+function ytDlpLock(asset: string, content: string, sum = sha(content)): ToolsLock {
+  const entry = {
+    version: TAG,
+    url: ytDlpUrl(asset),
+    sha256: sum,
+    archive: "none" as const,
+    member: asset,
+    license: "Unlicense",
+    buildInfo: "https://example.test/ytdlp",
   };
+  return { schema: 1, ffmpeg: {}, deno: {}, "yt-dlp": { "linux-x64": entry, "win32-x64": entry } };
 }
 
 const noExtract: InstallDeps["extract"] = async () => {
@@ -28,6 +35,7 @@ const noExtract: InstallDeps["extract"] = async () => {
 const lock: ToolsLock = {
   schema: 1,
   deno: {},
+  "yt-dlp": {},
   ffmpeg: {
     "linux-x64": {
       version: "7.1",
@@ -51,10 +59,20 @@ function deps(
     fs: mem.fs,
     extract: noExtract,
     now: () => NOW,
-    ytDlpRepoUrl: REPO,
     ...extra,
   };
 }
+
+/** Deps that serve `content` for `asset` at its pinned URL. */
+const ytDlpDeps = (
+  mem: ReturnType<typeof memoryInstallFs>,
+  asset: string,
+  content: string,
+  sum?: string,
+) =>
+  deps(mem, routeFetch({ [ytDlpUrl(asset)]: () => streamResponse(content) }), {
+    lock: ytDlpLock(asset, content, sum),
+  });
 
 describe("installTool: yt-dlp", () => {
   it("downloads, verifies and installs, then records it in the manifest", async () => {
@@ -62,14 +80,14 @@ describe("installTool: yt-dlp", () => {
     const phases: string[] = [];
     const result = await installTool(
       { tool: "yt-dlp", target: LINUX, dir: DIR, onProgress: (p) => phases.push(p.phase) },
-      deps(mem, routeFetch(ytDlpRoutes("yt-dlp_linux", "BINARY"))),
+      ytDlpDeps(mem, "yt-dlp_linux", "BINARY"),
     );
     expect(result).toMatchObject({ tool: "yt-dlp", version: TAG, sha256: sha("BINARY") });
     expect(mem.text(result.path)).toBe("BINARY");
     expect(mem.mode(result.path)).toBe(0o755);
     expect(JSON.parse(mem.text(`${DIR}/manifest.json`))["yt-dlp"]).toEqual({
       version: TAG,
-      url: `${REPO}/releases/download/${TAG}/yt-dlp_linux`,
+      url: ytDlpUrl("yt-dlp_linux"),
       sha256: sha("BINARY"),
       installedAt: NOW.toISOString(),
     });
@@ -79,10 +97,9 @@ describe("installTool: yt-dlp", () => {
 
   it("rejects a checksum mismatch and leaves nothing behind", async () => {
     const mem = memoryInstallFs();
-    const bad = ytDlpRoutes("yt-dlp_linux", "BINARY", `${"0".repeat(64)}  yt-dlp_linux\n`);
     const error = await installTool(
       { tool: "yt-dlp", target: LINUX, dir: DIR },
-      deps(mem, routeFetch(bad)),
+      ytDlpDeps(mem, "yt-dlp_linux", "BINARY", "0".repeat(64)),
     ).catch((e) => e);
     expect(error).toBeInstanceOf(ToolInstallError);
     expect(error.kind).toBe("checksum");
@@ -91,14 +108,13 @@ describe("installTool: yt-dlp", () => {
 
   it("leaves no partial file when the connection drops", async () => {
     const mem = memoryInstallFs();
-    const routes = {
-      ...ytDlpRoutes("yt-dlp_linux", "BINARY-CONTENT"),
-      [`${REPO}/releases/download/${TAG}/yt-dlp_linux`]: () =>
-        streamResponse("BINARY-CONTENT", 4, 8),
-    };
     const error = await installTool(
       { tool: "yt-dlp", target: LINUX, dir: DIR },
-      deps(mem, routeFetch(routes)),
+      deps(
+        mem,
+        routeFetch({ [ytDlpUrl("yt-dlp_linux")]: () => streamResponse("BINARY-CONTENT", 4, 8) }),
+        { lock: ytDlpLock("yt-dlp_linux", "BINARY-CONTENT") },
+      ),
     ).catch((e) => e);
     expect(error.kind).toBe("offline");
     expect(mem.paths()).toEqual([]);
@@ -109,7 +125,7 @@ describe("installTool: yt-dlp", () => {
     mem.state.writeError = Object.assign(new Error("full"), { code: "ENOSPC" });
     const error = await installTool(
       { tool: "yt-dlp", target: LINUX, dir: DIR },
-      deps(mem, routeFetch(ytDlpRoutes("yt-dlp_linux", "BINARY"))),
+      ytDlpDeps(mem, "yt-dlp_linux", "BINARY"),
     ).catch((e) => e);
     expect(error.kind).toBe("disk-full");
     expect(mem.paths()).toEqual([]);
@@ -124,7 +140,7 @@ describe("installTool: yt-dlp", () => {
     });
     await installTool(
       { tool: "yt-dlp", target: LINUX, dir: DIR },
-      deps(mem, routeFetch(ytDlpRoutes("yt-dlp_linux", "NEW"))),
+      ytDlpDeps(mem, "yt-dlp_linux", "NEW"),
     );
     expect(mem.text(`${DIR}/yt-dlp`)).toBe("NEW");
     expect(JSON.parse(mem.text(`${DIR}/manifest.json`)).ffmpeg).toEqual(other);
@@ -137,7 +153,7 @@ describe("installTool: yt-dlp", () => {
     });
     await installTool(
       { tool: "yt-dlp", target: LINUX, dir: DIR },
-      deps(mem, routeFetch(ytDlpRoutes("yt-dlp_linux", "NEW"))),
+      ytDlpDeps(mem, "yt-dlp_linux", "NEW"),
     );
     const manifest = JSON.parse(mem.text(`${DIR}/manifest.json`));
     expect(manifest["yt-dlp"].version).toBe(TAG);
@@ -148,7 +164,7 @@ describe("installTool: yt-dlp", () => {
     const mem = memoryInstallFs();
     const result = await installTool(
       { tool: "yt-dlp", target: { os: "win32", arch: "x64" }, dir: DIR },
-      deps(mem, routeFetch(ytDlpRoutes("yt-dlp.exe", "EXE"))),
+      ytDlpDeps(mem, "yt-dlp.exe", "EXE"),
     );
     expect(mem.has(`${DIR}/yt-dlp.exe`)).toBe(true);
     expect(result.path.endsWith("yt-dlp.exe")).toBe(true);
@@ -159,7 +175,7 @@ describe("installTool: yt-dlp", () => {
     const dir = "/Users/José Núñez/AppData/Local/MediaForge/bin";
     await installTool(
       { tool: "yt-dlp", target: LINUX, dir },
-      deps(mem, routeFetch(ytDlpRoutes("yt-dlp_linux", "BINARY"))),
+      ytDlpDeps(mem, "yt-dlp_linux", "BINARY"),
     );
     expect(mem.text(`${dir}/yt-dlp`)).toBe("BINARY");
   });
@@ -227,6 +243,7 @@ describe("installTool: deno from a zip", () => {
   const denoLock: ToolsLock = {
     schema: 1,
     ffmpeg: {},
+    "yt-dlp": {},
     deno: {
       "linux-x64": {
         version: "2.9.7",
@@ -268,5 +285,166 @@ describe("installTool: deno from a zip", () => {
     ).catch((e) => e);
     expect(error.kind).toBe("checksum");
     expect(mem.paths()).toEqual([]);
+  });
+});
+
+describe("installTool: resolveSource", () => {
+  const LIVE_URL = "https://example.test/live/yt-dlp_linux";
+  const live = (content: string, sum = sha(content)) => ({
+    version: "2026.10.20.1",
+    url: LIVE_URL,
+    sha256: sum,
+    archive: "none" as const,
+  });
+
+  it("uses deps.resolveSource instead of the lock", async () => {
+    const mem = memoryInstallFs();
+    const result = await installTool(
+      { tool: "yt-dlp", target: LINUX, dir: DIR },
+      deps(mem, routeFetch({ [LIVE_URL]: () => streamResponse("LIVE") }), {
+        lock: ytDlpLock("yt-dlp_linux", "PINNED"),
+        resolveSource: async () => live("LIVE"),
+      }),
+    );
+    expect(result).toMatchObject({ version: "2026.10.20.1", url: LIVE_URL, sha256: sha("LIVE") });
+    expect(mem.text(`${DIR}/yt-dlp`)).toBe("LIVE");
+    expect(JSON.parse(mem.text(`${DIR}/manifest.json`))["yt-dlp"].version).toBe("2026.10.20.1");
+  });
+
+  it("refuses a resolved url that is not https, except on this machine", async () => {
+    const mem = memoryInstallFs();
+    const plain = "http://example.test/live/yt-dlp_linux";
+    const error = await installTool(
+      { tool: "yt-dlp", target: LINUX, dir: DIR },
+      deps(mem, routeFetch({ [plain]: () => streamResponse("LIVE") }), {
+        resolveSource: async () => ({ ...live("LIVE"), url: plain }),
+      }),
+    ).catch((e) => e);
+    expect(error).toBeInstanceOf(ToolInstallError);
+    expect(error.kind).toBe("http");
+    expect(mem.paths()).toEqual([]);
+
+    const local = "http://127.0.0.1:8080/yt-dlp_linux";
+    const ok = await installTool(
+      { tool: "yt-dlp", target: LINUX, dir: DIR },
+      deps(memoryInstallFs(), routeFetch({ [local]: () => streamResponse("LIVE") }), {
+        resolveSource: async () => ({ ...live("LIVE"), url: local }),
+      }),
+    );
+    expect(ok.sha256).toBe(sha("LIVE"));
+  });
+
+  it("still verifies the sha of a resolved source", async () => {
+    const mem = memoryInstallFs();
+    const error = await installTool(
+      { tool: "yt-dlp", target: LINUX, dir: DIR },
+      deps(mem, routeFetch({ [LIVE_URL]: () => streamResponse("LIVE") }), {
+        resolveSource: async () => live("LIVE", "0".repeat(64)),
+      }),
+    ).catch((e) => e);
+    expect(error.kind).toBe("checksum");
+    expect(mem.paths()).toEqual([]);
+  });
+});
+
+describe("checkTool", () => {
+  const entry = (version: string, sha256: string) => ({
+    version,
+    url: "u",
+    sha256,
+    installedAt: "t",
+  });
+  const manifestWith = (version: string, sha256: string) => ({
+    [`${DIR}/manifest.json`]: JSON.stringify({ "yt-dlp": entry(version, sha256) }),
+  });
+  const resolved = (version: string, sha256: string) => async () => ({
+    version,
+    url: "https://example.test/yt-dlp",
+    sha256,
+    archive: "none" as const,
+  });
+  const run = (files: Record<string, string>, resolveSource: InstallDeps["resolveSource"]) =>
+    checkTool("yt-dlp", LINUX, DIR, {
+      fs: memoryInstallFs(files).fs,
+      resolveSource,
+    });
+
+  it("reports upToDate false when the build differs", async () => {
+    const result = await run(manifestWith("1.0", "a"), resolved("2.0", "b"));
+    expect(result).toEqual({ tool: "yt-dlp", installed: "1.0", latest: "2.0", upToDate: false });
+  });
+
+  it("reports upToDate true when the hashes match", async () => {
+    const result = await run(manifestWith("2.0", "b"), resolved("2.0", "b"));
+    expect(result).toEqual({ tool: "yt-dlp", installed: "2.0", latest: "2.0", upToDate: true });
+  });
+
+  it("tells two builds with the same version apart by hash", async () => {
+    const result = await run(manifestWith("9.0.2", "a"), resolved("9.0.2", "b"));
+    expect(result.upToDate).toBe(false);
+  });
+
+  it("returns the error instead of throwing when resolving fails", async () => {
+    const result = await run(manifestWith("1.0", "a"), async () => {
+      throw new ToolInstallError("offline", "No connection.", "Check it.");
+    });
+    expect(result).toMatchObject({ installed: "1.0", upToDate: false });
+    expect(result.error).toContain("No connection.");
+    expect(result.latest).toBeUndefined();
+  });
+
+  it("reports installed undefined when nothing is cached", async () => {
+    const result = await run({}, resolved("2.0", "b"));
+    expect(result).toEqual({ tool: "yt-dlp", latest: "2.0", upToDate: false });
+  });
+});
+
+describe("isOutdated", () => {
+  const pinned = ytDlpLock("yt-dlp_linux", "BINARY");
+  const entry = (version: string) => ({ version, url: "u", sha256: "s", installedAt: "t" });
+  const check = (files: Record<string, string>) =>
+    isOutdated("yt-dlp", LINUX, DIR, { fs: memoryInstallFs(files).fs, lock: pinned });
+
+  it("is false when the installed build is the pinned one", async () => {
+    const manifest = JSON.stringify({ "yt-dlp": entry(TAG) });
+    expect(await check({ [`${DIR}/manifest.json`]: manifest })).toBe(false);
+  });
+
+  it("is true when another build is installed", async () => {
+    const manifest = JSON.stringify({ "yt-dlp": entry("2025.01.01") });
+    expect(await check({ [`${DIR}/manifest.json`]: manifest })).toBe(true);
+  });
+
+  it("is false for a tool MediaForge never installed", async () => {
+    expect(await check({})).toBe(false);
+  });
+});
+
+describe("installTool: previous version and concurrency", () => {
+  it("reports the manifest's previous version of the tool", async () => {
+    const mem = memoryInstallFs();
+    const first = await installTool(
+      { tool: "yt-dlp", target: LINUX, dir: DIR },
+      ytDlpDeps(mem, "yt-dlp_linux", "BINARY"),
+    );
+    expect(first.previous).toBeUndefined();
+    const second = await installTool(
+      { tool: "yt-dlp", target: LINUX, dir: DIR },
+      ytDlpDeps(mem, "yt-dlp_linux", "BINARY"),
+    );
+    expect(second.previous).toBe(TAG);
+  });
+
+  it("two concurrent installs of one tool both succeed and leave the verified file", async () => {
+    const mem = memoryInstallFs();
+    const run = () =>
+      installTool(
+        { tool: "yt-dlp", target: LINUX, dir: DIR },
+        ytDlpDeps(mem, "yt-dlp_linux", "BINARY-CONTENT"),
+      );
+    const results = await Promise.all([run(), run()]);
+    expect(results.map((r) => r.version)).toEqual([TAG, TAG]);
+    expect(sha(mem.text(`${DIR}/yt-dlp`))).toBe(sha("BINARY-CONTENT"));
+    expect(mem.paths()).toEqual([`${DIR}/manifest.json`, `${DIR}/yt-dlp`]);
   });
 });

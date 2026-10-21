@@ -9,7 +9,7 @@ import type { ProcessRunner } from "../engine/process.ts";
 import { CliError, ExitCode } from "../exit-codes.ts";
 import type { MediaInfo } from "../formats.ts";
 import type { UpdateInfo } from "../self-update.ts";
-import { memorySettingsStore, type Settings } from "../settings.ts";
+import { memorySettingsStore, type Settings, type SettingsStore } from "../settings.ts";
 import { App } from "./App.tsx";
 import type { AppDeps } from "./deps.ts";
 import type { FolderFs } from "./folder-browser.ts";
@@ -36,6 +36,7 @@ const fs: EngineFs = {
   exists: async () => false,
   list: async () => [],
   readText: async () => "",
+  writePrivate: async () => {},
 };
 
 const succeed: ProcessRunner = async (_c, args, h) => {
@@ -65,6 +66,8 @@ interface Options {
   /** Tools that start out missing. The default `installTool` removes a tool from this set. */
   missing?: Tool[];
   installTool?: AppDeps["installTool"];
+  /** What the tool update check finds. Default: yt-dlp and ffmpeg both have a newer release. */
+  checkTools?: AppDeps["checkTools"];
   /** What the release check finds; "offline" makes it fail. Default: already the newest. */
   update?: Partial<UpdateInfo> | "offline";
   installUpdate?: AppDeps["installUpdate"];
@@ -99,6 +102,8 @@ function setup(options: Options = {}) {
   };
   const missing = new Set<Tool>(options.missing ?? []);
   const installed: Tool[] = [];
+  /** The options each install got, in the same order as `installed`. */
+  const installOpts: Parameters<AppDeps["installTool"]>[2][] = [];
   const updated: string[] = [];
   /** Each value the Run key was set for. */
   const autostart: boolean[] = [];
@@ -129,11 +134,18 @@ function setup(options: Options = {}) {
       ]),
     installTool:
       options.installTool ??
-      (async (tool) => {
+      (async (tool, _onProgress, opts) => {
         installed.push(tool);
+        installOpts.push(opts);
         missing.delete(tool);
         return { tool, version: "1", path: `/cache/${tool}`, sha256: "s", url: "u" };
       }),
+    checkTools:
+      options.checkTools ??
+      (async () => [
+        { tool: "yt-dlp", installed: "2026.1.1", latest: "2026.2.2", upToDate: false },
+        { tool: "ffmpeg", installed: "9.0", latest: "9.1", upToDate: false },
+      ]),
     checkUpdate: async () => {
       if (options.update === "offline") throw new Error("offline");
       return {
@@ -194,6 +206,7 @@ function setup(options: Options = {}) {
     notified,
     core,
     installed,
+    installOpts,
     updated,
     autostart,
     flashes,
@@ -284,6 +297,55 @@ describe("home", () => {
     await press(app, KEY.down, KEY.down, KEY.enter);
     await waitFor(app, "Default download folder");
     expect(app.lastFrame()).not.toContain("What would you like to do?");
+    app.unmount();
+  });
+
+  /** The label of the row the cursor is on. */
+  const selectedRow = (app: TestApp) =>
+    (app.lastFrame() ?? "").split("\n").find((line) => line.startsWith("  > "));
+
+  it("starts on the first item in a fresh session", async () => {
+    const { app } = setup();
+    await waitFor(app, "What would you like to do?");
+    expect(selectedRow(app)).toContain("Download media");
+    app.unmount();
+  });
+
+  it("puts the cursor back on the last choice after going back", async () => {
+    const { app } = setup();
+    await waitFor(app, "What would you like to do?");
+    await press(app, KEY.down, KEY.down, KEY.enter);
+    await waitFor(app, "Default download folder");
+    await press(app, KEY.esc);
+    await waitFor(app, "What would you like to do?");
+    expect(selectedRow(app)).toContain("Settings");
+    app.unmount();
+  });
+
+  it("puts the cursor on the last choice when Home is reset", async () => {
+    const { app } = setup();
+    await waitFor(app, "What would you like to do?");
+    await press(app, KEY.down, KEY.enter);
+    await tick(150);
+    expect(app.lastFrame()).not.toContain("What would you like to do?");
+    await press(app, KEY.esc);
+    await waitFor(app, "What would you like to do?");
+    expect(selectedRow(app)).toContain("Downloads");
+    app.unmount();
+  });
+
+  it("never remembers Quit", async () => {
+    const { app } = setup();
+    await waitFor(app, "What would you like to do?");
+    await press(app, KEY.down, KEY.down, KEY.enter);
+    await waitFor(app, "Default download folder");
+    await press(app, KEY.esc);
+    await waitFor(app, "What would you like to do?");
+    await press(app, KEY.esc);
+    await waitFor(app, "Quit MediaForge?");
+    await press(app, "n");
+    await waitFor(app, "What would you like to do?");
+    expect(selectedRow(app)).toContain("Settings");
     app.unmount();
   });
 });
@@ -704,6 +766,22 @@ describe("settings", () => {
     t.app.unmount();
   });
 
+  it("cycles the yt-dlp channel and saves it without dropping other settings", async () => {
+    const t = await openSettings({ settings: { sortByType: true } });
+    await moveTo(t.app, "yt-dlp channel");
+    expect(t.app.lastFrame()).toContain("stable");
+    await press(t.app, KEY.enter);
+    await waitFor(t.app, "Saved");
+    expect((await t.store.load()).ytDlpChannel).toBe("nightly");
+    expect((await t.store.load()).sortByType).toBe(true);
+    await press(t.app, KEY.enter);
+    await vi.waitFor(async () => expect((await t.store.load()).ytDlpChannel).toBe("master"));
+    await tick(60);
+    await press(t.app, KEY.enter);
+    await vi.waitFor(async () => expect((await t.store.load()).ytDlpChannel).toBe("stable"));
+    t.app.unmount();
+  });
+
   it("picks the bandwidth preset and tells the core", async () => {
     const t = await openSettings();
     await moveTo(t.app, "Bandwidth limit");
@@ -853,6 +931,8 @@ describe("settings", () => {
       limitPreset: "high",
       limits: { high: null, med: 5_000_000, low: 1_000_000, custom: null },
       managerSort: { column: "lastTry", descending: true },
+      allowPrivateUrls: false,
+      ytDlpChannel: "stable",
     });
     expect(t.autostart).toEqual([false]);
     t.app.unmount();
@@ -1346,6 +1426,94 @@ describe("stale extractor", () => {
     t.app.unmount();
   });
 
+  const failStale: Options["runner"] = async (_c, _a, h) => {
+    h.onStderrLine(STALE);
+    return { exitCode: 1 };
+  };
+  async function toFailed(options: Options) {
+    const t = setup({ settings: SKIP_QUESTIONS, ...options });
+    await waitFor(t.app, "What would you like to do?");
+    await press(t.app, KEY.enter);
+    await waitFor(t.app, URL);
+    await press(t.app, KEY.enter);
+    await waitFor(t.app, "Download failed");
+    return t;
+  }
+
+  it("offers nightly and master updates when the channel is stable", async () => {
+    const t = await toFailed({ runner: failStale });
+    const failed = t.app.lastFrame() ?? "";
+    expect(failed).toContain("Update yt-dlp to master and retry");
+    t.app.unmount();
+  });
+
+  it("hides the update entry for the saved channel", async () => {
+    const t = await toFailed({
+      runner: failStale,
+      settings: { ...SKIP_QUESTIONS, ytDlpChannel: "nightly" },
+    });
+    expect(t.app.lastFrame()).toContain("Update yt-dlp to master and retry");
+    expect(t.app.lastFrame()).not.toContain("Update yt-dlp to nightly and retry");
+    t.app.unmount();
+  });
+
+  it("saves the chosen channel, updates, and retries the download", async () => {
+    let calls = 0;
+    const t = await toFailed({
+      runner: async (c, a, h, s) => {
+        if (++calls === 1) return failStale(c, a, h, s);
+        return succeed(c, a, h, s);
+      },
+    });
+    await moveTo(t.app, "Update yt-dlp to nightly and retry");
+    await press(t.app, KEY.enter);
+    await waitFor(t.app, "Download complete");
+    const saved = await t.store.load();
+    expect(saved.ytDlpChannel).toBe("nightly");
+    expect(saved.quality).toBe("mp4-720p");
+    expect(saved.askFolder).toBe(false);
+    expect(t.installed).toEqual(["yt-dlp"]);
+    expect(calls).toBe(2);
+    t.app.unmount();
+  });
+
+  it.each(["load", "save"] as const)("stays on the failed page when %s fails", async (which) => {
+    const t = await toFailed({ runner: failStale });
+    const store: SettingsStore = t.store;
+    const realLoad = store.load;
+    const realSave = store.save;
+    let broken = false;
+    store.load = async () => {
+      if (broken && which === "load") throw new Error("disk full");
+      return realLoad();
+    };
+    store.save = async (settings) => {
+      if (broken && which === "save") throw new Error("disk full");
+      return realSave(settings);
+    };
+    broken = true;
+    await moveTo(t.app, "Update yt-dlp to nightly and retry");
+    await press(t.app, KEY.enter);
+    await waitFor(t.app, "Could not save the yt-dlp channel: disk full. Nothing was changed.");
+    expect(t.installed).toEqual([]);
+    expect(t.app.lastFrame()).toContain("Update yt-dlp to nightly and retry");
+    expect(t.app.lastFrame()).toContain("Download failed");
+    t.app.unmount();
+  });
+
+  it("offers no channel updates for other failures", async () => {
+    const t = await toFailed({
+      runner: async (_c, _a, h) => {
+        h.onStderrLine("ERROR: [Errno 28] No space left on device");
+        return { exitCode: 1 };
+      },
+    });
+    const failed = t.app.lastFrame() ?? "";
+    expect(failed).not.toContain("Update yt-dlp to nightly and retry");
+    expect(failed).not.toContain("Update yt-dlp to master and retry");
+    t.app.unmount();
+  });
+
   it("does not offer the update for failures that an update would not fix", async () => {
     const t = setup({
       settings: SKIP_QUESTIONS,
@@ -1403,6 +1571,126 @@ describe("stale extractor", () => {
     await press(t.app, KEY.enter);
     return t;
   }
+
+  describe("update screen details", () => {
+    const NIGHTLY = { ...SKIP_QUESTIONS, ytDlpChannel: "nightly" } as const;
+    const oldYtDlp: AppDeps["inspectTools"] = async () => [
+      {
+        tool: "yt-dlp",
+        found: true,
+        version: "2026.01.01",
+        source: "cache",
+        path: "/cache/yt-dlp",
+      },
+      { tool: "ffmpeg", found: true, version: "9.0", source: "bundled", path: "/bin/ffmpeg" },
+    ];
+    /** An install that stays on screen until `finish` is called. */
+    function slowInstall(result: { version: string; previous?: string }) {
+      let finish: () => void = () => {};
+      const gate = new Promise<void>((r) => {
+        finish = r;
+      });
+      const installTool: AppDeps["installTool"] = async (tool) => {
+        await gate;
+        return { tool, path: "/cache/yt-dlp", sha256: "s", url: "u", ...result };
+      };
+      return { installTool, finish: () => finish() };
+    }
+
+    it("names the channel and the installed version while updating", async () => {
+      const slow = slowInstall({ version: "2026.02.02", previous: "2026.01.01" });
+      const t = await toUpdate({
+        runner: failStale,
+        settings: NIGHTLY,
+        tools: oldYtDlp,
+        installTool: slow.installTool,
+      });
+      await waitFor(t.app, "Updating yt-dlp to nightly");
+      await waitFor(t.app, "Channel: nightly");
+      await waitFor(t.app, "From: 2026.01.01");
+      slow.finish();
+      t.app.unmount();
+    });
+
+    it("shows both versions and the channel once the update is done", async () => {
+      const slow = slowInstall({ version: "2026.02.02", previous: "2026.01.01" });
+      const t = await toUpdate({
+        runner: failStale,
+        settings: NIGHTLY,
+        tools: oldYtDlp,
+        installTool: slow.installTool,
+      });
+      await waitFor(t.app, "Channel: nightly");
+      slow.finish();
+      await waitFor(t.app, "yt-dlp updated: 2026.01.01 -> 2026.02.02 (nightly)");
+      await waitFor(t.app, "Download failed");
+      t.app.unmount();
+    });
+
+    it("says not installed when there was no earlier version", async () => {
+      const slow = slowInstall({ version: "2026.02.02" });
+      let gone = false;
+      const t = await toFailed({
+        runner: failStale,
+        settings: NIGHTLY,
+        installTool: slow.installTool,
+        tools: async () =>
+          gone ? [{ tool: "yt-dlp", found: false, error: "missing" }] : await oldYtDlp(),
+      });
+      gone = true;
+      await moveTo(t.app, "Update yt-dlp and retry");
+      await press(t.app, KEY.enter);
+      await waitFor(t.app, "From: not installed");
+      slow.finish();
+      await waitFor(t.app, "yt-dlp updated: not installed -> 2026.02.02 (nightly)");
+      t.app.unmount();
+    });
+
+    it("says when yt-dlp is already up to date", async () => {
+      const slow = slowInstall({ version: "2026.01.01", previous: "2026.01.01" });
+      const t = await toUpdate({
+        runner: failStale,
+        settings: NIGHTLY,
+        tools: oldYtDlp,
+        installTool: slow.installTool,
+      });
+      await waitFor(t.app, "Channel: nightly");
+      slow.finish();
+      await waitFor(t.app, "yt-dlp is already up to date (2026.01.01, nightly)");
+      t.app.unmount();
+    });
+
+    it("names the channel when the update fails", async () => {
+      const t = await toUpdate({
+        runner: failStale,
+        settings: NIGHTLY,
+        installTool: async () => {
+          throw new ToolInstallError("offline", "Could not reach github.com.", "Try again.");
+        },
+      });
+      await waitFor(t.app, "Could not reach github.com.");
+      expect(t.app.lastFrame()).toContain("nightly");
+      t.app.unmount();
+    });
+
+    it("falls back to the stable channel when the settings cannot be read", async () => {
+      const slow = slowInstall({ version: "2026.02.02", previous: "2026.01.01" });
+      const t = await toFailed({
+        runner: failStale,
+        tools: oldYtDlp,
+        installTool: slow.installTool,
+      });
+      t.store.load = async () => {
+        throw new Error("disk full");
+      };
+      await moveTo(t.app, "Update yt-dlp and retry");
+      await press(t.app, KEY.enter);
+      await waitFor(t.app, "Updating yt-dlp to stable");
+      await waitFor(t.app, "Channel: stable");
+      slow.finish();
+      t.app.unmount();
+    });
+  });
 
   it("runs the update again from its own Try again after a failed update", async () => {
     let installs = 0;
@@ -1751,6 +2039,138 @@ describe("updating MediaForge", () => {
     await waitFor(t.app, "Version 10.0.0 is available");
     expect(t.app.lastFrame()).toContain("only in the installed program");
     expect(t.app.lastFrame()).not.toContain("Update to");
+    t.app.unmount();
+  });
+});
+
+describe("tool update check", () => {
+  async function openChecker(options: Options = {}) {
+    const t = setup(options);
+    await waitFor(t.app, "What would you like to do?");
+    await moveTo(t.app, "About");
+    await press(t.app, KEY.enter);
+    await waitFor(t.app, "About MediaForge");
+    await moveTo(t.app, "Check for tool updates");
+    await press(t.app, KEY.enter);
+    return t;
+  }
+
+  it("lists installed and latest versions and downloads nothing until chosen", async () => {
+    const t = await openChecker({ settings: { ytDlpChannel: "master" } });
+    await waitFor(t.app, "Update yt-dlp");
+    const frame = t.app.lastFrame() ?? "";
+    expect(frame).toContain("2026.1.1 -> 2026.2.2 (master)");
+    expect(frame).toContain("9.0 -> 9.1");
+    expect(frame).toContain("Update ffmpeg");
+    expect(frame).toContain("Update all");
+    await tick(60);
+    expect(t.installed).toEqual([]);
+    t.app.unmount();
+  });
+
+  it("only offers the rows that have an update", async () => {
+    const t = await openChecker({
+      checkTools: async () => [
+        { tool: "yt-dlp", installed: "2026.2.2", latest: "2026.2.2", upToDate: true },
+        { tool: "ffmpeg", installed: "9.0", latest: "9.1", upToDate: false },
+      ],
+    });
+    await waitFor(t.app, "Update ffmpeg");
+    const frame = t.app.lastFrame() ?? "";
+    expect(frame).toContain("up to date");
+    expect(frame).not.toContain("Update yt-dlp");
+    expect(frame).not.toContain("Update all");
+    t.app.unmount();
+  });
+
+  it("installs yt-dlp from the saved channel, then returns to the refreshed list", async () => {
+    let ytDlpDone = false;
+    const t = await openChecker({
+      settings: { ytDlpChannel: "stable" },
+      checkTools: async () => [
+        ytDlpDone
+          ? { tool: "yt-dlp", installed: "2026.2.2", latest: "2026.2.2", upToDate: true }
+          : { tool: "yt-dlp", installed: "2026.1.1", latest: "2026.2.2", upToDate: false },
+        { tool: "ffmpeg", installed: "9.0", latest: "9.1", upToDate: false },
+      ],
+      installTool: async (tool) => {
+        ytDlpDone = true;
+        return { tool, version: "1", path: `/cache/${tool}`, sha256: "s", url: "u" };
+      },
+    });
+    await waitFor(t.app, "Update yt-dlp");
+    await moveTo(t.app, "Update yt-dlp");
+    await press(t.app, KEY.enter);
+    await waitFor(t.app, "2026.2.2 up to date");
+    expect(t.app.lastFrame()).not.toContain("Update yt-dlp");
+    expect(t.app.lastFrame()).toContain("Update ffmpeg");
+    t.app.unmount();
+  });
+
+  it("passes the channel to yt-dlp and live to ffmpeg, and Update all does both", async () => {
+    const t = await openChecker({ settings: { ytDlpChannel: "master" } });
+    await waitFor(t.app, "Update all");
+    await moveTo(t.app, "Update all");
+    await press(t.app, KEY.enter);
+    await vi.waitFor(() => expect(t.installed).toEqual(["yt-dlp", "ffmpeg"]));
+    expect(t.installOpts).toEqual([{ channel: "master" }, { live: true }]);
+    t.app.unmount();
+  });
+
+  it("shows the installed versions and a retry when offline", async () => {
+    let offline = true;
+    const t = await openChecker({
+      checkTools: async () =>
+        offline
+          ? [
+              { tool: "yt-dlp", installed: "2026.1.1", upToDate: false, error: "offline" },
+              { tool: "ffmpeg", installed: "9.0", upToDate: false, error: "offline" },
+            ]
+          : [{ tool: "yt-dlp", installed: "2026.1.1", latest: "2026.1.1", upToDate: true }],
+    });
+    await waitFor(t.app, "Try again");
+    const frame = t.app.lastFrame() ?? "";
+    expect(frame).toContain("2026.1.1");
+    expect(frame).toContain("9.0");
+    expect(frame).not.toContain("Update yt-dlp");
+    offline = false;
+    await press(t.app, KEY.enter);
+    await waitFor(t.app, "up to date");
+    t.app.unmount();
+  });
+
+  it("survives a check that throws", async () => {
+    const t = await openChecker({
+      checkTools: async () => {
+        throw new Error("boom");
+      },
+    });
+    await waitFor(t.app, "Try again");
+    expect(t.app.lastFrame()).toContain("2026.1.1");
+    t.app.unmount();
+  });
+
+  it("still updates straight away from a failed download, without the list", async () => {
+    let calls = 0;
+    const t = setup({
+      settings: SKIP_QUESTIONS,
+      runner: async (c, a, h, s) => {
+        calls++;
+        if (calls === 1) {
+          h.onStderrLine(
+            "ERROR: Unable to extract title; please report this issue on https://github.com/yt-dlp/yt-dlp/issues",
+          );
+          return { exitCode: 1 };
+        }
+        return succeed(c, a, h, s);
+      },
+    });
+    await startDownload(t);
+    await waitFor(t.app, "Download failed");
+    await moveTo(t.app, "Update yt-dlp and retry");
+    await press(t.app, KEY.enter);
+    await waitFor(t.app, "Download complete");
+    expect(t.installed).toEqual(["yt-dlp"]);
     t.app.unmount();
   });
 });

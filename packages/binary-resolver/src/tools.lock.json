@@ -57,5 +57,34 @@
       "version": "9.0.2"
     }
   },
-  "schema": 1
+  "schema": 1,
+  "yt-dlp": {
+    "linux-arm64": {
+      "archive": "none",
+      "buildInfo": "https://github.com/yt-dlp/yt-dlp/releases/tag/2026.08.19",
+      "license": "Unlicense",
+      "member": "yt-dlp_linux_aarch64",
+      "sha256": "b16e4dab368a816cd05d477d698a605a6ae87ccee1c8ffd38fa21d7254141fcc",
+      "url": "https://github.com/yt-dlp/yt-dlp/releases/download/2026.08.19/yt-dlp_linux_aarch64",
+      "version": "2026.08.19"
+    },
+    "linux-x64": {
+      "archive": "none",
+      "buildInfo": "https://github.com/yt-dlp/yt-dlp/releases/tag/2026.08.19",
+      "license": "Unlicense",
+      "member": "yt-dlp_linux",
+      "sha256": "58162f9bfdc27458ea47bfcb311cf47028f17d8154a8bf7d689861d46399230a",
+      "url": "https://github.com/yt-dlp/yt-dlp/releases/download/2026.08.19/yt-dlp_linux",
+      "version": "2026.08.19"
+    },
+    "win32-x64": {
+      "archive": "none",
+      "buildInfo": "https://github.com/yt-dlp/yt-dlp/releases/tag/2026.08.19",
+      "license": "Unlicense",
+      "member": "yt-dlp.exe",
+      "sha256": "66674953fe251b89f4d08c5f0e35e0728679bd67ab3d7d05c0562af101dd3e7a",
+      "url": "https://github.com/yt-dlp/yt-dlp/releases/download/2026.08.19/yt-dlp.exe",
+      "version": "2026.08.19"
+    }
+  }
 }

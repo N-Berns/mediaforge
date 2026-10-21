@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
+  applyDrag,
   findMediaIndex,
+  isDrag,
   isTargetGone,
   isWorthOverlay,
   labelFor,
@@ -63,6 +65,53 @@ describe("placeButton", () => {
         { width: 90, height: 28 },
       ),
     ).toEqual({ top: 308, left: 50 + 640 - 90 - 8 });
+  });
+});
+
+describe("placeButton offset", () => {
+  it("placeButton adds the offset", () => {
+    expect(
+      placeButton(
+        { top: 100, left: 50, width: 640, height: 360 },
+        { x: 0, y: 200 },
+        { width: 90, height: 22 },
+        { dx: -30, dy: 12 },
+      ),
+    ).toEqual({ top: 308 + 12, left: 50 + 640 - 90 - 8 - 30 });
+  });
+});
+
+describe("applyDrag", () => {
+  const bounds = { width: 1000, height: 800 };
+  const button = { width: 90, height: 22 };
+
+  it("applyDrag moves by the delta", () => {
+    expect(applyDrag({ top: 100, left: 200 }, { dx: 15, dy: -20 }, bounds, button)).toEqual({
+      top: 80,
+      left: 215,
+    });
+  });
+
+  it("applyDrag keeps the button inside the bounds on every edge", () => {
+    expect(applyDrag({ top: 10, left: 10 }, { dx: -50, dy: -50 }, bounds, button)).toEqual({
+      top: 0,
+      left: 0,
+    });
+    expect(applyDrag({ top: 700, left: 900 }, { dx: 500, dy: 500 }, bounds, button)).toEqual({
+      top: 778,
+      left: 910,
+    });
+  });
+});
+
+describe("isDrag", () => {
+  it("isDrag is false under 4px and true at or above it", () => {
+    expect(isDrag({ dx: 0, dy: 0 })).toBe(false);
+    expect(isDrag({ dx: 2, dy: 2 })).toBe(false);
+    expect(isDrag({ dx: 3, dy: 0 })).toBe(false);
+    expect(isDrag({ dx: 4, dy: 0 })).toBe(true);
+    expect(isDrag({ dx: 0, dy: -4 })).toBe(true);
+    expect(isDrag({ dx: 3, dy: 3 })).toBe(true);
   });
 });
 

@@ -7,6 +7,7 @@ import type { EngineJob } from "../../../engine/index.ts";
 import { batchPercent, countJobs } from "../../batch.ts";
 import { shorten } from "../../clipboard-hint.ts";
 import { Frame } from "../../components/Frame.tsx";
+import { stageLabel } from "../../components/JobProgress.tsx";
 import { visibleWindow } from "../../components/Menu.tsx";
 import { ProgressBar } from "../../components/ProgressBar.tsx";
 import { Spinner } from "../../components/Spinner.tsx";
@@ -16,7 +17,6 @@ import type { Plan } from "../../flow.ts";
 import { NoticeContext } from "../../notice.tsx";
 import { startPayload } from "../../submit.ts";
 import { COLORS, ICONS, STEP_BAR, STEP_COLORS } from "../../theme.ts";
-import { stageLabel } from "../DownloadScreen.tsx";
 
 export interface BatchDownloadScreenProps {
   plans: Plan[];

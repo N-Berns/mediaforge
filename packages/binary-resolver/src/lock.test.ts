@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { ToolInstallError } from "./errors.ts";
-import { ffmpegSource, type LockEntry, type ToolsLock, validateLock } from "./lock.ts";
+import { ffmpegSource, type LockEntry, type ToolsLock, validateLock, ytDlpSource } from "./lock.ts";
 import { resolveTarget } from "./target.ts";
 
 const entry: LockEntry = {
@@ -12,7 +12,28 @@ const entry: LockEntry = {
   license: "LGPL-2.1-or-later",
   buildInfo: "https://example.test/build",
 };
-const lock: ToolsLock = { schema: 1, ffmpeg: { "linux-x64": entry }, deno: {} };
+const lock: ToolsLock = {
+  schema: 1,
+  ffmpeg: { "linux-x64": entry },
+  deno: {},
+  "yt-dlp": {
+    "linux-x64": { ...entry, version: "2026.08.19", archive: "none", member: "yt-dlp_linux" },
+  },
+};
+
+describe("ytDlpSource", () => {
+  it("returns the pinned build for the target", () => {
+    expect(ytDlpSource(resolveTarget("linux", "x64"), lock)).toMatchObject({
+      version: "2026.08.19",
+      archive: "none",
+      member: "yt-dlp_linux",
+    });
+  });
+
+  it("says so when no build is pinned for the target", () => {
+    expect(() => ytDlpSource(resolveTarget("linux", "arm64"), lock)).toThrow(/linux-arm64/);
+  });
+});
 
 describe("ffmpegSource", () => {
   it("returns the pinned build for the target", () => {

@@ -15,6 +15,7 @@
     "brand:build": "node tools/brand/build-icons.mjs",
     "pin:ffmpeg": "node tools/release/pin-ffmpeg.mjs",
     "pin:deno": "node tools/release/pin-deno.mjs",
+    "pin:ytdlp": "node tools/release/pin-ytdlp.mjs",
     "release:build": "node tools/release/build-binaries.mjs",
     "release:checksums": "node tools/release/checksums.mjs"
   },

@@ -8,7 +8,8 @@ type Manifest = {
   background: { scripts?: string[]; service_worker?: string };
   browser_specific_settings?: { gecko: { id: string; strict_min_version?: string } };
   permissions: string[];
-  host_permissions: string[];
+  host_permissions?: string[];
+  optional_host_permissions?: string[];
   content_scripts: { js: string[] }[];
   action: { default_popup: string };
 };
@@ -36,6 +37,13 @@ describe("buildManifest", () => {
       ["cookies", "nativeMessaging", "storage", "tabs", "webRequest"].sort(),
     );
     expect(m.host_permissions).toEqual(["<all_urls>"]);
+    expect(m.optional_host_permissions).toBeUndefined();
+  });
+
+  it("makes site access optional on Chromium, to be granted from the popup", () => {
+    const m = buildManifest("chromium", "0.3.0") as Manifest;
+    expect(m.host_permissions).toBeUndefined();
+    expect(m.optional_host_permissions).toEqual(["<all_urls>"]);
   });
 
   it("injects the overlay as a content script and sets the popup", () => {

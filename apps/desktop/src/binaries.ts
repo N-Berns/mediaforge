@@ -67,7 +67,16 @@ const resolved = new Map<Tool, Promise<ResolvedBinary>>();
 /** Drop the remembered lookups. Call after a tool is installed or updated. */
 export const forgetResolvedTools = (): void => resolved.clear();
 
-/** Resolve a tool using the standard order: env override, PATH, bundled, managed cache. */
+/**
+ * Tools whose downloaded copy beats PATH and bundled. Only yt-dlp: it goes stale fast, so an
+ * update through MediaForge has to be the copy that runs.
+ */
+export const prefersCache = (tool: Tool): boolean => tool === "yt-dlp";
+
+/**
+ * Resolve a tool: env override, PATH, bundled, managed cache. For yt-dlp the managed cache comes
+ * right after the env override (env, cache, PATH, bundled).
+ */
 export const resolveTool: ResolveTool = (tool) => {
   const known = resolved.get(tool);
   if (known) return known;
@@ -75,6 +84,7 @@ export const resolveTool: ResolveTool = (tool) => {
   const lookup = resolveBinary(tool, {
     bundledDir: distinctBundledDir(defaultBinDir(), cache),
     cacheDir: cache,
+    preferCache: prefersCache(tool),
   });
   resolved.set(tool, lookup);
   lookup.catch(() => {

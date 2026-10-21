@@ -1,11 +1,17 @@
 import { randomUUID } from "node:crypto";
-import { mkdir, readdir, readFile, rename, rm } from "node:fs/promises";
+import { mkdir, readdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { basename, join, resolve } from "node:path";
 import { getProfile } from "@mediaforge/media-profiles";
 import type { DownloadJob, DownloadRequest, OutputProfile } from "@mediaforge/shared-types";
 import { type ResolveTool, requireTool, resolveTool } from "../binaries.ts";
 import { CliError, ExitCode } from "../exit-codes.ts";
-import { buildYtDlpArgs, contextSecrets, type RequestContext, redactSecrets } from "./args.ts";
+import {
+  buildYtDlpArgs,
+  contextConfig,
+  contextSecrets,
+  type RequestContext,
+  redactSecrets,
+} from "./args.ts";
 import { defaultOutputDir, fileExists, splitName, uniquePath } from "./paths.ts";
 import { type ProcessRunner, runProcess } from "./process.ts";
 import {
@@ -41,14 +47,17 @@ export interface EngineFs {
   list: (path: string) => Promise<string[]>;
   /** Text of a file; may throw when it does not exist yet. */
   readText: (path: string) => Promise<string>;
+  /** Write a file only its owner can read; replaces any earlier one. */
+  writePrivate: (path: string, text: string) => Promise<void>;
 }
 
 /** Leftovers yt-dlp keeps in the work folder while a download or merge is unfinished. */
-const PARTIAL = /\.(part|ytdl|temp)$|\.f\d[\w-]*\.\w+$|^ffmpeg-progress\.txt$/i;
+const PARTIAL = /\.(part|ytdl|temp)$|\.f\d[\w-]*\.\w+$|^ffmpeg-progress\.txt$|^request\.conf$/i;
 
 const realFs: EngineFs = {
   list: (path) => readdir(path),
   readText: (path) => readFile(path, "utf8"),
+  writePrivate: (path, text) => writeFile(path, text, { encoding: "utf8", mode: 0o600 }),
   mkdir: async (path) => void (await mkdir(path, { recursive: true })),
   rename,
   rm: (path) => rm(path, { recursive: true, force: true }),
@@ -422,6 +431,11 @@ export class DownloadEngine {
           });
       }, FFMPEG_POLL_MS);
 
+      // Cookies and auth headers reach yt-dlp through a private file, never its command line.
+      const contextFile = join(workDir, "request.conf");
+      const config = contextConfig(entry.context);
+      if (config) await this.#fs.writePrivate(contextFile, config);
+
       entry.appliedRate = entry.rate;
       entry.spawned = true;
       const { exitCode } = await this.#run(
@@ -436,7 +450,7 @@ export class DownloadEngine {
           // must hold only the subtitle file for it to be found.
           ...(!job.request.subtitle && { ffmpegProgressFile: progressFile }),
           jsRuntimeArgs,
-          context: entry.context,
+          ...(config && { contextConfigFile: contextFile }),
           limitRate: entry.appliedRate,
         }),
         {
@@ -448,7 +462,10 @@ export class DownloadEngine {
           },
         },
         controller.signal,
-      ).finally(() => clearInterval(poll));
+      ).finally(() => {
+        clearInterval(poll);
+        if (config) void this.#fs.rm(contextFile).catch(() => {});
+      });
 
       const restarting = controller.signal.aborted && entry.stopReason === "restart";
       if (restarting && exitCode !== 0) {

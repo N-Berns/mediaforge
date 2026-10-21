@@ -10,7 +10,7 @@ Items marked **(decision)** have open questions. Per `CLAUDE.md`, ask before bui
 
 - [x] Shared types used by the CLI: `DownloadRequest`, `DownloadProgress`, `DownloadJob`, `OutputProfile` (`packages/shared-types`)
 - [x] Output profiles (`packages/media-profiles`)
-- [x] Binary resolver: env override, then PATH (ffmpeg >= 5.0), then bundled `bin/` (`packages/binary-resolver`)
+- [x] Binary resolver: env override, then PATH (ffmpeg >= 5.0), then bundled `bin/`, then the managed cache; yt-dlp checks the managed cache right after the env override (`packages/binary-resolver`)
 - [x] Resolver verified on a real machine: PATH, bundled fallback, env override, bad override
 
 ## 1. App skeleton
@@ -29,7 +29,7 @@ Items marked **(decision)** have open questions. Per `CLAUDE.md`, ask before bui
 - [x] Friendly error when a tool is missing (`requireTool`: what was tried, how to fix, exit 3)
 - [x] Tools are downloaded on demand from upstream with SHA-256 verification into a per-user cache (`mediaforge setup`, `mediaforge update`); not bundled in the release
 - [x] ffmpeg: LGPL build pinned for Windows and Linux; macOS is not supported (see `tools.lock.json` and the README)
-- [x] Self-update of yt-dlp into the user data dir (`mediaforge update`, nightly channel)
+- [x] Self-update of yt-dlp into the user data dir (`mediaforge update [--channel stable|nightly|master]`; `--check` lists yt-dlp and ffmpeg versions and installs nothing)
 - [x] Per-platform release artifacts: win-x64, linux-x64, linux-arm64
 
 ## 3. Download engine

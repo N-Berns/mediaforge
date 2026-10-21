@@ -7,6 +7,7 @@ import { powershellPath } from "../powershell.ts";
 import { DEFAULT_SETTINGS } from "../settings.ts";
 import { clipboardCommands, copyCommands, readClipboard, writeClipboard } from "./clipboard.ts";
 import { clipboardHint, shorten } from "./clipboard-hint.ts";
+import { activeDetail, stageLabel } from "./components/JobProgress.tsx";
 import { stepIndex, visibleWindow } from "./components/Menu.tsx";
 import { renderBar } from "./components/ProgressBar.tsx";
 import { cleanPaste, splitUrls, visibleSlice } from "./components/TextField.tsx";
@@ -15,7 +16,6 @@ import { availableKinds, formatChoices } from "./format-choices.ts";
 import { describeProgress, failureHint, formatClock, mediaRows } from "./hints.ts";
 import { describeSites, findLinks, parseLinks, siteOf } from "./links.ts";
 import { openCommand } from "./open-folder.ts";
-import { activeDetail, stageLabel } from "./screens/DownloadScreen.tsx";
 import { validateLinks } from "./screens/LinkScreen.tsx";
 
 describe("menu helpers", () => {
@@ -524,6 +524,12 @@ describe("openCommand", () => {
       verbatim: true,
     });
     expect(openCommand("/a/c.mp4", "linux")).toMatchObject({ command: "xdg-open" });
+  });
+
+  it("never lets a quote in a Windows path break out of the quoted argument", () => {
+    const { args, verbatim } = openCommand('C:\\a\\x" /root,C:\\evil\\c.mp4', "win32");
+    expect(verbatim).toBe(false);
+    expect(args).toEqual(["C:\\a\\x /root,C:\\evil"]);
   });
 
   it("opens a folder itself, without selecting anything in it", () => {

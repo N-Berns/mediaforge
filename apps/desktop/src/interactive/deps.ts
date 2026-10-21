@@ -1,4 +1,10 @@
-import type { InstallProgress, InstallResult, Tool } from "@mediaforge/binary-resolver";
+import type {
+  InstallProgress,
+  InstallResult,
+  Tool,
+  ToolCheck,
+  YtDlpChannel,
+} from "@mediaforge/binary-resolver";
 import type { Report, SendResult } from "@mediaforge/shared-types";
 import { createContext, useContext } from "react";
 import type { CoreConnector } from "../core/connect.ts";
@@ -6,6 +12,7 @@ import type { ToolReport } from "../doctor.ts";
 import type { DownloadDeps } from "../download.ts";
 import type { MediaInfo } from "../formats.ts";
 import type { UpdateInfo, UpdateProgress } from "../self-update.ts";
+import type { InstallOptions } from "../tool-runtime.ts";
 import type { FolderFs } from "./folder-browser.ts";
 
 /** Everything the interactive app needs from the outside world. Tests replace all of it. */
@@ -17,7 +24,10 @@ export interface AppDeps {
   installTool: (
     tool: Tool,
     onProgress: (progress: InstallProgress) => void,
+    opts?: InstallOptions,
   ) => Promise<InstallResult>;
+  /** Ask the release feeds what is newest. Installs nothing; rejects only on unexpected errors. */
+  checkTools: (opts?: { channel?: YtDlpChannel }) => Promise<ToolCheck[]>;
   /** Ask GitHub for the newest MediaForge release. Rejects when it cannot be reached. */
   checkUpdate: () => Promise<UpdateInfo>;
   /** Replace the running program with the release in `info`. */

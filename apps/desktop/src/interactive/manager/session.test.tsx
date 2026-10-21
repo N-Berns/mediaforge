@@ -17,6 +17,7 @@ const fs: EngineFs = {
   exists: async () => false,
   list: async () => [],
   readText: async () => "",
+  writePrivate: async () => {},
 };
 
 const job = (id: string, patch: Partial<DownloadJob> = {}): DownloadJob => ({

@@ -24,7 +24,7 @@ type UpdateState =
   | { kind: "done"; info: UpdateInfo }
   | { kind: "failed"; info: UpdateInfo; message: string };
 
-type Choice = "update" | "tools" | "report" | "back";
+type Choice = "update" | "tools" | "toolUpdates" | "report" | "back";
 
 /** From this many rows the About page shows every license notice; a shorter window gets a summary. */
 const FULL_NOTICES_ROWS = 33;
@@ -33,10 +33,12 @@ export function AboutScreen({
   onBack,
   onSetup,
   onReport,
+  onToolUpdates,
 }: {
   onBack: () => void;
   onSetup: () => void;
   onReport: () => void;
+  onToolUpdates: () => void;
 }) {
   const deps = useDeps();
   const { rows } = useTerminalSize();
@@ -101,6 +103,12 @@ export function AboutScreen({
           },
         ]
       : []),
+    {
+      value: "toolUpdates",
+      icon: ICONS.download,
+      label: "Check for tool updates",
+      hint: "yt-dlp and ffmpeg",
+    },
     { value: "report", icon: ICONS.warn, label: "Report a problem" },
     { value: "back", icon: ICONS.back, label: "Back" },
   ];
@@ -183,6 +191,7 @@ export function AboutScreen({
             if (choice === "back") onBack();
             else if (choice === "tools") onSetup();
             else if (choice === "report") onReport();
+            else if (choice === "toolUpdates") onToolUpdates();
             else if (update.kind === "available" || update.kind === "failed") install(update.info);
           }}
           items={items}

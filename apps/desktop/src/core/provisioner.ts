@@ -113,7 +113,7 @@ export function startProvisioning(rt: ToolRuntime, options: ProvisionOptions = {
       }
       if (!(await refresh.stale())) return;
       publish({ state: "installing", tool: "yt-dlp", phase: "refreshing" });
-      await rt.install("yt-dlp", () => {});
+      await rt.install("yt-dlp", () => {}, { channel: "stable" });
       await refresh.stamp();
     } catch {
       // A failed refresh keeps the copy that already works.
@@ -146,7 +146,7 @@ export function startProvisioning(rt: ToolRuntime, options: ProvisionOptions = {
         const before = current;
         publish({ state: "installing", tool: "yt-dlp", phase: "refreshing" });
         try {
-          await rt.install("yt-dlp", () => {});
+          await rt.install("yt-dlp", () => {}, { channel: "stable" });
           await refresh.stamp();
           lastFailedAt = undefined;
         } catch (error) {

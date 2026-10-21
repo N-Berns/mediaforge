@@ -6,6 +6,12 @@ import {
 } from "@mediaforge/shared-types";
 import { Box, Text, useInput } from "ink";
 import { useState } from "react";
+import {
+  barWidthFor,
+  hasStepRows,
+  JobProgress,
+  progressLines,
+} from "../components/JobProgress.tsx";
 import { Clickable, HoverText } from "../mouse/MouseProvider.tsx";
 import { COLORS } from "../theme.ts";
 import { PRESET_NAMES } from "./LimitPicker.tsx";
@@ -14,6 +20,34 @@ import { ORIGIN_LABELS, rowName, statusText } from "./model.ts";
 const LABEL_WIDTH = 8;
 /** The title and the hint line. */
 const CHROME_LINES = 2;
+
+const SHOWS_PROGRESS: readonly DownloadJob["status"][] = [
+  "queued",
+  "downloading",
+  "processing",
+  "paused",
+];
+
+/** How the progress block is drawn so that it leaves at least one field line in `room`. */
+function progressLayout(
+  job: DownloadJob,
+  room: number,
+): { compact: boolean; hideSteps: boolean; lines: number } | undefined {
+  if (!SHOWS_PROGRESS.includes(job.status)) return undefined;
+  const options = [
+    { compact: false, hideSteps: false },
+    { compact: true, hideSteps: false },
+    { compact: true, hideSteps: true },
+  ];
+  for (const option of options) {
+    if (option.hideSteps && !hasStepRows(job)) continue;
+    const lines = option.hideSteps
+      ? progressLines({ ...job, steps: undefined }, option.compact)
+      : progressLines(job, option.compact);
+    if (lines <= room) return { ...option, lines };
+  }
+  return undefined;
+}
 
 /** Break text into lines of at most `width` characters, at spaces where it can. */
 export function wrapText(text: string, width: number): string[] {
@@ -83,7 +117,9 @@ export function DetailPanel({
       text,
     })),
   );
-  const size = Math.max(1, height - CHROME_LINES);
+  // The progress block is part of the fixed header; the fields scroll in what is left.
+  const progress = progressLayout(job, height - CHROME_LINES - 1);
+  const size = Math.max(1, height - CHROME_LINES - (progress?.lines ?? 0));
   const maxTop = Math.max(0, lines.length - size);
   const [top, setTop] = useState(0);
 
@@ -115,6 +151,16 @@ export function DetailPanel({
       <Text bold color={COLORS.accent}>
         Details
       </Text>
+      {progress ? (
+        <JobProgress
+          job={job}
+          unit={unit}
+          barWidth={barWidthFor(Math.min(width, 100) - 2)}
+          paused={job.status === "paused"}
+          compact={progress.compact}
+          hideSteps={progress.hideSteps}
+        />
+      ) : null}
       {shown.map((line) => (
         <Clickable
           key={line.id}

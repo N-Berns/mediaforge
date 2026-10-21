@@ -14,6 +14,10 @@ describe("tools.lock.json", () => {
     expect(Object.keys(TOOLS_LOCK.deno).sort()).toEqual(Object.keys(TOOLS_LOCK.ffmpeg).sort());
   });
 
+  it("pins yt-dlp for every supported target", () => {
+    expect(Object.keys(TOOLS_LOCK["yt-dlp"]).sort()).toEqual(Object.keys(TOOLS_LOCK.ffmpeg).sort());
+  });
+
   it("is well formed", () => {
     expect(validateLock(TOOLS_LOCK)).toEqual([]);
   });

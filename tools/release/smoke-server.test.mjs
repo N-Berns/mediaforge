@@ -7,7 +7,8 @@ import {
   defaultInstallDeps,
   installTool,
   resolveTarget,
-  resolveYtDlpSource,
+  validateLock,
+  ytDlpSource,
 } from "../../packages/binary-resolver/src/index.ts";
 import { createSmokeServer, FAKE_TAG } from "./smoke-server.mjs";
 import { TARGETS } from "./targets.mjs";
@@ -23,15 +24,21 @@ beforeAll(async () => {
 });
 afterAll(() => new Promise((resolve) => server.close(resolve)));
 
-describe("fake yt-dlp repository", () => {
+describe("fake yt-dlp download", () => {
+  const getLock = async () => (await fetch(`${base}/lock.json`)).json();
+
+  it("serves a usable lock", async () => {
+    expect(validateLock(await getLock())).toEqual([]);
+  });
+
   it.each([
     ["win32", "x64"],
     ["linux", "x64"],
     ["linux", "arm64"],
   ])("is understood by the real client for %s %s", async (platform, arch) => {
-    const source = await resolveYtDlpSource(resolveTarget(platform, arch), fetch, `${base}/repo`);
+    const source = ytDlpSource(resolveTarget(platform, arch), await getLock());
     expect(source.version).toBe(FAKE_TAG);
-    expect(source.url.startsWith(`${base}/repo/releases/download/${FAKE_TAG}/`)).toBe(true);
+    expect(source.url.startsWith(`${base}/ytdlp/`)).toBe(true);
   });
 
   it("can be installed from by the real installer, into a folder with spaces", async () => {
@@ -39,7 +46,7 @@ describe("fake yt-dlp repository", () => {
     try {
       const result = await installTool(
         { tool: "yt-dlp", target: resolveTarget(), dir },
-        { ...defaultInstallDeps(), ytDlpRepoUrl: `${base}/repo` },
+        { ...defaultInstallDeps(), lock: await getLock() },
       );
       expect(result.version).toBe(FAKE_TAG);
       expect(await readFile(result.path, "utf8")).toBe("not a real yt-dlp\n");

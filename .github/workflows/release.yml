@@ -12,11 +12,11 @@ jobs:
   check:
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v6
-      - uses: actions/setup-node@v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
         with:
           node-version-file: .nvmrc
-      - run: npm install -g pnpm@11
+      - run: npm install -g pnpm@11.28.5
       - run: pnpm install --frozen-lockfile
       - name: The tag is a plain version tag
         run: |
@@ -43,17 +43,17 @@ jobs:
     needs: check
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v6
-      - uses: actions/setup-node@v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
         with:
           node-version-file: .nvmrc
-      - run: npm install -g pnpm@11
+      - run: npm install -g pnpm@11.28.5
       - run: pnpm install --frozen-lockfile
       - name: Bundle the app, stamped with the tag
         run: MEDIAFORGE_VERSION="${GITHUB_REF_NAME#v}" pnpm --filter @mediaforge/desktop build
       - name: Build the five binaries
         run: node tools/release/build-binaries.mjs --out out/release
-      - uses: actions/upload-artifact@v6
+      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         with:
           name: raw-binaries
           path: out/release
@@ -70,11 +70,11 @@ jobs:
           - { target: linux-arm64, runner: ubuntu-24.04-arm, file: mediaforge-linux-arm64 }
     runs-on: ${{ matrix.runner }}
     steps:
-      - uses: actions/checkout@v6
-      - uses: actions/setup-node@v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
         with:
           node-version-file: .nvmrc
-      - uses: actions/download-artifact@v7
+      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
         with:
           name: raw-binaries
           path: raw
@@ -85,7 +85,7 @@ jobs:
       - name: Smoke test
         shell: bash
         run: bash tools/release/smoke.sh "raw/${{ matrix.file }}" "${GITHUB_REF_NAME#v}"
-      - uses: actions/upload-artifact@v6
+      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         with:
           name: final-${{ matrix.target }}
           path: raw/${{ matrix.file }}
@@ -97,11 +97,11 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v6
-      - uses: actions/setup-node@v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
         with:
           node-version-file: .nvmrc
-      - uses: actions/download-artifact@v7
+      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
         with:
           pattern: final-*
           merge-multiple: true

@@ -1,3 +1,4 @@
+import type { YtDlpChannel } from "@mediaforge/binary-resolver";
 import { DEFAULT_PROFILE_ID, getProfile } from "@mediaforge/media-profiles";
 import { formatLimit } from "@mediaforge/shared-types";
 import { Box, Text } from "ink";
@@ -23,10 +24,19 @@ type Choice =
   | "bandwidth"
   | "keepRunning"
   | "extensionUi"
+  | "ytDlpChannel"
   | "reset"
   | "back";
 type Mode = "menu" | "folder" | "quality" | "concurrency" | "bandwidth" | "reset";
 type Note = { tone: "ok" | "error"; text: string };
+
+/** The order Enter cycles the yt-dlp channel in. */
+const CHANNEL_CYCLE: readonly YtDlpChannel[] = ["stable", "nightly", "master"];
+const CHANNEL_HINTS: Record<YtDlpChannel, string> = {
+  stable: "stable (the tested release)",
+  nightly: "nightly (daily build, applied on update)",
+  master: "master (newest code, applied on update)",
+};
 
 const yesNo = (ask: boolean) =>
   `${ask ? ICONS.on : ICONS.off} ${ask ? "Yes" : "No, use the default"}`;
@@ -244,6 +254,9 @@ export function SettingsScreen({
               ...settings,
               extensionUi: settings.extensionUi === "overlay" ? "popup" : "overlay",
             });
+          } else if (choice === "ytDlpChannel") {
+            const next = CHANNEL_CYCLE[(CHANNEL_CYCLE.indexOf(settings.ytDlpChannel) + 1) % 3];
+            void save({ ...settings, ytDlpChannel: next ?? DEFAULT_SETTINGS.ytDlpChannel });
           } else setMode(choice);
         }}
         items={[
@@ -297,6 +310,12 @@ export function SettingsScreen({
             icon: ICONS.videoButton,
             label: "Download button on videos",
             hint: `${settings.extensionUi === "overlay" ? ICONS.on : ICONS.off} ${settings.extensionUi === "overlay" ? "Yes (browser extension)" : "No, toolbar popup only"}`,
+          },
+          {
+            value: "ytDlpChannel",
+            icon: ICONS.download,
+            label: "yt-dlp channel",
+            hint: CHANNEL_HINTS[settings.ytDlpChannel],
           },
           { value: "reset", icon: ICONS.reset, label: "Reset to built-in defaults" },
           { value: "back", icon: ICONS.back, label: "Back" },

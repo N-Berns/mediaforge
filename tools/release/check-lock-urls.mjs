@@ -10,7 +10,7 @@ const LOCK_URL = new URL("../../packages/binary-resolver/src/tools.lock.json", i
 
 /** Every `{ target, url }` in the lock, in file order. */
 export function lockUrls(lock) {
-  return ["ffmpeg", "deno"].flatMap((tool) =>
+  return ["ffmpeg", "deno", "yt-dlp"].flatMap((tool) =>
     Object.entries(lock[tool] ?? {}).map(([target, entry]) => ({
       target: `${tool} ${target}`,
       url: entry.url,
@@ -58,7 +58,7 @@ export function describeFailures(failures) {
   return [
     `${failures.length} pinned download URL(s) in tools.lock.json no longer answer:`,
     ...lines,
-    "Run `pnpm pin:ffmpeg` or `pnpm pin:deno` to re-pin, review the diff, and commit the lock before tagging.",
+    "Run `pnpm pin:ffmpeg`, `pnpm pin:deno` or `pnpm pin:ytdlp` to re-pin, review the diff, and commit the lock before tagging.",
   ].join("\n");
 }
 

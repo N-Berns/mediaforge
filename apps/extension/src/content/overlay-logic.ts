@@ -72,16 +72,42 @@ export function isTargetGone(state: {
   return !state.connected || state.shownUrl !== state.currentUrl;
 }
 
-/** Top-right corner of the element, inset a little, in document coordinates. */
+/**
+ * Top-right corner of the element, inset a little, in document coordinates, moved by the
+ * user's drag offset when there is one.
+ */
 export function placeButton(
   rect: { top: number; left: number; width: number; height: number },
   scroll: { x: number; y: number },
   button: { width: number; height: number },
+  offset?: { dx: number; dy: number },
 ): { top: number; left: number } {
   return {
-    top: rect.top + scroll.y + INSET,
-    left: rect.left + scroll.x + rect.width - button.width - INSET,
+    top: rect.top + scroll.y + INSET + (offset?.dy ?? 0),
+    left: rect.left + scroll.x + rect.width - button.width - INSET + (offset?.dx ?? 0),
   };
+}
+
+/** Moves the button by the drag delta, keeping it inside the document bounds. */
+export function applyDrag(
+  origin: { top: number; left: number },
+  delta: { dx: number; dy: number },
+  bounds: { width: number; height: number },
+  button: { width: number; height: number },
+): { top: number; left: number } {
+  const clamp = (value: number, max: number): number =>
+    Math.min(Math.max(0, value), Math.max(0, max));
+  return {
+    top: clamp(origin.top + delta.dy, bounds.height - button.height),
+    left: clamp(origin.left + delta.dx, bounds.width - button.width),
+  };
+}
+
+const DRAG_THRESHOLD = 4;
+
+/** Whether a pointer moved far enough to be a drag rather than a click. */
+export function isDrag(delta: { dx: number; dy: number }): boolean {
+  return Math.hypot(delta.dx, delta.dy) >= DRAG_THRESHOLD;
 }
 
 /** Index of the first video or audio in an ordered list of elements, if any. */
