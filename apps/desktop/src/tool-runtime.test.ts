@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { PassThrough } from "node:stream";
@@ -9,7 +9,7 @@ import {
   UnsupportedTargetError,
   ytDlpSource,
 } from "@mediaforge/binary-resolver";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { CliError, ExitCode } from "./exit-codes.ts";
 import { makeRuntime } from "./test-runtime.ts";
 import {
@@ -244,6 +244,13 @@ describe("createInstallPrinter", () => {
 });
 
 describe("defaultToolRuntime channels", () => {
+  // A stable install creates the cache folder before its first download, so the folder must be
+  // one the test can write: a path like "/x" is the filesystem root on Linux, where that fails.
+  const cacheDirs: string[] = [];
+  afterEach(() => {
+    for (const dir of cacheDirs.splice(0)) rmSync(dir, { recursive: true, force: true });
+  });
+
   /** A runtime whose network is a recorder that always fails, so only the first lookup matters. */
   function wired(saved: string | "unreadable" = "nightly") {
     const urls: string[] = [];
@@ -251,8 +258,10 @@ describe("defaultToolRuntime channels", () => {
       urls.push(url);
       throw new Error("offline");
     });
+    const cacheDir = mkdtempSync(join(tmpdir(), "mf-channels-"));
+    cacheDirs.push(cacheDir);
     const rt = defaultToolRuntime(
-      { MEDIAFORGE_CACHE_DIR: "/nonexistent-mediaforge-test" },
+      { MEDIAFORGE_CACHE_DIR: cacheDir },
       {
         deps: { fetch: fetch as never },
         loadChannel: async () => {
