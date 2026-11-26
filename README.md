@@ -6,7 +6,7 @@
 
 Cross-platform media downloader: a browser extension, a desktop app with a background core and CLI, and a planned Android app, built on shared TypeScript packages.
 
-> **Status:** early release (v0.2.0). The desktop app (CLI, interactive menu and downloads manager) is available as a download for Windows and Linux. The browser extension (Firefox first, Chromium builds from the same code) and the native messaging relay are built but not yet released, and the installer does not register them; for now you build the extension and register the native host yourself (see [Browser extension](#browser-extension-development)). The Android app is planned: `apps/android` is an empty placeholder.
+> **Status:** early release (v0.3.0). The desktop app (CLI, interactive menu and downloads manager) is available as a download for Windows and Linux. The browser extension (Firefox first, Chromium builds from the same code) and the native messaging relay are built but not yet released, and the installer does not register them; for now you build the extension and register the native host yourself (see [Browser extension](#browser-extension-development)). The Android app is planned: `apps/android` is an empty placeholder.
 
 ## How it works
 
@@ -96,7 +96,7 @@ Update later with `scoop update mediaforge`. Scoop installs the same program and
 - Supported: Windows x64 (Windows on ARM runs it through emulation), Linux x64 and arm64.
 - **macOS is not supported.** Apple charges a yearly fee to sign programs for distribution, and this is a hobby project.
 - **Windows:** the program is not code-signed (certificates cost money), so SmartScreen or Defender may warn about it. Choose "More info", then "Run anyway" if you trust the source. To check the file first, compare its SHA-256 with the release's `SHA256SUMS`: `Get-FileHash .\mediaforge-win-x64.exe -Algorithm SHA256`. The installer does this check for you.
-- **ffmpeg licence:** on Windows and Linux MediaForge downloads a static LGPL build of ffmpeg (`LGPL-3.0-or-later`, from [BtbN/FFmpeg-Builds](https://github.com/BtbN/FFmpeg-Builds), pinned to a month-end build because BtbN deletes daily builds after 14 days; a live daily BtbN build can be installed from the Update screen). `packages/binary-resolver/src/tools.lock.json` records the version, source, SHA-256 and licence of every build.
+- **ffmpeg licence:** on Windows and Linux MediaForge downloads a static LGPL build of ffmpeg (`LGPL-3.0-or-later`, from [FFmpeg-Builds](https://github.com/FFmpeg-Builds/FFmpeg-Builds), formerly BtbN/FFmpeg-Builds, pinned to a month-end build because daily builds are deleted after 14 days; a live daily build can be installed from the Update screen). `packages/binary-resolver/src/tools.lock.json` records the version, source, SHA-256 and licence of every build.
 - **Remove it:** delete the program, MediaForge's tool folder (`%LOCALAPPDATA%\MediaForge\bin`, or `~/.local/share/mediaforge`), its settings file, and the PATH line the installer added.
 
 ## Browser extension (development)

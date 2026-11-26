@@ -12,12 +12,18 @@ import { createHash } from "node:crypto";
 import { readFile, writeFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
-import { BTBN_TARGETS, renderLock, selectBtbnAsset, selectMonthEndRelease } from "./pin-lib.mjs";
+import {
+  BTBN_TARGETS,
+  FFMPEG_BUILDS_REPO,
+  renderLock,
+  selectBtbnAsset,
+  selectMonthEndRelease,
+} from "./pin-lib.mjs";
 
 const LOCK_PATH = fileURLToPath(
   new URL("../../packages/binary-resolver/src/tools.lock.json", import.meta.url),
 );
-const BTBN_API = "https://api.github.com/repos/BtbN/FFmpeg-Builds/releases";
+const BTBN_API = `https://api.github.com/repos/${FFMPEG_BUILDS_REPO}/releases`;
 
 const { values } = parseArgs({
   options: {
@@ -92,13 +98,13 @@ for (const [target, rule] of Object.entries(BTBN_TARGETS)) {
     member: rule.member,
     // The archive's LICENSE.txt is the LGPL version 3 text.
     license: "LGPL-3.0-or-later",
-    buildInfo: `https://github.com/BtbN/FFmpeg-Builds/releases/tag/${release.tag_name}`,
+    buildInfo: `https://github.com/${FFMPEG_BUILDS_REPO}/releases/tag/${release.tag_name}`,
   };
 }
 
-// The deno section is pinned by pin-deno.mjs; keep what is there.
-const { deno } = JSON.parse(await readFile(LOCK_PATH, "utf8"));
-const text = renderLock({ schema: 1, ffmpeg, ...(deno && { deno }) });
+// The other sections (deno, yt-dlp) are pinned by their own scripts; keep what is there.
+const existing = JSON.parse(await readFile(LOCK_PATH, "utf8"));
+const text = renderLock({ ...existing, schema: 1, ffmpeg });
 if (values["dry-run"]) {
   console.log(text);
 } else {

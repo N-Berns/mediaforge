@@ -131,7 +131,7 @@ describe("resolveYtDlpSource", () => {
 describe("resolveFfmpegSource", () => {
   const win = resolveTarget("win32", "x64");
   const listUrl = `${FFMPEG_RELEASES_API}?per_page=30`;
-  const REPO = "https://github.com/BtbN/FFmpeg-Builds";
+  const REPO = "https://github.com/FFmpeg-Builds/FFmpeg-Builds";
   const NEW = "autobuild-2026-10-20-13-08";
   const OLD = "autobuild-2026-10-19-13-08";
   const WIN_ASSET = "ffmpeg-n9.0.2-20-gabcdef1234-win64-lgpl-9.0.zip";
@@ -154,7 +154,7 @@ describe("resolveFfmpegSource", () => {
     [`${REPO}/releases/download/${tag}/checksums.sha256`]: () => new Response(sumsText),
   });
 
-  it("resolves the newest BtbN build and verifies against checksums.sha256", async () => {
+  it("resolves the newest FFmpeg-Builds build and verifies against checksums.sha256", async () => {
     const source = await resolveFfmpegSource(
       win,
       routeFetch(
@@ -205,7 +205,7 @@ ${HASH_B}  ${LINUX_ASSET}
     expect(error.kind).toBe("rate-limit");
   });
 
-  it("throws unsupported for a target BtbN has no build for", async () => {
+  it("throws unsupported for a target FFmpeg-Builds has no build for", async () => {
     const error = await resolveFfmpegSource(
       { os: "darwin", arch: "arm64" } as unknown as Target,
       routeFetch({}),

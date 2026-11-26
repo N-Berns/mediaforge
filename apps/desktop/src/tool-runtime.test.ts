@@ -317,7 +317,7 @@ describe("defaultToolRuntime channels", () => {
       ["ffmpeg", false, true],
     ]);
     expect(urls.some((u) => u.includes("yt-dlp-nightly-builds"))).toBe(true);
-    expect(urls.some((u) => u.includes("BtbN"))).toBe(true);
+    expect(urls.some((u) => u.includes("repos/FFmpeg-Builds/FFmpeg-Builds"))).toBe(true);
     expect(urls.every((u) => !/\.(exe|zip|xz)$|yt-dlp_/.test(u))).toBe(true);
   });
 
