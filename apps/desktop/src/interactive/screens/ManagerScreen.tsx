@@ -21,7 +21,7 @@ import {
   targets,
   tooLargeText,
 } from "../manager/actions.ts";
-import { DetailPanel } from "../manager/DetailPanel.tsx";
+import { DETAIL_KEYS, DetailPanel } from "../manager/DetailPanel.tsx";
 import { FILTER_KEYS, FilterPanel } from "../manager/FilterPanel.tsx";
 import { filterIcons } from "../manager/icons.ts";
 import { KeyList } from "../manager/KeyList.tsx";
@@ -448,9 +448,9 @@ export function ManagerScreen({
     });
   };
 
-  const openFolder = () => {
-    if (cursorJob?.status !== "completed") return say(...outcome("open", 0, 1, []));
-    const jobId = cursorJob.id;
+  const openFolder = (job = cursorJob) => {
+    if (job?.status !== "completed") return say(...outcome("open", 0, 1, []));
+    const jobId = job.id;
     send(async () => {
       await session.request("folder.open", { jobId });
     });
@@ -631,6 +631,7 @@ export function ManagerScreen({
         width={width}
         onClose={() => setMode({ name: "list" })}
         onCopy={copy}
+        onOpenFolder={() => openFolder(detailJob)}
       />
     ) : mode.name === "limit" && limits ? (
       <LimitPicker
@@ -704,12 +705,14 @@ export function ManagerScreen({
           <Text> </Text>
           {(mode.name === "filter"
             ? keyBar(width - version.length - 2, FILTER_KEYS, undefined)
-            : keyBar(width - version.length - 2)
+            : detailJob
+              ? keyBar(width - version.length - 2, DETAIL_KEYS, undefined)
+              : keyBar(width - version.length - 2)
           ).map(([key, label], i) => (
             <Clickable
               key={`${key} ${label}`}
               flexShrink={0}
-              active={mode.name === "list" || mode.name === "filter"}
+              active={mode.name === "list" || mode.name === "filter" || detailJob !== undefined}
               onClick={() => {
                 const sequence = keySequence(key);
                 if (sequence) mouse.inject(sequence);

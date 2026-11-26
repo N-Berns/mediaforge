@@ -393,6 +393,22 @@ describe("ManagerScreen table", () => {
     expect(long.length).toBeLessThanOrEqual(100);
   });
 
+  it("shows names without flag emoji in the table and the details", async () => {
+    const file = "52K views · 12K reactions ｜ 🇵🇭 Filipino Worker VS Japanese Worker 🇯🇵😂.mp4";
+    const m = await mount({
+      columns: 200,
+      jobs: [row("f", { title: "Flags", outputPath: `/dl/${file}`, lastTryAt: 1 })],
+    });
+    const flag = /[\u{1F1E6}-\u{1F1FF}]/u;
+    await vi.waitFor(() => expect(m.frame()).toContain("Filipino Worker"));
+    expect(m.frame()).not.toMatch(flag);
+    await m.press(KEY.enter);
+    await vi.waitFor(() => expect(m.frame()).toContain("Details"));
+    expect(m.frame()).toContain("/dl/52K views");
+    expect(m.frame()).not.toMatch(flag);
+    m.app.unmount();
+  });
+
   it("scrolls 2000 rows and keeps the cursor visible", async () => {
     const jobs = Array.from({ length: 2000 }, (_, i) =>
       row(`j${i}`, { title: `Item ${i}`, lastTryAt: 10_000 - i }),
@@ -1308,11 +1324,34 @@ describe("ManagerScreen detail progress", () => {
     m.app.unmount();
   });
 
-  it("shows no progress for a finished job", async () => {
+  it("shows the bar of a finished job too, full when completed and with its state", async () => {
     const m = await mount({ jobs: [row("d", { title: "Done", lastTryAt: 1 })] });
     await m.press(KEY.enter);
     await vi.waitFor(() => expect(m.frame()).toContain("Details"));
-    expect(m.frame()).not.toContain("Overall");
+    expect(m.frame()).toContain("Overall");
+    expect(m.frame()).toContain("100%");
+    expect(m.frame()).toContain("Completed");
+    m.app.unmount();
+  });
+
+  it("shows the bar of a failed job", async () => {
+    const m = await mount({
+      jobs: [row("f", { title: "Broken", status: "failed", lastTryAt: 1 })],
+    });
+    await m.press(KEY.enter);
+    await vi.waitFor(() => expect(m.frame()).toContain("Overall"));
+    expect(m.frame()).toContain("Failed");
+    m.app.unmount();
+  });
+
+  it("o in the details says so when there is no saved file to open", async () => {
+    const m = await mount({
+      jobs: [row("f", { title: "Broken", status: "failed", lastTryAt: 1 })],
+    });
+    await m.press(KEY.enter);
+    await vi.waitFor(() => expect(m.frame()).toContain("Open folder"));
+    await m.press("o");
+    await vi.waitFor(() => expect(m.frame()).toContain("Nothing to open."));
     m.app.unmount();
   });
 
@@ -1326,7 +1365,7 @@ describe("ManagerScreen detail progress", () => {
     const lines = m.frame().split("\n");
     expect(lines.length).toBeLessThanOrEqual(list);
     expect(Math.max(...lines.map((l) => l.length))).toBeLessThanOrEqual(40);
-    expect(m.frame()).toContain("Esc close");
+    expect(m.frame()).toContain("Esc Close");
     m.app.unmount();
   });
 });

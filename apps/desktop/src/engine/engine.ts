@@ -21,7 +21,7 @@ import {
   parsePostprocessLine,
   parseProgress,
 } from "./progress.ts";
-import { isPostStep, type PlannedStep, StepTracker } from "./steps.ts";
+import { defaultPlan, isPostStep, type PlannedStep, StepTracker } from "./steps.ts";
 
 export const DEFAULT_MAX_CONCURRENT = 2;
 
@@ -389,7 +389,11 @@ export class DownloadEngine {
       const stderr: string[] = [];
       let filePath: string | undefined;
       // A restart keeps the tracker, so the steps and the overall bar never go backwards.
-      tracker = carried ?? new StepTracker(entry.plan);
+      tracker =
+        carried ??
+        new StepTracker(
+          entry.plan ?? defaultPlan(profile.kind, job.request.subtitle !== undefined),
+        );
       const steps = tracker;
       const stepsPatch = () => ({ steps: steps.snapshot(), overallPercent: steps.overall });
       if (!carried) this.#update(entry, stepsPatch());

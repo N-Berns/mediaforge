@@ -109,6 +109,18 @@ const UNSUPPORTED = /unsupported url/i;
 const NETWORK =
   /unable to download|urlopen error|getaddrinfo|name resolution|http error \d+|timed out|connection (reset|refused|aborted)|network is unreachable|transporterror/i;
 
+/** yt-dlp's wording when a video is private or hidden behind a login. */
+const PRIVATE =
+  /private video|video is private|this video is private|granted access|login required|requires? (?:a )?log ?in|log in to (?:view|watch)|only available for registered users|content isn't available/i;
+const FACEBOOK = /facebook\.com|fb\.watch/i;
+/** Facebook answers a private video with a page yt-dlp cannot read, not with a clear error. */
+const FACEBOOK_UNREADABLE = /unsupported url|cannot parse data|no video formats found/i;
+
+const PRIVATE_HINT =
+  "This video is private or needs a login. Only public videos can be downloaded.";
+const FACEBOOK_PRIVATE_HINT =
+  "This Facebook video is private or not public. Only public videos can be downloaded.";
+
 const JS_RUNTIME_MISSING = /no supported javascript runtime/i;
 const JS_RUNTIME_HINT =
   " (YouTube needs a JavaScript runtime: install Deno or Node.js 20 or newer.)";
@@ -123,6 +135,10 @@ export function classifyFailure(stderr: string[], processExitCode: number | null
     `yt-dlp exited with code ${processExitCode}`;
   const message = JS_RUNTIME_MISSING.test(text) ? `${base}${JS_RUNTIME_HINT}` : base;
 
+  if (FACEBOOK.test(text) && (PRIVATE.test(text) || FACEBOOK_UNREADABLE.test(text))) {
+    return { exitCode: ExitCode.Failure, message: FACEBOOK_PRIVATE_HINT };
+  }
+  if (PRIVATE.test(text)) return { exitCode: ExitCode.Failure, message: PRIVATE_HINT };
   if (UNSUPPORTED.test(text)) return { exitCode: ExitCode.UnsupportedSite, message };
   if (FILESYSTEM.test(text)) return { exitCode: ExitCode.FileSystem, message };
   if (NETWORK.test(text)) return { exitCode: ExitCode.Network, message };

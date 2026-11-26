@@ -121,6 +121,8 @@ export interface JobProgressProps {
   compact?: boolean;
   /** Leave the step rows out (no room for them). */
   hideSteps?: boolean;
+  /** A job that no longer runs: no stage line (its status is shown elsewhere), the bar in this color. */
+  ended?: { color: string };
 }
 
 /** Stage label, overall bar with its detail line, and per-step bars: shared by every screen. */
@@ -131,19 +133,28 @@ export function JobProgress({
   paused = false,
   compact = false,
   hideSteps = false,
+  ended,
 }: JobProgressProps) {
   const gap = compact ? 0 : 1;
   const steps = job?.steps ?? [];
   const detail = paused && job ? pausedDetail(job, unit) : activeDetail(job, unit);
   return (
     <>
-      {paused ? <Text color={COLORS.muted}>Paused</Text> : <Spinner label={stageLabel(job)} />}
-      <Box marginTop={gap} flexDirection="column">
+      {ended ? null : paused ? (
+        <Text color={COLORS.muted}>Paused</Text>
+      ) : (
+        <Spinner label={stageLabel(job)} />
+      )}
+      <Box marginTop={ended ? 0 : gap} flexDirection="column">
         <Box>
           <Text bold color={COLORS.accent}>
             {"Overall".padEnd(NAME_WIDTH)}
           </Text>
-          <ProgressBar percent={job?.overallPercent ?? job?.progress.percent} width={barWidth} />
+          <ProgressBar
+            percent={job?.overallPercent ?? job?.progress.percent}
+            width={barWidth}
+            {...(ended && { color: ended.color })}
+          />
         </Box>
         <Text color={COLORS.muted}>
           {" ".repeat(NAME_WIDTH)}

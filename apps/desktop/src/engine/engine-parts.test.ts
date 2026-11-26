@@ -136,6 +136,24 @@ describe("classifyFailure", () => {
     expect(failure.message).not.toMatch(/^ERROR:/);
   });
 
+  it("says a Facebook page yt-dlp cannot read is private, not unsupported", () => {
+    const failure = classifyFailure(
+      ["ERROR: Unsupported URL: https://www.facebook.com/x/videos/1"],
+      1,
+    );
+    expect(failure.exitCode).toBe(ExitCode.Failure);
+    expect(failure.message).toMatch(/Facebook video is private/);
+  });
+
+  it("says a private video is private", () => {
+    const failure = classifyFailure(
+      ["ERROR: [youtube] abc: Private video. Sign in if you've been granted access"],
+      1,
+    );
+    expect(failure.exitCode).toBe(ExitCode.Failure);
+    expect(failure.message).toMatch(/private or needs a login/);
+  });
+
   it("adds a JS runtime hint when yt-dlp warned that none was found", () => {
     const failure = classifyFailure(
       [

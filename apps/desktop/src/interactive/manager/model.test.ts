@@ -19,6 +19,7 @@ import {
   statusText,
   tickRange,
   visibleColumns,
+  withoutFlags,
 } from "./model.ts";
 
 const URL = "https://example.com/watch?v=abc";
@@ -67,6 +68,18 @@ describe("row text", () => {
 
   it("rowName leaves the override mark to the table", () => {
     expect(rowName(withTitle("Lecture", { limitOverride: "low" }))).toBe("Lecture");
+  });
+
+  it("withoutFlags drops flag emoji, which terminals draw at different widths", () => {
+    // The name that broke the table: 🇵🇭 and 🇯🇵 next to other wide characters that stay.
+    expect(
+      withoutFlags("12K reactions ｜ 🇵🇭 Filipino VS Japanese Worker 🇯🇵😂 #OFW ｜ 無関心.mp4"),
+    ).toBe("12K reactions ｜  Filipino VS Japanese Worker 😂 #OFW ｜ 無関心.mp4");
+    // A lone regional indicator, and a tag-sequence flag (England).
+    expect(withoutFlags("a🇵b")).toBe("ab");
+    expect(withoutFlags("x🏴󠁧󠁢󠁥󠁮󠁧󠁿y")).toBe("xy");
+    // A plain black flag is not a sequence and stays.
+    expect(withoutFlags("🏴 ok")).toBe("🏴 ok");
   });
 
   it("statusText", () => {
@@ -125,9 +138,9 @@ describe("row text", () => {
     expect(lastTryText(now - 30_000, now)).toBe("just now");
     expect(lastTryText(at(2026, 10, 16, 10, 42), now)).toBe("10:42");
     expect(lastTryText(at(2026, 10, 16, 0, 5), now)).toBe("00:05");
-    expect(lastTryText(at(2026, 10, 15, 23, 0), now)).toBe("yesterday");
-    expect(lastTryText(at(2026, 10, 12), now)).toBe("Oct 12");
-    expect(lastTryText(at(2025, 10, 12), now)).toBe("Oct 12 2025");
+    expect(lastTryText(at(2026, 10, 15, 23, 0), now)).toBe("yesterday 23:00");
+    expect(lastTryText(at(2026, 10, 12, 9, 7), now)).toBe("Oct 12 09:07");
+    expect(lastTryText(at(2025, 10, 12, 14, 5), now)).toBe("Oct 12 2025 14:05");
     expect(lastTryText(undefined, now)).toBe("—");
   });
 });
@@ -288,7 +301,8 @@ describe("layout", () => {
     expect(visibleColumns(120)).toEqual(all);
     expect(compactColumns(120)).toEqual([]);
     expect(compactColumns(119)).toEqual(["origin"]);
-    expect(visibleColumns(111)).toEqual(all.slice(0, -1));
+    expect(visibleColumns(118)).toEqual(all);
+    expect(visibleColumns(117)).toEqual(all.slice(0, -1));
     expect(compactColumns(99)).toEqual(["type", "origin"]);
     expect(visibleColumns(89)).toEqual(["name", "type", "origin", "size", "status", "speed"]);
     expect(visibleColumns(79)).toEqual(["name", "type", "origin", "size", "status"]);

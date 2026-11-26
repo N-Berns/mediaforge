@@ -1,8 +1,8 @@
 import { randomUUID } from "node:crypto";
-import { mkdtemp, readFile, rm, stat, utimes, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import net from "node:net";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { join } from "node:path";
 import { PROTOCOL_VERSION } from "@mediaforge/shared-protocol";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { EngineJob } from "../engine/index.ts";
@@ -11,7 +11,7 @@ import { memorySettingsStore, type SettingsStore } from "../settings.ts";
 import { makeRuntime } from "../test-runtime.ts";
 import type { ToolRuntime } from "../tool-runtime.ts";
 import { memoryHistoryFs } from "./history.ts";
-import { type Connection, connectCore, listenCore, newToken, readToken, tokenPath } from "./ipc.ts";
+import { type Connection, connectCore, listenCore, newToken, readToken } from "./ipc.ts";
 import {
   createPageProbe,
   PROBE_TIMEOUT_MS,

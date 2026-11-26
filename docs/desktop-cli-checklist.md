@@ -166,7 +166,7 @@ Phase 2 has no buttons yet: send the requests with a small script through `CoreC
 - [ ] Kill the core in Task Manager while the manager is open: the banner says `Reconnecting to MediaForge…`, the rows stay, and they come back live once the core restarts.
 - [ ] With a manager open, send `app.open` from the extension (or a test client): the window flashes and `Opened from browser` shows for a few seconds. Check in conhost, Windows Terminal and one Linux terminal.
 - [ ] Kill the core during a download, reopen the manager: the notice banner shows; `R` resumes the paused downloads, `z` dismisses the notice.
-- [ ] Narrow the window from 130 to under 70 columns: Origin turns into its icon under 120, Last try drops under 112, Type turns into its icon under 100, ETA drops under 90, Speed under 80, and Status turns into its icon (with the percent while downloading or paused) under 70; the rows still fit on one line each. Origin shows its icon and name (`◊ Extension`, `≡ Menu`, `■ Manager`, `▪ CLI`), and `8` or a header click sorts by it.
+- [ ] Narrow the window from 130 to under 70 columns: Origin turns into its icon under 120, Last try drops under 118, Type turns into its icon under 100, ETA drops under 90, Speed under 80, and Status turns into its icon (with the percent while downloading or paused) under 70; the rows still fit on one line each. Origin shows its icon and name (`◊ Extension`, `≡ Menu`, `■ Manager`, `▪ CLI`), and `8` or a header click sorts by it.
 - [ ] Type column: a download picked as Video only (menu or extension format list) reads `Video only`, an MP3 `Audio only`, a saved subtitle `Subtitle`, a plain download `Video`. `2` sorts by type; `f` → Type → Video only shows only those rows.
 - [ ] With sort by type on, pick a video-only format in the extension's format list: the file lands in `Video only`, not `Video`.
 - [ ] Load an extension build from before 2026-10-16 (protocol 2) against this app: the popup says `Update this extension: it is older than the MediaForge app on your computer.` With an older app, it says `Update MediaForge: the app on your computer is older than this extension.`
@@ -177,10 +177,14 @@ Phase 2 has no buttons yet: send the requests with a small script through `CoreC
 - [ ] Manager header: the limit is green for High, amber for Med, red-orange for Low, cyan for Custom; `N active` is cyan above 0, gray at 0; `search:` and `filter:` are amber. A blank line sits under the column headers.
 - [ ] Manager action results show above the divider for a few seconds, with an icon and color: `√ Paused 1` green, `▲ … skipped` amber, `× … failed` red. Del asks `Delete N downloads from disk? Files go to the Recycle Bin.` (the Trash on Linux), then shows `√ Moved to the trash N`.
 - [ ] The key bar starts with `Space Tick  Ctrl+A All`; clicking `Ctrl+A All`, or the `[ ]` above the rows, ticks every visible row and shows `[•]` there; again unticks them.
+- [ ] Last try shows the time: `just now` under a minute, `14:05` today, `yesterday 14:05`, `Oct 12 14:05` this year, `Oct 12 2025 14:05` before that (24-hour clock).
+- [ ] A download whose name has flag emoji (for example `🇵🇭 … 🇯🇵`) shows without them in the table and in Details (Name and Path), and its row stays aligned with the others in conhost and Windows Terminal. `/` search still finds it by its full name, and `Y` copies the path with the flags.
 
 ## Extension popup (phase 4)
 
 - [ ] The popup's Open MediaForge button launches `mediaforge --manager` in a new console window on Windows (conhost and Windows Terminal) and in the first available terminal on Linux.
+- [ ] Page Download button, on a YouTube video in Chromium and in Firefox: it shows only while the pointer is over the video. It fades about 0.5 s after the pointer leaves, or after about 3 s with the pointer still on the video, and comes back on the next move. It stays up while the pointer rests on it, while dragging it, and for the 2 s it shows `Opening…`, `Started` or an error. A faded button takes no click and no Tab focus.
+- [ ] Drag the Download button on a video: it stops 8 px inside the frame on every side, also when the pointer goes past the edge. Drag it to the top, about 30% across, then toggle theater mode both ways: it stays at the top, about 30% across the new frame. On an `<audio>` element it can still go anywhere on the page.
 - [ ] About › Report a problem: pick App or Extension, type a description (empty is refused), the next screen lists the diagnostics (app, OS, tools, setup, last failed download); "Send with diagnostics" and "Send without diagnostics" both arrive in the form, the latter with "(not included)"; offline shows the error with Try again.
 
 ## Mouse (phase 3c)
