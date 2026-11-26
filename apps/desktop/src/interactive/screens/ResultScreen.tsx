@@ -11,11 +11,30 @@ import { useDeps } from "../deps.ts";
 import { failureHint } from "../hints.ts";
 import { COLORS, ICONS } from "../theme.ts";
 
-export type ResultAction = "open" | "again" | "retry" | "update" | "quality" | "home" | "quit";
+export type ResultAction =
+  | "open"
+  | "again"
+  | "retry"
+  | "update"
+  | "update-nightly"
+  | "update-master"
+  | "quality"
+  | "home"
+  | "quit";
+
+/** The channels the failed screen can switch to, besides the saved one. */
+const SWITCH_CHANNELS = [
+  { channel: "nightly", value: "update-nightly" },
+  { channel: "master", value: "update-master" },
+] as const;
 
 export interface ResultScreenProps {
   job: EngineJob;
   /** Whether the lookup gave details, so "different quality" can offer formats. */
+  /** The saved yt-dlp channel, so the switch entries are right on the first frame. */
+  channel: string;
+  /** Why the last attempt to switch channel failed. */
+  error?: string;
   onAction: (action: ResultAction) => void;
 }
 
@@ -38,8 +57,9 @@ const FOOTER_ITEMS: MenuItem<ResultAction>[] = [
   { value: "quit", icon: ICONS.quit, label: "Quit" },
 ];
 
-export function ResultScreen({ job, onAction }: ResultScreenProps) {
+export function ResultScreen({ job, channel, error, onAction }: ResultScreenProps) {
   const size = useFileSize(job.outputPath);
+  const stale = job.status !== "completed" && isStaleExtractorError(job.error);
   const hints = [
     ["↑↓", "Move"],
     ["Enter", "Select"],
@@ -90,6 +110,7 @@ export function ResultScreen({ job, onAction }: ResultScreenProps) {
         <Box flexDirection="column" marginBottom={1}>
           <Text color={COLORS.error}>{job.error ?? "Something went wrong."}</Text>
           <Text color={COLORS.muted}>{failureHint(job.errorKind, job.error ?? "")}</Text>
+          {error ? <Text color={COLORS.error}>{error}</Text> : null}
         </Box>
       )}
       <Menu<ResultAction>
@@ -97,14 +118,20 @@ export function ResultScreen({ job, onAction }: ResultScreenProps) {
         onBack={() => onAction("home")}
         items={[
           { value: "retry", icon: ICONS.retry, label: "Try again", hint: "same link and choices" },
-          ...(isStaleExtractorError(job.error)
+          ...(stale
             ? [
                 {
                   value: "update" as const,
                   icon: ICONS.download,
                   label: "Update yt-dlp and retry",
-                  hint: "downloads the latest nightly",
+                  hint: "reinstalls yt-dlp from your channel",
                 },
+                ...SWITCH_CHANNELS.filter((c) => c.channel !== channel).map((c) => ({
+                  value: c.value,
+                  icon: ICONS.download,
+                  label: `Update yt-dlp to ${c.channel} and retry`,
+                  hint: "switches your channel and downloads that build",
+                })),
               ]
             : []),
           { value: "quality", icon: ICONS.format, label: "Choose a different quality" },

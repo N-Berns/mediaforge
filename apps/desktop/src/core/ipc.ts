@@ -1,5 +1,6 @@
+import { execFile } from "node:child_process";
 import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
-import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
+import { chmod, mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import net from "node:net";
 import { homedir, tmpdir, userInfo } from "node:os";
 import { dirname, join } from "node:path";
@@ -82,7 +83,28 @@ export async function writeToken(path: string, token: string): Promise<void> {
   // Write then rename, so a relay reading during a core restart never sees a truncated token.
   const temp = `${path}.tmp`;
   await writeFile(temp, token, { encoding: "utf8", mode: 0o600 });
+  await restrictToCurrentUser(temp);
   await rename(temp, path);
+}
+
+/**
+ * Windows ignores the file mode above, so the file would carry whatever its folder grants. Replace
+ * the inherited rules with one that lets only the current user in. Best effort: when it cannot be
+ * done the file keeps the folder's rules, which for the user's profile already exclude other users.
+ */
+async function restrictToCurrentUser(path: string): Promise<void> {
+  if (process.platform !== "win32") return;
+  const domain = process.env.USERDOMAIN;
+  const name = currentUser();
+  const account = domain ? `${domain}\${name}` : name;
+  await new Promise<void>((resolve) => {
+    execFile(
+      "icacls.exe",
+      [path, "/inheritance:r", "/grant:r", `${account}:F`],
+      { windowsHide: true, timeout: 5000 },
+      () => resolve(),
+    );
+  });
 }
 
 export async function readToken(path: string): Promise<string | undefined> {
@@ -353,7 +375,15 @@ export function listenCore({ path, token, onConnection }: ListenOptions): Promis
     server.once("error", reject);
     server.listen(path, () => {
       server.off("error", reject);
-      resolve(server);
+      // A unix socket obeys file permissions: keep other users out. Windows pipes are per user.
+      const restrict = process.platform === "win32" ? Promise.resolve() : chmod(path, 0o600);
+      restrict.then(
+        () => resolve(server),
+        (error) => {
+          server.close();
+          reject(error);
+        },
+      );
     });
   });
 }

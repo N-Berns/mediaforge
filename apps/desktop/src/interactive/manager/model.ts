@@ -9,6 +9,7 @@ import {
   type SpeedUnit,
 } from "@mediaforge/shared-types";
 import type { ManagerSort, SortColumn } from "../../settings.ts";
+import { COLORS } from "../theme.ts";
 
 export type StatusFilter = "active" | "queued" | "paused" | "completed" | "failed" | "cancelled";
 
@@ -72,7 +73,8 @@ export const COLUMN_WIDTH: Record<Exclude<Column, "name">, number> = {
   status: 17,
   speed: 15,
   eta: 9,
-  lastTry: 12,
+  // "Oct 12 2025 14:05" and the gap.
+  lastTry: 18,
 };
 export const MIN_NAME_WIDTH = 10;
 /** The cursor mark and the `[ ] ` box before the name. */
@@ -89,6 +91,18 @@ const lastPart = (path: string) => path.split(/[\\/]/).pop() || path;
 export function rowName(job: DownloadJob): string {
   const { candidate } = job.request;
   return job.outputPath ? lastPart(job.outputPath) : candidate.pageTitle || candidate.url;
+}
+
+/** Regional-indicator letters (🇵🇭 is two of them) and tag-sequence flags such as England's. */
+const FLAGS = /[\u{1F1E6}-\u{1F1FF}]|\u{1F3F4}[\u{E0020}-\u{E007E}]+\u{E007F}/gu;
+
+/**
+ * The text without flag emoji, for display only. Terminals without flag glyphs draw each letter of
+ * a flag as its own wide box, wider than the layout counts, which pushes the rest of the row out of
+ * line. Search, sort and copy keep the original.
+ */
+export function withoutFlags(text: string): string {
+  return text.replace(FLAGS, "");
 }
 
 /** Shown after the name, outside its cut, when the job has its own speed cap. */
@@ -120,6 +134,25 @@ export function statusText(job: DownloadJob): string {
       return "Failed";
     case "cancelled":
       return "Cancelled";
+  }
+}
+
+/** The status in the color its row icon has elsewhere: running cyan, done green, failed orange. */
+export function statusColor(status: DownloadStatus): string {
+  switch (status) {
+    case "downloading":
+    case "processing":
+      return COLORS.accent;
+    case "queued":
+      return COLORS.muted;
+    case "paused":
+      return COLORS.paused;
+    case "completed":
+      return COLORS.ok;
+    case "failed":
+      return COLORS.failed;
+    case "cancelled":
+      return COLORS.error;
   }
 }
 
@@ -162,20 +195,22 @@ const startOfDay = (time: number) => {
   return new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
 };
 
-/** `just now`, the clock time today, `yesterday`, else a short date (with the year if not this one). */
+/**
+ * `just now`, the 24-hour clock time today, else the day and the time: `yesterday 14:05`,
+ * `Oct 12 14:05`, or `Oct 12 2025 14:05` for another year.
+ */
 export function lastTryText(at: number | undefined, now: number): string {
   if (at === undefined) return NONE;
   if (now - at < 60_000) return "just now";
   const date = new Date(at);
+  const time = `${String(date.getHours()).padStart(2, "0")}:${String(date.getMinutes()).padStart(2, "0")}`;
   const today = startOfDay(now);
-  if (at >= today) {
-    return `${String(date.getHours()).padStart(2, "0")}:${String(date.getMinutes()).padStart(2, "0")}`;
-  }
-  if (at >= startOfDay(today - 1)) return "yesterday";
+  if (at >= today) return time;
+  if (at >= startOfDay(today - 1)) return `yesterday ${time}`;
   const short = `${MONTHS[date.getMonth()]} ${date.getDate()}`;
   return date.getFullYear() === new Date(now).getFullYear()
-    ? short
-    : `${short} ${date.getFullYear()}`;
+    ? `${short} ${time}`
+    : `${short} ${date.getFullYear()} ${time}`;
 }
 
 const STATUS_RANK: Record<DownloadStatus, number> = {
@@ -275,14 +310,14 @@ export const hasFilters = (filters: Filters): boolean =>
 
 /**
  * Columns with an icon form shrink to it before anything drops: Origin under 120 columns, Type
- * under 100, Status under 70. The rest have none and drop: Last try under 112, ETA under 90,
+ * under 100, Status under 70. The rest have none and drop: Last try under 118, ETA under 90,
  * Speed under 80.
  */
 export function visibleColumns(width: number): Column[] {
   const columns: Column[] = ["name", "type", "origin", "size", "status"];
   if (width >= 80) columns.push("speed");
   if (width >= 90) columns.push("eta");
-  if (width >= 112) columns.push("lastTry");
+  if (width >= 118) columns.push("lastTry");
   return columns;
 }
 

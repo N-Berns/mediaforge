@@ -15,8 +15,13 @@ export interface ResolvedBinary {
 export interface ResolveOptions {
   /** Directory holding the bundled binaries (the release package's `bin/`). */
   bundledDir?: string;
-  /** The managed tool folder (see `cacheDir`). Searched last. */
+  /** The managed tool folder (see `cacheDir`). Searched last, or right after the env override with `preferCache`. */
   cacheDir?: string;
+  /**
+   * Search the cache folder before PATH and the bundled folder, so a downloaded copy wins over
+   * older ones. A cache copy that is missing or does not run falls through to the usual order.
+   */
+  preferCache?: boolean;
   env?: Record<string, string | undefined>;
   platform?: NodeJS.Platform;
   /** Run `<path> <args>` and return stdout. Throws if the binary cannot run. */
@@ -68,7 +73,8 @@ function fileNames(name: string, env: ResolveOptions["env"], platform: NodeJS.Pl
 
 /**
  * Resolve a tool in priority order: env override, PATH (version-checked for
- * ffmpeg), bundled copy. An env override that does not work is an error, not a
+ * ffmpeg), bundled copy, managed cache. With `preferCache` the cache comes right
+ * after the env override: env, cache, PATH, bundled. An env override that does not work is an error, not a
  * reason to fall through: the user asked for that exact binary.
  */
 export async function resolveBinary(
@@ -104,21 +110,27 @@ export async function resolveBinary(
   }
 
   const names = fileNames(tool, env, platform);
-  for (const dir of (env.PATH ?? env.Path ?? "").split(delimiter).filter(Boolean)) {
-    for (const name of names) {
-      const path = join(dir, name);
-      if (!(await isExecutable(path))) continue;
-      const output = await works(path);
-      if (output === undefined) {
-        tried.push(`${path} (not runnable)`);
-      } else if (tool === "ffmpeg" && !isFfmpegVersionOk(output)) {
-        tried.push(`${path} (older than supported ffmpeg)`);
-      } else {
-        return found(path, "path", output);
+
+  const fromPath = async () => {
+    let triedAny = false;
+    for (const dir of (env.PATH ?? env.Path ?? "").split(delimiter).filter(Boolean)) {
+      for (const name of names) {
+        const path = join(dir, name);
+        if (!(await isExecutable(path))) continue;
+        const output = await works(path);
+        triedAny = true;
+        if (output === undefined) {
+          tried.push(`${path} (not runnable)`);
+        } else if (tool === "ffmpeg" && !isFfmpegVersionOk(output)) {
+          tried.push(`${path} (older than supported ffmpeg)`);
+        } else {
+          return found(path, "path", output);
+        }
       }
     }
-  }
-  if (!tried.length) tried.push("PATH");
+    if (!triedAny) tried.push("PATH");
+    return undefined;
+  };
 
   const fromDir = async (dir: string | undefined, source: BinarySource) => {
     if (!dir) return undefined;
@@ -132,10 +144,17 @@ export async function resolveBinary(
     return undefined;
   };
 
-  const bundled = await fromDir(options.bundledDir, "bundled");
-  if (bundled) return bundled;
-  const cached = await fromDir(options.cacheDir, "cache");
-  if (cached) return cached;
+  const steps = [
+    fromPath,
+    () => fromDir(options.bundledDir, "bundled"),
+    () => fromDir(options.cacheDir, "cache"),
+  ];
+  // The downloaded copy goes first when asked: the user updated it on purpose.
+  if (options.preferCache) steps.unshift(steps.pop() as (typeof steps)[number]);
+  for (const step of steps) {
+    const hit = await step();
+    if (hit) return hit;
+  }
 
   throw new BinaryNotFoundError(tool, tried);
 }

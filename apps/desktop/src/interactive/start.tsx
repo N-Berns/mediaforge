@@ -103,7 +103,8 @@ export function realDeps(): AppDeps {
     download: { ...defaultDownloadDeps(), core: defaultCoreConnector("menu") },
     fetchInfo: (url) => fetchMediaInfo(url),
     inspectTools: () => inspectTools(),
-    installTool: (tool, onProgress) => defaultToolRuntime().install(tool, onProgress),
+    installTool: (tool, onProgress, opts) => defaultToolRuntime().install(tool, onProgress, opts),
+    checkTools: (opts) => defaultToolRuntime().check(["yt-dlp", "ffmpeg"], opts),
     checkUpdate: () => {
       const lookup = check ?? checkForUpdate();
       check = lookup;

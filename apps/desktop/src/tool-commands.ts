@@ -1,7 +1,15 @@
-import { ALL_TOOLS, type InstallResult, type Tool } from "@mediaforge/binary-resolver";
+import {
+  ALL_TOOLS,
+  type InstallResult,
+  type Tool,
+  type ToolCheck,
+  YTDLP_CHANNELS,
+  type YtDlpChannel,
+} from "@mediaforge/binary-resolver";
 import type { Io } from "./commands.ts";
 import { CliError, ExitCode } from "./exit-codes.ts";
 import { parseCommandArgs } from "./parse.ts";
+import { defaultSettingsStore, type SettingsStore } from "./settings.ts";
 import {
   type AcquireOutcome,
   acquireTool,
@@ -86,19 +94,34 @@ export async function runSetup(
   return ExitCode.Ok;
 }
 
-const UPDATE_USAGE = "Usage: mediaforge update";
+const UPDATE_USAGE = "Usage: mediaforge update [--channel stable|nightly|master] [--check]";
 
 export function updateUsage(): string {
   return [
     UPDATE_USAGE,
     "",
-    "Download the latest yt-dlp nightly build into MediaForge's tool folder.",
-    "ffmpeg is never changed by this command.",
+    "Download the latest yt-dlp from your channel into MediaForge's tool folder.",
+    "Plain update never changes ffmpeg. --check looks at yt-dlp and ffmpeg and installs nothing.",
     "",
     "Options:",
-    "  -h, --help   Show this help",
+    "      --channel <name>  yt-dlp build to use: stable, nightly or master. Saved for next time.",
+    "                        Default: the saved channel (stable at first).",
+    "      --check           Show installed and latest versions without installing anything.",
+    "                        With --channel, checks that channel without saving it.",
+    "  -h, --help            Show this help",
     "",
   ].join("\n");
+}
+
+function parseChannel(value: string | undefined): YtDlpChannel | undefined {
+  if (value === undefined) return undefined;
+  if (!YTDLP_CHANNELS.includes(value as YtDlpChannel)) {
+    throw new CliError(
+      `Unknown channel: ${value}. Choose from: ${YTDLP_CHANNELS.join(", ")}.\n${UPDATE_USAGE}`,
+      ExitCode.Usage,
+    );
+  }
+  return value as YtDlpChannel;
 }
 
 const WHO_WINS = {
@@ -107,14 +130,42 @@ const WHO_WINS = {
   bundled: "the yt-dlp in the bundled folder",
 } as const;
 
+function shadowNote(
+  after: { source: keyof typeof WHO_WINS | "cache"; path: string },
+  check: boolean,
+): string | undefined {
+  if (after.source === "cache") return undefined;
+  const effect = check
+    ? "so the downloaded copy is not the one in use"
+    : "so this update has no effect on downloads";
+  const fix = after.source === "env" ? "Unset it" : "Remove it";
+  return `Note: ${WHO_WINS[after.source]} (${after.path}) is used before the downloaded copy, ${effect}. ${fix} to use the downloaded one.\n`;
+}
+
+function checkLine(check: ToolCheck, channel: YtDlpChannel): string {
+  const name = check.tool.padEnd(6);
+  const installed = check.installed ?? "not installed";
+  const tag = check.tool === "yt-dlp" ? ` (${channel})` : "";
+  if (check.error !== undefined) {
+    return `${name}  ${installed}  could not check: ${check.error}`;
+  }
+  if (check.upToDate) return `${name}  ${installed} up to date`;
+  return `${name}  ${installed} -> ${check.latest ?? "unknown"}${tag}  update available`;
+}
+
 export async function runUpdate(
   args: string[],
   io: Io,
   rt: ToolRuntime = defaultToolRuntime(),
+  store: SettingsStore = defaultSettingsStore(),
 ): Promise<ExitCode> {
   const { values, positionals } = parseCommandArgs(
     args,
-    { help: { type: "boolean", short: "h" } },
+    {
+      channel: { type: "string" },
+      check: { type: "boolean" },
+      help: { type: "boolean", short: "h" },
+    },
     UPDATE_USAGE,
   );
   if (values.help) {
@@ -124,25 +175,42 @@ export async function runUpdate(
   if (positionals.length > 0) {
     throw new CliError(`Unexpected argument: ${positionals[0]}\n${UPDATE_USAGE}`, ExitCode.Usage);
   }
+  const requested = parseChannel(values.channel);
+  const settings = await store.load();
+  const channel = requested ?? settings.ytDlpChannel;
 
-  const before = await tryResolve("yt-dlp", rt.resolve);
+  if (values.check) {
+    const checks = await rt.check(["yt-dlp", "ffmpeg"], { channel });
+    io.stdout(`${checks.map((check) => checkLine(check, channel)).join("\n")}\n`);
+    const note = await resolvedNote(rt, true);
+    if (note) io.stderr(note);
+    return ExitCode.Ok;
+  }
+
   let result: InstallResult;
   try {
-    result = await rt.install("yt-dlp", createInstallPrinter(io.stderr, rt.interactive));
+    result = await rt.install("yt-dlp", createInstallPrinter(io.stderr, rt.interactive), {
+      channel,
+    });
   } catch (error) {
     throw toCliError(error);
   }
-  const after = await tryResolve("yt-dlp", rt.resolve);
+  if (requested !== undefined && requested !== settings.ytDlpChannel) {
+    // Reload: another process may have changed settings during a long download.
+    await store.save({ ...(await store.load()), ytDlpChannel: requested });
+  }
 
   io.stdout(
-    before?.source === "cache" && before.version === result.version
-      ? `yt-dlp is already up to date (${result.version})\n`
-      : `yt-dlp updated: ${before?.version ?? "not installed"} to ${result.version}\n`,
+    result.previous === result.version
+      ? `yt-dlp is already up to date (${result.version}, ${channel})\n`
+      : `yt-dlp updated: ${result.previous ?? "not installed"} to ${result.version} (${channel})\n`,
   );
-  if (after && after.source !== "cache") {
-    io.stderr(
-      `Note: ${WHO_WINS[after.source]} (${after.path}) is used before the downloaded copy, so this update has no effect on downloads. Remove it, or unset the variable, to use the downloaded one.\n`,
-    );
-  }
+  const note = await resolvedNote(rt, false);
+  if (note) io.stderr(note);
   return ExitCode.Ok;
+}
+
+async function resolvedNote(rt: ToolRuntime, check: boolean): Promise<string | undefined> {
+  const after = await tryResolve("yt-dlp", rt.resolve);
+  return after ? shadowNote(after, check) : undefined;
 }

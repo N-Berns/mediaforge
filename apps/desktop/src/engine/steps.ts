@@ -46,12 +46,21 @@ export function overallPercent(steps: readonly Step[]): number | undefined {
   return downloadPart * (1 - POST_SHARE) + postPart * POST_SHARE;
 }
 
+/**
+ * The steps a job is known to take when the caller sent no plan, so that the conversion is on the
+ * bar from the start. Audio always goes through ffmpeg; for video the stream count is not known.
+ */
+export function defaultPlan(kind: "video" | "audio", subtitle: boolean): PlannedStep[] | undefined {
+  return kind === "audio" && !subtitle ? [{ kind: "audio" }, { kind: "convert" }] : undefined;
+}
+
 /** Follows yt-dlp's output and keeps the list of steps up to date. */
 export class StepTracker {
   readonly steps: Step[];
   #streamId: string | undefined;
   #postDuration: number | undefined;
   #overall = 0;
+  #complete = false;
 
   constructor(planned: readonly PlannedStep[] = []) {
     this.steps = planned.map((p) => ({
@@ -65,9 +74,14 @@ export class StepTracker {
     return this.steps.find((s) => s.state === "active");
   }
 
-  /** Overall percent; never goes backwards, even when a later stream turns out bigger. */
+  /**
+   * Overall percent; never goes backwards, even when a later stream turns out bigger. It stays
+   * below 100 until the file is saved: steps not yet announced (the second stream, the merge)
+   * still have to run.
+   */
   get overall(): number {
-    this.#overall = Math.max(this.#overall, overallPercent(this.steps) ?? 0);
+    const raw = Math.max(this.#overall, overallPercent(this.steps) ?? 0);
+    this.#overall = this.#complete ? 100 : Math.min(raw, 99);
     return this.#overall;
   }
 
@@ -134,6 +148,7 @@ export class StepTracker {
 
   /** The file is saved: everything that ran is done, and steps that never ran disappear. */
   complete(): void {
+    this.#complete = true;
     this.#completeActive();
     for (let i = this.steps.length - 1; i >= 0; i--) {
       if (this.steps[i]?.state === "pending") this.steps.splice(i, 1);

@@ -21,6 +21,7 @@ const fs: EngineFs = {
   exists: async () => false,
   list: async () => [],
   readText: async () => "",
+  writePrivate: async () => {},
 };
 
 function setup(

@@ -1,8 +1,7 @@
 import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { mkdir, stat, writeFile } from "node:fs/promises";
+import { mkdir } from "node:fs/promises";
 import type { Server, Socket } from "node:net";
-import { dirname, join } from "node:path";
 import type { ProbedMedia } from "@mediaforge/shared-protocol";
 import { type ResolveTool, resolveTool } from "../binaries.ts";
 import { DownloadEngine, type EngineJob } from "../engine/index.ts";
@@ -24,8 +23,6 @@ import { type Provisioner, startProvisioning } from "./provisioner.ts";
 import { type ClientHandle, CoreService } from "./service.ts";
 import { createTrash, type TrashFn } from "./trash.ts";
 
-const DAY_MS = 24 * 60 * 60 * 1000;
-
 /** How long shutdown waits for clients to leave before it stops waiting on them. */
 const DEFAULT_SHUTDOWN_GRACE_MS = 2000;
 
@@ -34,7 +31,6 @@ export interface RunCoreDeps {
   trash?: TrashFn;
   pipe: string;
   tokenFile: string;
-  stampFile: string;
   settings: SettingsStore;
   toolRuntime: ToolRuntime;
   /** `options.maxConcurrent` is the saved "downloads at once", read when the core starts. */
@@ -190,18 +186,11 @@ export async function runCore(deps: RunCoreDeps): Promise<number> {
     await writeToken(deps.tokenFile, token);
     // Started only now too: a second instance must not download tools beside the live core.
     provisioner = startProvisioning(deps.toolRuntime, {
+      // yt-dlp is pinned: it is replaced when the app ships another build, never on a timer.
       refresh: {
-        stale: async () => {
-          try {
-            return Date.now() - (await stat(deps.stampFile)).mtimeMs > DAY_MS;
-          } catch {
-            return true;
-          }
-        },
-        stamp: async () => {
-          await mkdir(dirname(deps.stampFile), { recursive: true });
-          await writeFile(deps.stampFile, String(Date.now()), "utf8");
-        },
+        stale: async () =>
+          (await deps.toolRuntime.outdated?.("yt-dlp").catch(() => false)) ?? false,
+        stamp: async () => {},
       },
     });
     const setup = provisioner;
@@ -312,7 +301,7 @@ export async function runCore(deps: RunCoreDeps): Promise<number> {
       },
       onIdle: () => finish(ExitCode.Ok),
     });
-    // A core that stays up keeps yt-dlp fresh, but never swaps it under a running download.
+    // A core that stays up swaps in a newly pinned yt-dlp, but never under a running download.
     const refresh = () => {
       try {
         if (live.hasActiveJobs) return;
@@ -434,15 +423,6 @@ export async function startCoreProcess(deps: StartCoreProcessDeps): Promise<numb
   return deps.run();
 }
 
-/** When yt-dlp was last refreshed: its mtime, in the same folder as the token file. */
-export function refreshStampPath(
-  env: Record<string, string | undefined>,
-  platform: NodeJS.Platform = process.platform,
-  home?: string,
-): string {
-  return join(dirname(tokenPath(env, platform, home)), "yt-dlp-refresh.stamp");
-}
-
 /** The real machine: real pipe, real settings, real engine with a resolver that waits for setup. */
 export function runDefaultCore(): Promise<number> {
   const env = process.env;
@@ -465,7 +445,6 @@ export function runDefaultCore(): Promise<number> {
       runCore({
         pipe: pipePath(process.platform, env),
         tokenFile: tokenPath(env),
-        stampFile: refreshStampPath(env),
         settings: defaultSettingsStore(),
         toolRuntime: defaultToolRuntime(env),
         createEngine: (onUpdate, provisioner, { maxConcurrent }) =>

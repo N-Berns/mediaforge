@@ -145,6 +145,7 @@ async function setup(options: SetupOptions = {}) {
     version: "9.9.9",
     probeTool: options.probeTool ?? (async () => ({ available: true, version: "1" })),
     probe: options.probe ?? (async (url) => ({ url, formats: [] })),
+    resolveHost: async () => [],
     applyAutostart: autostart,
     openPath,
     ...(options.openManager && { openManager: options.openManager }),
@@ -265,6 +266,25 @@ describe("download.start", () => {
     });
     const request = t.fake.submitted[0] as { outputDir?: string };
     expect(request.outputDir).toMatch(/Video/);
+  });
+
+  it("refuses links that are not web links or that point at the local network", async () => {
+    const t = await setup();
+    for (const url of ["file:///etc/passwd", "http://localhost:9000/a", "http://192.168.1.2/a"]) {
+      t.sent.length = 0;
+      await t.send("download.start", { candidate: { ...candidate, url }, profileId: "best" });
+      expect(t.sent[0]).toMatchObject({ type: "error", payload: { code: "invalid-url" } });
+    }
+    expect(t.fake.submitted).toHaveLength(0);
+  });
+
+  it("allows local links when allowPrivateUrls is on", async () => {
+    const t = await setup({ settings: { allowPrivateUrls: true } });
+    await t.send("download.start", {
+      candidate: { ...candidate, url: "http://192.168.1.2/a.mp4" },
+      profileId: "best",
+    });
+    expect(t.fake.submitted).toHaveLength(1);
   });
 
   it("rejects an unknown profile", async () => {

@@ -1,3 +1,4 @@
+import type { YtDlpChannel } from "@mediaforge/binary-resolver";
 import type { SpeedUnit } from "@mediaforge/shared-types";
 import { useApp, useInput } from "ink";
 import { useEffect, useRef, useState } from "react";
@@ -21,7 +22,7 @@ import { AboutScreen } from "./screens/AboutScreen.tsx";
 import { DownloadScreen } from "./screens/DownloadScreen.tsx";
 import { FolderScreen } from "./screens/FolderScreen.tsx";
 import { FormatsScreen } from "./screens/FormatsScreen.tsx";
-import { HomeScreen } from "./screens/HomeScreen.tsx";
+import { type HomeChoice, HomeScreen } from "./screens/HomeScreen.tsx";
 import { LinkScreen } from "./screens/LinkScreen.tsx";
 import { LookupScreen } from "./screens/LookupScreen.tsx";
 import { ManagerScreen, type ManagerView } from "./screens/ManagerScreen.tsx";
@@ -43,8 +44,19 @@ type Screen =
   | { name: "folder"; draft: Draft; settings: Settings }
   /** `run` changes on every retry so the screen starts a fresh download. */
   | { name: "download"; plan: Plan; draft: Draft; run: number }
-  | { name: "result"; plan: Plan; draft: Draft; job: EngineJob }
+  | {
+      name: "result";
+      plan: Plan;
+      draft: Draft;
+      job: EngineJob;
+      /** The saved yt-dlp channel, read when the page opens. */
+      channel: YtDlpChannel;
+      /** Why switching the channel failed, shown on the page. */
+      error?: string;
+    }
   | { name: "update"; plan: Plan; draft: Draft }
+  /** Manual check for newer yt-dlp and ffmpeg, from About. */
+  | { name: "tool-updates" }
   | { name: "batch"; urls: string[] }
   | { name: "settings" }
   | { name: "setup"; prompt?: boolean; autoDownload?: boolean }
@@ -88,6 +100,8 @@ export function App({ deps, start }: { deps: AppDeps; start?: "manager" }) {
   const submitting = useRef(false);
   /** Deno is offered once per session; saying no must not block every later download. */
   const offeredOptional = useRef(false);
+  /** The last Home pick (never Quit), so coming back to Home keeps the cursor there. */
+  const lastHomeChoice = useRef<HomeChoice | undefined>(undefined);
   const screenName = useRef(screen.name);
   screenName.current = screen.name;
 
@@ -222,7 +236,23 @@ export function App({ deps, start }: { deps: AppDeps; start?: "manager" }) {
         draft: state.draft,
         run: ++runCounter.current,
       });
-    } else if (action === "update") {
+    } else if (action === "update" || action === "update-nightly" || action === "update-master") {
+      if (action !== "update") {
+        try {
+          const saved = await deps.download.settings.load();
+          await deps.download.settings.save({
+            ...saved,
+            ytDlpChannel: action === "update-nightly" ? "nightly" : "master",
+          });
+        } catch (e) {
+          const reason = e instanceof Error ? e.message : String(e);
+          nav.replace({
+            ...state,
+            error: `Could not save the yt-dlp channel: ${reason}. Nothing was changed.`,
+          });
+          return;
+        }
+      }
       nav.push({ name: "update", plan: state.plan, draft: state.draft });
     } else if (action === "quality") await askQuality(state.draft);
     else if (action === "again") nav.reset({ name: "home" }, { name: "link" });
@@ -235,7 +265,9 @@ export function App({ deps, start }: { deps: AppDeps; start?: "manager" }) {
       case "home":
         return (
           <HomeScreen
+            {...(lastHomeChoice.current && { initial: lastHomeChoice.current })}
             onPick={(choice) => {
+              if (choice !== "quit") lastHomeChoice.current = choice;
               if (choice === "quit") exit();
               else if (choice === "download") void openDownload();
               else if (choice === "downloads") nav.push(MANAGER);
@@ -319,7 +351,7 @@ export function App({ deps, start }: { deps: AppDeps; start?: "manager" }) {
           <DownloadScreen
             key={screen.run}
             plan={screen.plan}
-            onDone={(job) => {
+            onDone={async (job) => {
               // The result page reports success and failure itself, so its notice shows only once
               // the user leaves it. A cancelled or paused download has no page: say so on the one
               // before.
@@ -328,17 +360,36 @@ export function App({ deps, start }: { deps: AppDeps; start?: "manager" }) {
               else if (job.status === "completed") notices.notify("ok", "Download complete");
               else notices.notify("error", "Download failed");
               if (job.status === "cancelled" || job.status === "paused") nav.back();
-              else nav.replace({ name: "result", plan: screen.plan, draft: screen.draft, job });
+              else {
+                // Read now, so a channel changed in Settings earlier in this session counts.
+                const channel = await deps.download.settings
+                  .load()
+                  .then((s) => s.ytDlpChannel)
+                  .catch(() => "stable" as const);
+                nav.replace({
+                  name: "result",
+                  plan: screen.plan,
+                  draft: screen.draft,
+                  job,
+                  channel,
+                });
+              }
             }}
           />
         );
       case "result":
         return (
-          <ResultScreen job={screen.job} onAction={(action) => void onResult(action, screen)} />
+          <ResultScreen
+            job={screen.job}
+            channel={screen.channel}
+            error={screen.error}
+            onAction={(action) => void onResult(action, screen)}
+          />
         );
       case "update":
         return (
           <UpdateScreen
+            mode="retry"
             onBack={nav.back}
             onDone={() =>
               nav.replace({
@@ -350,6 +401,8 @@ export function App({ deps, start }: { deps: AppDeps; start?: "manager" }) {
             }
           />
         );
+      case "tool-updates":
+        return <UpdateScreen mode="check" onBack={nav.back} />;
       case "batch":
         return (
           <BatchFlow
@@ -399,6 +452,7 @@ export function App({ deps, start }: { deps: AppDeps; start?: "manager" }) {
             onBack={nav.back}
             onSetup={() => nav.reset({ name: "home" }, { name: "setup", autoDownload: true })}
             onReport={() => nav.push({ name: "report" })}
+            onToolUpdates={() => nav.push({ name: "tool-updates" })}
           />
         );
       case "report":

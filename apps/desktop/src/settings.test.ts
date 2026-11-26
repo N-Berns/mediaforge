@@ -61,6 +61,8 @@ describe("sanitizeSettings", () => {
         limitPreset: "low",
         limits: { high: null, med: 5_000_000, low: 1_000_000, custom: 250_000 },
         managerSort: { column: "size", descending: false },
+        allowPrivateUrls: false,
+        ytDlpChannel: "master",
       }),
     ).toEqual({
       folder: "/x",
@@ -75,6 +77,8 @@ describe("sanitizeSettings", () => {
       limitPreset: "low",
       limits: { high: null, med: 5_000_000, low: 1_000_000, custom: 250_000 },
       managerSort: { column: "size", descending: false },
+      allowPrivateUrls: false,
+      ytDlpChannel: "master",
     });
   });
 
@@ -117,6 +121,8 @@ describe("fileSettingsStore", () => {
       limitPreset: "low",
       limits: { high: null, med: 5_000_000, low: 1_000_000, custom: 250_000 },
       managerSort: { column: "size", descending: false },
+      allowPrivateUrls: false,
+      ytDlpChannel: "master",
     });
 
     expect(dirs).toEqual(["cfg"]);
@@ -134,6 +140,8 @@ describe("fileSettingsStore", () => {
       limitPreset: "low",
       limits: { high: null, med: 5_000_000, low: 1_000_000, custom: 250_000 },
       managerSort: { column: "size", descending: false },
+      allowPrivateUrls: false,
+      ytDlpChannel: "master",
     });
     expect(await store.load()).toEqual({
       folder: "/music",
@@ -148,6 +156,8 @@ describe("fileSettingsStore", () => {
       limitPreset: "low",
       limits: { high: null, med: 5_000_000, low: 1_000_000, custom: 250_000 },
       managerSort: { column: "size", descending: false },
+      allowPrivateUrls: false,
+      ytDlpChannel: "master",
     });
   });
 });
@@ -222,5 +232,24 @@ describe("managerSort", () => {
     expect(
       sanitizeSettings({ managerSort: { column: "size", descending: false } }).managerSort,
     ).toEqual({ column: "size", descending: false });
+  });
+});
+
+describe("ytDlpChannel", () => {
+  it("defaults ytDlpChannel to stable", () => {
+    expect(sanitizeSettings({}).ytDlpChannel).toBe("stable");
+    expect(DEFAULT_SETTINGS.ytDlpChannel).toBe("stable");
+  });
+
+  it("keeps a valid channel", () => {
+    for (const channel of ["stable", "nightly", "master"]) {
+      expect(sanitizeSettings({ ytDlpChannel: channel }).ytDlpChannel).toBe(channel);
+    }
+  });
+
+  it("falls back to stable for an unknown or non-string value", () => {
+    for (const bad of ["beta", "", 3, null, ["stable"], { a: 1 }]) {
+      expect(sanitizeSettings({ ytDlpChannel: bad }).ytDlpChannel).toBe("stable");
+    }
   });
 });

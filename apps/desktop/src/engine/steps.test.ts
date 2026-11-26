@@ -91,6 +91,14 @@ describe("StepTracker", () => {
     t.onDownload(progress(1, 1000), audio);
     expect(t.overall).toBeGreaterThanOrEqual(before);
   });
+
+  it("stays below 100 until the file is saved, though every known step is done", () => {
+    const t = new StepTracker();
+    t.onDownload(progress(100, 100), video);
+    expect(t.overall).toBeLessThan(100);
+    t.complete();
+    expect(t.overall).toBe(100);
+  });
 });
 
 describe("overallPercent", () => {

@@ -17,7 +17,6 @@ export function buildManifest(target: Target, version: string): Record<string, u
     version,
     description: "Send the video and audio on a page to MediaForge on this computer.",
     permissions: ["webRequest", "nativeMessaging", "storage", "tabs", "cookies"],
-    host_permissions: ["<all_urls>"],
     icons: ICONS,
     action: { default_title: "MediaForge", default_popup: "popup.html", default_icon: ICONS },
     content_scripts: [
@@ -34,9 +33,16 @@ export function buildManifest(target: Target, version: string): Record<string, u
     // the popup detects and offers to request again.
     return {
       ...base,
+      host_permissions: ["<all_urls>"],
       background: { scripts: ["background.js"] },
       browser_specific_settings: { gecko: { id: FIREFOX_ADDON_ID, strict_min_version: "128.0" } },
     };
   }
-  return { ...base, background: { service_worker: "background.js" } };
+  // Chromium installs without site access; the popup asks for it, and the content script and the
+  // request listeners start working once the user allows it.
+  return {
+    ...base,
+    optional_host_permissions: ["<all_urls>"],
+    background: { service_worker: "background.js" },
+  };
 }

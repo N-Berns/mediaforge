@@ -12,6 +12,7 @@ const fs: EngineFs = {
   exists: async () => false,
   list: async () => [],
   readText: async () => "",
+  writePrivate: async () => {},
 };
 
 const plan = (patch: Partial<Plan> = {}): Plan => ({

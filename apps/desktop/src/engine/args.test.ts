@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   buildYtDlpArgs,
   contextArgs,
+  contextConfig,
   contextError,
   contextSecrets,
   redactSecrets,
@@ -28,6 +29,13 @@ describe("request context", () => {
       "Origin:https://example.com",
     ]);
     expect(contextArgs(undefined)).toEqual([]);
+  });
+
+  it("writes the context as quoted config lines", () => {
+    expect(contextConfig(undefined)).toBe("");
+    expect(contextConfig({ cookies: String.raw`a="1"; b=\2`, headers: { X: "#v" } })).toBe(
+      [String.raw`--add-header "Cookie:a=\"1\"; b=\\2"`, '--add-header "X:#v"', ""].join("\n"),
+    );
   });
 
   it("rejects line breaks, NUL, oversized values and bad or forbidden header names", () => {

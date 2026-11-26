@@ -35,7 +35,7 @@ export const COMMANDS: Command[] = [
   },
   {
     name: "update",
-    summary: "Update yt-dlp to the latest nightly",
+    summary: "Update yt-dlp (pick a channel) or check for updates",
     run: (args, io) => runUpdate(args, io),
   },
   {

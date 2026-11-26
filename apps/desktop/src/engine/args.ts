@@ -87,6 +87,22 @@ export function contextArgs(context: RequestContext | undefined): string[] {
   return args;
 }
 
+const quoteConfigValue = (value: string): string =>
+  `"${value.replaceAll("\\", "\\\\").replaceAll('"', '\\"')}"`;
+
+/**
+ * The context as the text of a yt-dlp config file, one option per line. Cookies and auth headers go
+ * here, not on the command line, where any local process can read them.
+ */
+export function contextConfig(context: RequestContext | undefined): string {
+  const args = contextArgs(context);
+  const lines: string[] = [];
+  for (let i = 0; i < args.length; i += 2) {
+    lines.push(`${args[i]} ${quoteConfigValue(args[i + 1] ?? "")}`);
+  }
+  return lines.length > 0 ? `${lines.join("\n")}\n` : "";
+}
+
 const MIN_SECRET_LENGTH = 6;
 const MIN_PART_LENGTH = 8;
 
@@ -139,8 +155,8 @@ export interface BuildArgsInput {
   ffmpegProgressFile?: string;
   /** `--js-runtimes ...` flags from `jsRuntimeArgs()`; empty when yt-dlp can find its own. */
   jsRuntimeArgs?: string[];
-  /** Referer, user agent, cookies and headers to send with the download. */
-  context?: RequestContext;
+  /** Config file holding the request context (see `contextConfig`); read by yt-dlp, not echoed. */
+  contextConfigFile?: string;
   /** Speed cap in bytes per second. Unset: no cap. */
   limitRate?: number;
 }
@@ -218,7 +234,7 @@ export function buildYtDlpArgs({
   formatSelector,
   ffmpegProgressFile,
   jsRuntimeArgs,
-  context,
+  contextConfigFile,
   limitRate,
 }: BuildArgsInput): string[] {
   const url = request.candidate.url;
@@ -248,7 +264,7 @@ export function buildYtDlpArgs({
     "--print",
     `after_move:${FILE_PREFIX} %(filepath)s`,
     ...ffmpegProgressArgs(ffmpegProgressFile),
-    ...contextArgs(context),
+    ...(contextConfigFile ? ["--config-locations", contextConfigFile] : []),
     "--paths",
     workDir,
     "-o",

@@ -20,6 +20,7 @@ import {
   sizeText,
   speedText,
   statusText,
+  withoutFlags,
 } from "./model.ts";
 
 /** Cells of the `[ ]` box in a row: column 0 is the cursor mark. */
@@ -70,7 +71,7 @@ function cellText(
   const icons = compact.includes(column);
   switch (column) {
     case "name":
-      return rowName(job);
+      return withoutFlags(rowName(job));
     case "type":
       return icons ? KIND_ICONS[jobKind(job)].trim() : KIND_LABELS[jobKind(job)];
     case "origin":

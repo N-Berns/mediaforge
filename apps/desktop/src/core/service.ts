@@ -26,6 +26,7 @@ import { filenameError, folderSettingError, outputDirError } from "./path-rules.
 import { type KnownFormat, selectorFor, UnsupportedSiteError } from "./probe.ts";
 import type { Provisioner, SetupStatus } from "./provisioner.ts";
 import type { TrashFn, TrashResult } from "./trash.ts";
+import { type HostResolver, urlError } from "./url-rules.ts";
 
 export interface ServiceClient {
   /** May throw (the transport rejects oversized or unserializable frames); the core ignores it. */
@@ -60,6 +61,8 @@ export interface CoreServiceDeps {
   trash: TrashFn;
   /** The bandwidth settings at start. `applySettings` and `settings.set` keep them current. */
   bandwidth?: BandwidthSettings;
+  /** Resolves host names for the private-address check. Default: the system resolver. */
+  resolveHost?: HostResolver;
 }
 
 interface ClientState {
@@ -483,8 +486,9 @@ export class CoreService {
     message: Extract<ExtensionToHostMessage, { type: "media.probe" }>,
   ): Promise<void> {
     const url = message.payload.url;
-    if (!/^https?:\/\//i.test(url)) {
-      this.#error(state, message.id, "invalid-url", "Only http and https links can be probed.");
+    const problem = await this.#urlProblem(state, url);
+    if (problem) {
+      this.#error(state, message.id, "invalid-url", problem);
       return;
     }
     try {
@@ -616,6 +620,11 @@ export class CoreService {
       this.#error(state, message.id, "invalid-filename", nameProblem);
       return;
     }
+    const urlProblem = await this.#urlProblem(state, request.candidate.url);
+    if (urlProblem) {
+      this.#error(state, message.id, "invalid-url", urlProblem);
+      return;
+    }
     const contextProblem = context ? contextError(context) : undefined;
     if (contextProblem) {
       this.#error(state, message.id, "invalid-context", contextProblem);
@@ -723,6 +732,16 @@ export class CoreService {
     // The engine reports the job from inside `submit`, before this client owns it, and may have
     // started it already. Answer with where the job is now; later changes arrive via #onJob.
     this.#sendJob(state, job, message.id);
+  }
+
+  /**
+   * Why a link from this client may not be fetched. A terminal is the user's own program and may
+   * name any web link; the browser side may not reach local addresses unless the user allows it.
+   */
+  async #urlProblem(state: ClientState, url: string): Promise<string | undefined> {
+    const allowPrivate =
+      state.role === "terminal" || (await this.#deps.settings.load()).allowPrivateUrls;
+    return urlError(url, allowPrivate, this.#deps.resolveHost);
   }
 
   async #sendSettings(state: ClientState, id: string): Promise<void> {

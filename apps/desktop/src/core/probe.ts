@@ -80,6 +80,11 @@ function subtitlesOf(info: MediaInfo): ProbedSubtitle[] {
 /** Turn yt-dlp's JSON into the `media.info` payload. Best format first. */
 export function toProbedMedia(url: string, info: MediaInfo): ProbedMedia {
   if (info.extractor_key === "Generic") {
+    if (/facebook\.com|fb\.watch/i.test(url)) {
+      throw new UnsupportedSiteError(
+        "This Facebook video is private or not public. Only public videos can be downloaded.",
+      );
+    }
     throw new UnsupportedSiteError("MediaForge has no extractor for this page.");
   }
   // yt-dlp lists formats worst to best.

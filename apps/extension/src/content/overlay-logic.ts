@@ -72,16 +72,120 @@ export function isTargetGone(state: {
   return !state.connected || state.shownUrl !== state.currentUrl;
 }
 
-/** Top-right corner of the element, inset a little, in document coordinates. */
+/**
+ * Top-right corner of the element, inset a little, in document coordinates, moved by the
+ * user's drag offset when there is one.
+ */
 export function placeButton(
   rect: { top: number; left: number; width: number; height: number },
   scroll: { x: number; y: number },
   button: { width: number; height: number },
+  offset?: { dx: number; dy: number },
 ): { top: number; left: number } {
   return {
-    top: rect.top + scroll.y + INSET,
-    left: rect.left + scroll.x + rect.width - button.width - INSET,
+    top: rect.top + scroll.y + INSET + (offset?.dy ?? 0),
+    left: rect.left + scroll.x + rect.width - button.width - INSET + (offset?.dx ?? 0),
   };
+}
+
+/** A box in document coordinates. */
+export type Box = { top: number; left: number; width: number; height: number };
+
+/**
+ * The area a button may sit in on a video: the element's box in document coordinates, inset on
+ * every side by the same margin as the default corner.
+ */
+export function frameBounds(
+  rect: { top: number; left: number; width: number; height: number },
+  scroll: { x: number; y: number },
+): Box {
+  return {
+    top: rect.top + scroll.y + INSET,
+    left: rect.left + scroll.x + INSET,
+    width: rect.width - 2 * INSET,
+    height: rect.height - 2 * INSET,
+  };
+}
+
+/**
+ * Moves the button by the drag delta, keeping it inside `bounds`. A box too small for the button
+ * pins it to its top-left corner.
+ */
+export function applyDrag(
+  origin: { top: number; left: number },
+  delta: { dx: number; dy: number },
+  bounds: Box,
+  button: { width: number; height: number },
+): { top: number; left: number } {
+  const clamp = (value: number, min: number, room: number): number =>
+    Math.min(Math.max(min, value), min + Math.max(0, room));
+  return {
+    top: clamp(origin.top + delta.dy, bounds.top, bounds.height - button.height),
+    left: clamp(origin.left + delta.dx, bounds.left, bounds.width - button.width),
+  };
+}
+
+/**
+ * Where the button sits in `bounds`, as a share of the room it can move in: x 0 is the left limit
+ * and 1 the right, y 0 the top and 1 the bottom. A side with no room counts as 0.
+ */
+export function spotIn(
+  pos: { top: number; left: number },
+  bounds: Box,
+  button: { width: number; height: number },
+): { x: number; y: number } {
+  const share = (value: number, min: number, room: number): number =>
+    room > 0 ? Math.min(1, Math.max(0, (value - min) / room)) : 0;
+  return {
+    x: share(pos.left, bounds.left, bounds.width - button.width),
+    y: share(pos.top, bounds.top, bounds.height - button.height),
+  };
+}
+
+/** The position of a spot from `spotIn` in `bounds`, so it scales when the frame changes size. */
+export function placeAtSpot(
+  spot: { x: number; y: number },
+  bounds: Box,
+  button: { width: number; height: number },
+): { top: number; left: number } {
+  return {
+    top: bounds.top + spot.y * Math.max(0, bounds.height - button.height),
+    left: bounds.left + spot.x * Math.max(0, bounds.width - button.width),
+  };
+}
+
+/** How long a still pointer over the video keeps the button up. */
+export const IDLE_HIDE_MS = 3000;
+/** How long the button stays after the pointer left its video. */
+export const LEAVE_HIDE_MS = 500;
+
+export type HideTimer = "idle" | "leave";
+
+/**
+ * What a pointer move or a change of the button's state does to it. `held` is a button that must
+ * stay up: pointer on it, a drag, or a click's result on show. `moved` tells a real move from a
+ * re-check, which never brings back a button hidden for being idle. `timer` says to clear the hide
+ * timer, keep the one pending, or start the idle or the leave timer anew.
+ */
+export function hidePlan(state: {
+  held: boolean;
+  inside: boolean;
+  moved: boolean;
+  shown: boolean;
+  pending: HideTimer | undefined;
+}): { reveal: boolean; timer: "clear" | "keep" | HideTimer } {
+  const { held, inside, moved, shown, pending } = state;
+  if (held) return { reveal: true, timer: "clear" };
+  if (inside && moved) return { reveal: true, timer: "idle" };
+  if (inside) return { reveal: false, timer: shown && pending !== "idle" ? "idle" : "keep" };
+  return { reveal: false, timer: shown && pending !== "leave" ? "leave" : "keep" };
+}
+
+const DRAG_THRESHOLD = 4;
+
+/** Whether a pointer moved far enough to be a drag rather than a click. */
+export function isDrag(delta: { dx: number; dy: number }): boolean {
+  return Math.hypot(delta.dx, delta.dy) >= DRAG_THRESHOLD;
 }
 
 /** Index of the first video or audio in an ordered list of elements, if any. */

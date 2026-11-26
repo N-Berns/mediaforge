@@ -4,7 +4,7 @@
 #   tools/release/smoke.sh <path-to-binary> [expected-version]
 #
 # Checks --version, --help and `doctor --json`, then runs `setup --yes --tools yt-dlp` against a
-# local fake yt-dlp repository (never the real upstream) and checks the cache and its manifest.
+# local fake yt-dlp download (never the real upstream) and checks the cache and its manifest.
 set -euo pipefail
 
 bin="$1"
@@ -23,7 +23,7 @@ server=$!
 trap 'kill "$server" 2>/dev/null || true; rm -rf "$cache"' EXIT
 
 for _ in $(seq 1 50); do
-  if curl -fsS "http://127.0.0.1:$port/repo/releases/latest" -o /dev/null 2>/dev/null; then break; fi
+  if curl -fsS "http://127.0.0.1:$port/lock.json" -o /dev/null 2>/dev/null; then break; fi
   sleep 0.2
 done
 
@@ -73,12 +73,13 @@ if (!ytDlp?.found || ytDlp.source !== "bundled") {
 }
 ' "$(native "$cache/doctor-fake.json")"
 
-# Setup against the fake repository, with an empty PATH and an empty bundled folder so a yt-dlp on
+# Setup against the fake download, with an empty PATH and an empty bundled folder so a yt-dlp on
 # this machine (or next to the binary) cannot hide it.
 mkdir -p "$cache/empty" "$cache/tools"
+curl -fsS "http://127.0.0.1:$port/lock.json" -o "$cache/lock.json"
 MEDIAFORGE_BIN_DIR="$(native "$cache/empty")" \
   MEDIAFORGE_CACHE_DIR="$(native "$cache/tools")" \
-  MEDIAFORGE_YTDLP_REPO_URL="http://127.0.0.1:$port/repo" \
+  MEDIAFORGE_TOOLS_LOCK="$(native "$cache/lock.json")" \
   PATH="$(native "$cache/empty")" \
   "$bin" setup --yes --tools yt-dlp
 

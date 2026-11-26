@@ -1,12 +1,22 @@
 import {
+  applyDrag,
+  type Box,
   BRAND,
   findMediaIndex,
+  frameBounds,
+  type HideTimer,
+  hidePlan,
+  IDLE_HIDE_MS,
+  isDrag,
   isTargetGone,
   isWorthOverlay,
+  LEAVE_HIDE_MS,
   labelFor,
   MARK_RUNS,
   MARK_VIEWBOX,
+  placeAtSpot,
   placeButton,
+  spotIn,
 } from "./overlay-logic.ts";
 
 const root = globalThis as unknown as { browser?: typeof browser; chrome: typeof browser };
@@ -16,11 +26,12 @@ const api = root.browser ?? root.chrome;
 // styles and scripts cannot reach it. The only data sent to the background is the command kind;
 // the background takes the tab and frame URL from the message sender, never from the page.
 let host: HTMLElement | undefined;
-let button: HTMLButtonElement | undefined;
+let button: HTMLElement | undefined;
 let label: HTMLSpanElement | undefined;
 let target: HTMLMediaElement | undefined;
 let enabled = false;
 let listening = false;
+let messageListening = false;
 let busy = false;
 let disposed = false;
 let resetTimer: ReturnType<typeof setTimeout> | undefined;
@@ -29,6 +40,13 @@ let resetTimer: ReturnType<typeof setTimeout> | undefined;
 let trackTimer: ReturnType<typeof setInterval> | undefined;
 let shownUrl = "";
 const TRACK_MS = 300;
+// The button fades out when the pointer leaves its video or rests on it, so it never covers the
+// picture for long. The host stays in the page meanwhile, so the drag spot and timers survive.
+let concealed = false;
+let hideTimer: ReturnType<typeof setTimeout> | undefined;
+let pendingHide: HideTimer | undefined;
+/** The pointer's last spot in the viewport; undefined once it left the window. */
+let pointer: { x: number; y: number } | undefined;
 
 async function send<T>(message: { kind: string }, fallback: T): Promise<T> {
   try {
@@ -45,16 +63,20 @@ const HOST_STYLE: ReadonlyArray<readonly [string, string]> = [
   ["z-index", "2147483647"],
   ["display", "block"],
   ["visibility", "visible"],
-  ["opacity", "1"],
-  ["pointer-events", "auto"],
   ["margin", "0"],
   ["padding", "0"],
   ["transform", "none"],
+  ["transition", "opacity 150ms ease"],
 ];
 
 // Page CSS must not be able to hide or restyle the host, so every property is !important inline.
+// A faded-out button takes no clicks and no keyboard focus (inert also drops focus it already
+// had), so nobody presses a button they cannot see.
 function applyHostStyle(el: HTMLElement, top: number, left: number): void {
   for (const [name, value] of HOST_STYLE) el.style.setProperty(name, value, "important");
+  el.style.setProperty("opacity", concealed ? "0" : "1", "important");
+  el.style.setProperty("pointer-events", concealed ? "none" : "auto", "important");
+  el.inert = concealed;
   el.style.setProperty("top", `${top}px`, "important");
   el.style.setProperty("left", `${left}px`, "important");
 }
@@ -65,8 +87,8 @@ const SVG_NS = "http://www.w3.org/2000/svg";
 function markIcon(): SVGSVGElement {
   const svg = document.createElementNS(SVG_NS, "svg");
   svg.setAttribute("viewBox", MARK_VIEWBOX);
-  svg.setAttribute("width", "18");
-  svg.setAttribute("height", "17");
+  svg.setAttribute("width", "14");
+  svg.setAttribute("height", "13");
   svg.setAttribute("shape-rendering", "crispEdges");
   svg.setAttribute("aria-hidden", "true");
   svg.style.cssText = "flex:none;display:block;";
@@ -82,34 +104,283 @@ function markIcon(): SVGSVGElement {
   return svg;
 }
 
-const BUTTON_STYLE = `display:inline-flex;align-items:center;gap:7px;font:600 12px system-ui,sans-serif;padding:5px 11px 5px 8px;border:1px solid ${BRAND.ember};border-radius:8px;background:${BRAND.ink};color:${BRAND.glow};cursor:pointer;box-shadow:0 1px 6px rgba(0,0,0,.55);`;
+const PILL_BG = BRAND.ink;
+const PILL_BG_HOVER = "#262b38";
+const PILL_BG_PRESSED = "#0a0b0e";
+const PILL_STYLE =
+  "box-sizing:border-box;display:inline-flex;align-items:stretch;height:24px;margin:0;padding:0;" +
+  `font:600 11px/14px system-ui,sans-serif;border:1px solid ${BRAND.ember};border-radius:6px;` +
+  `color:${BRAND.glow};box-shadow:0 1px 6px rgba(0,0,0,.55);user-select:none;touch-action:none;` +
+  "outline-offset:1px;";
+const INNER_STYLE =
+  "all:unset;box-sizing:border-box;display:inline-flex;align-items:center;cursor:inherit;";
+const MAIN_STYLE = `${INNER_STYLE}gap:5px;padding:0 6px;font:inherit;color:inherit;`;
+const CLOSE_STYLE = `${INNER_STYLE}justify-content:center;width:22px;min-width:22px;font:inherit;color:inherit;opacity:.75;border-left:1px solid rgba(255,194,107,.25);cursor:pointer;`;
 
-function ensureButton(): HTMLButtonElement {
+// Per media element, until the page reloads: where the user dragged the pill and whether they
+// closed it. Nothing is stored. On a video the spot is a share of its frame, so it follows the
+// frame when it changes size; on audio it is an offset from the default corner.
+const spots = new WeakMap<HTMLVideoElement, { x: number; y: number }>();
+const offsets = new WeakMap<HTMLMediaElement, { dx: number; dy: number }>();
+/** The default spot on a video: its top-right corner. */
+const TOP_RIGHT = { x: 1, y: 0 };
+const dismissed = new WeakSet<HTMLMediaElement>();
+
+type Drag = {
+  pointerId: number;
+  startX: number;
+  startY: number;
+  origin: { top: number; left: number };
+  moved: boolean;
+};
+let drag: Drag | undefined;
+let placed = { top: 0, left: 0 };
+let hovered = false;
+let pressed = false;
+let focused = false;
+let dragging = false;
+
+/** One place decides the look from the pointer state, so hover, press and busy never fight. */
+function applyLook(): void {
+  if (!button) return;
+  const down = pressed || dragging;
+  button.style.background = down ? PILL_BG_PRESSED : hovered ? PILL_BG_HOVER : PILL_BG;
+  button.style.borderColor = hovered || dragging ? BRAND.flame : BRAND.ember;
+  button.style.cursor = dragging ? "grabbing" : "grab";
+  button.style.opacity = busy ? "0.7" : "1";
+  button.style.transform = down ? "translateY(1px)" : "none";
+  button.style.outline = focused ? `2px solid ${BRAND.flame}` : "none";
+}
+
+function isFocusVisible(el: Element): boolean {
+  try {
+    return el.matches(":focus-visible");
+  } catch {
+    return false;
+  }
+}
+
+function pageBounds(): Box {
+  const el = document.documentElement;
+  return {
+    top: 0,
+    left: 0,
+    width: Math.max(el.scrollWidth, el.clientWidth),
+    height: Math.max(el.scrollHeight, el.clientHeight),
+  };
+}
+
+/** Where the button may go: inside the frame of a video, anywhere on the page for audio. */
+function dragBounds(media: HTMLMediaElement, rect: DOMRect): Box {
+  return media instanceof HTMLVideoElement
+    ? frameBounds(rect, { x: window.scrollX, y: window.scrollY })
+    : pageBounds();
+}
+
+function buttonSize(): { width: number; height: number } {
+  return { width: button?.offsetWidth || 90, height: button?.offsetHeight || 24 };
+}
+
+function onDragMove(event: PointerEvent): void {
+  if (!drag || !button || !target) return;
+  // The button was released somewhere we never heard about: this is a hover, not a drag.
+  if ((event.buttons & 1) === 0) {
+    endPress();
+    return;
+  }
+  if (event.pointerId !== drag.pointerId) return;
+  const delta = { dx: event.clientX - drag.startX, dy: event.clientY - drag.startY };
+  if (!drag.moved) {
+    if (!isDrag(delta)) return;
+    drag.moved = true;
+    dragging = true;
+    try {
+      button.setPointerCapture(event.pointerId);
+    } catch {
+      // The drag still works through the pill's own events; capture only keeps it from slipping.
+    }
+    applyLook();
+  }
+  const size = buttonSize();
+  const rect = target.getBoundingClientRect();
+  const bounds = dragBounds(target, rect);
+  const pos = applyDrag(drag.origin, delta, bounds, size);
+  if (target instanceof HTMLVideoElement) {
+    spots.set(target, spotIn(pos, bounds, size));
+  } else {
+    const home = placeButton(rect, { x: window.scrollX, y: window.scrollY }, size);
+    offsets.set(target, { dx: pos.left - home.left, dy: pos.top - home.top });
+  }
+  placed = pos;
+  if (host) applyHostStyle(host, pos.top, pos.left);
+}
+
+/** A release outside the pill never reaches it, so a pressed pill also listens on the window. */
+function watchRelease(on: boolean): void {
+  const method = on ? "addEventListener" : "removeEventListener";
+  window[method]("pointerup", endPress);
+  window[method]("pointercancel", endPress);
+}
+
+function endPress(): void {
+  watchRelease(false);
+  pressed = false;
+  dragging = false;
+  drag = undefined;
+  applyLook();
+  updateVisibility(false);
+}
+
+/** Pointer on the button, a drag, or a click's result on show: the button must stay up. */
+const isHeld = (): boolean => hovered || busy || dragging;
+
+function setConcealed(value: boolean): void {
+  if (concealed === value) return;
+  concealed = value;
+  if (host) applyHostStyle(host, placed.top, placed.left);
+}
+
+function clearHideTimer(): void {
+  clearTimeout(hideTimer);
+  hideTimer = undefined;
+  pendingHide = undefined;
+}
+
+function isPointerOver(media: HTMLMediaElement): boolean {
+  if (!pointer) return false;
+  const r = media.getBoundingClientRect();
+  return pointer.x >= r.left && pointer.x < r.right && pointer.y >= r.top && pointer.y < r.bottom;
+}
+
+/** Shows or fades the button from where the pointer is. `moved` is a real pointer move. */
+function updateVisibility(moved: boolean): void {
+  if (!target || !host) return;
+  const plan = hidePlan({
+    held: isHeld(),
+    inside: isPointerOver(target),
+    moved,
+    shown: !concealed,
+    pending: pendingHide,
+  });
+  if (plan.reveal) setConcealed(false);
+  if (plan.timer === "keep") return;
+  clearHideTimer();
+  if (plan.timer === "clear") return;
+  pendingHide = plan.timer;
+  hideTimer = setTimeout(
+    () => {
+      clearHideTimer();
+      if (!isHeld()) setConcealed(true);
+    },
+    plan.timer === "idle" ? IDLE_HIDE_MS : LEAVE_HIDE_MS,
+  );
+}
+
+/** Hides the button for this video until the page reloads. */
+function dismiss(): void {
+  if (target) dismissed.add(target);
+  hide();
+}
+
+function innerButton(style: string): HTMLButtonElement {
+  const el = document.createElement("button");
+  el.type = "button";
+  el.style.cssText = style;
+  return el;
+}
+
+function ensureButton(): HTMLElement {
   if (button && host) return button;
   host = document.createElement("div");
   applyHostStyle(host, 0, 0);
-  const root = host.attachShadow({ mode: "closed" });
-  const created = document.createElement("button");
-  button = created;
+  const shadow = host.attachShadow({ mode: "closed" });
+  const pill = document.createElement("div");
+  button = pill;
+  pill.setAttribute("role", "group");
+  pill.setAttribute("aria-label", "MediaForge download");
+  pill.style.cssText = PILL_STYLE;
+  const main = innerButton(MAIN_STYLE);
   label = document.createElement("span");
   label.textContent = "Download";
-  created.append(markIcon(), label);
-  created.style.cssText = BUTTON_STYLE;
-  created.addEventListener("mouseenter", () => {
-    created.style.borderColor = BRAND.flame;
+  main.append(markIcon(), label);
+  const close = innerButton(CLOSE_STYLE);
+  close.setAttribute("aria-label", "Hide the download button on this video");
+  close.title = "Hide";
+  const cross = document.createElement("span");
+  cross.textContent = "×";
+  cross.style.cssText = "font:600 13px/1 system-ui,sans-serif;";
+  close.append(cross);
+  pill.append(main, close);
+  applyLook();
+
+  pill.addEventListener("pointerenter", () => {
+    hovered = true;
+    applyLook();
+    updateVisibility(false);
   });
-  created.addEventListener("mouseleave", () => {
-    created.style.borderColor = BRAND.ember;
+  pill.addEventListener("pointerleave", () => {
+    hovered = false;
+    applyLook();
+    updateVisibility(false);
   });
+  pill.addEventListener("focusin", (event) => {
+    focused = event.target instanceof Element && isFocusVisible(event.target);
+    applyLook();
+  });
+  pill.addEventListener("focusout", () => {
+    focused = false;
+    applyLook();
+  });
+
+  // Drag from the pill. The close button stops its own pointerdown, so it never starts one.
+  let swallowClick = false;
+  pill.addEventListener("pointerdown", (event) => {
+    swallowClick = false;
+    if (!event.isPrimary || event.button !== 0) return;
+    pressed = true;
+    watchRelease(true);
+    drag = {
+      pointerId: event.pointerId,
+      startX: event.clientX,
+      startY: event.clientY,
+      origin: { ...placed },
+      moved: false,
+    };
+    applyLook();
+  });
+  pill.addEventListener("pointermove", onDragMove);
+  pill.addEventListener("pointerup", () => {
+    // A drag ends in a click on the pill; the download must not fire for it.
+    swallowClick = drag?.moved === true;
+    endPress();
+    // The click follows at once; after that, a keyboard activation must not be swallowed.
+    if (swallowClick) setTimeout(() => (swallowClick = false), 0);
+  });
+  pill.addEventListener("pointercancel", endPress);
+  pill.addEventListener("lostpointercapture", endPress);
+
   // Keep the page's players from reacting to our clicks.
-  for (const type of ["mousedown", "mouseup", "pointerdown", "pointerup", "dblclick"]) {
-    created.addEventListener(type, (event) => event.stopPropagation());
+  for (const el of [pill, close]) {
+    for (const type of ["mousedown", "mouseup", "pointerdown", "pointerup", "click", "dblclick"]) {
+      el.addEventListener(type, (event) => event.stopPropagation());
+    }
   }
-  created.addEventListener("click", async (event) => {
+  close.addEventListener("click", (event) => {
+    event.stopPropagation();
+    event.preventDefault();
+    if (!event.isTrusted) return;
+    dismiss();
+  });
+  main.addEventListener("click", async (event) => {
     event.stopPropagation();
     event.preventDefault();
     if (!event.isTrusted || busy) return;
+    if (swallowClick) {
+      swallowClick = false;
+      return;
+    }
     busy = true;
+    applyLook();
     setLabel("Opening…");
     const result = await send<{ status?: string; reason?: string; popup?: boolean }>(
       { kind: "overlayDownload" },
@@ -120,11 +391,13 @@ function ensureButton(): HTMLButtonElement {
     resetTimer = setTimeout(() => {
       busy = false;
       setLabel("Download");
+      applyLook();
+      updateVisibility(false);
     }, 2000);
   });
-  root.append(created);
+  shadow.append(pill);
   document.documentElement.append(host);
-  return created;
+  return pill;
 }
 
 function setLabel(text: string): void {
@@ -134,14 +407,23 @@ function setLabel(text: string): void {
 function hide(): void {
   clearInterval(trackTimer);
   trackTimer = undefined;
+  clearHideTimer();
+  concealed = false;
   host?.remove();
   host = undefined;
   button = undefined;
   label = undefined;
   target = undefined;
+  hovered = false;
+  focused = false;
+  endPress();
 }
 
 function show(media: HTMLMediaElement): void {
+  if (dismissed.has(media)) {
+    if (target === media) hide();
+    return;
+  }
   const rect = media.getBoundingClientRect();
   const hidden = getComputedStyle(media).visibility === "hidden" || media.offsetParent === null;
   if (!isWorthOverlay(rect, hidden)) {
@@ -151,11 +433,20 @@ function show(media: HTMLMediaElement): void {
   const b = ensureButton();
   if (target !== media) shownUrl = location.href;
   target = media;
-  const pos = placeButton(
-    rect,
-    { x: window.scrollX, y: window.scrollY },
-    { width: b.offsetWidth || 90, height: b.offsetHeight || 28 },
-  );
+  if (drag?.moved === true) return; // the pointer is placing it
+  const size = { width: b.offsetWidth || 90, height: b.offsetHeight || 24 };
+  const bounds = dragBounds(media, rect);
+  const pos =
+    media instanceof HTMLVideoElement
+      ? placeAtSpot(spots.get(media) ?? TOP_RIGHT, bounds, size)
+      : // A resize can leave a dragged pill outside the page; pull it back in.
+        applyDrag(
+          placeButton(rect, { x: window.scrollX, y: window.scrollY }, size, offsets.get(media)),
+          { dx: 0, dy: 0 },
+          bounds,
+          size,
+        );
+  placed = pos;
   if (host) applyHostStyle(host, pos.top, pos.left);
   trackTimer ??= setInterval(track, TRACK_MS);
 }
@@ -170,6 +461,8 @@ function track(): void {
     return;
   }
   show(target);
+  // The video can move away from a still pointer, with no event at all.
+  updateVisibility(false);
 }
 
 function mediaAt(event: Event): HTMLMediaElement | undefined {
@@ -191,20 +484,40 @@ function mediaAt(event: Event): HTMLMediaElement | undefined {
   return undefined;
 }
 
-function onPointer(event: Event): void {
+function onPointer(event: MouseEvent): void {
   if (!enabled || disposed) return;
+  pointer = { x: event.clientX, y: event.clientY };
   const media = mediaAt(event);
   if (media) show(media);
+  updateVisibility(true);
+}
+
+function onMove(event: PointerEvent): void {
+  if (!enabled || disposed) return;
+  pointer = { x: event.clientX, y: event.clientY };
+  updateVisibility(true);
+}
+
+/** A `mouseout` to nothing is the pointer leaving the window. */
+function onOut(event: MouseEvent): void {
+  if (event.relatedTarget !== null) return;
+  pointer = undefined;
+  updateVisibility(false);
 }
 
 function onScroll(): void {
-  if (target) show(target);
+  if (!target) return;
+  show(target);
+  // Scrolling moves the video under a still pointer.
+  updateVisibility(false);
 }
 
 function listen(): void {
   if (listening) return;
   listening = true;
   document.addEventListener("mouseover", onPointer, { passive: true, capture: true });
+  document.addEventListener("pointermove", onMove, { passive: true, capture: true });
+  document.addEventListener("mouseout", onOut, { passive: true, capture: true });
   window.addEventListener("scroll", onScroll, { passive: true });
 }
 
@@ -212,6 +525,8 @@ function unlisten(): void {
   if (!listening) return;
   listening = false;
   document.removeEventListener("mouseover", onPointer, { capture: true });
+  document.removeEventListener("pointermove", onMove, { capture: true });
+  document.removeEventListener("mouseout", onOut, { capture: true });
   window.removeEventListener("scroll", onScroll);
 }
 
@@ -228,11 +543,11 @@ async function refresh(): Promise<void> {
   }
 }
 
+function onMessage(message: unknown): void {
+  if ((message as { kind?: string } | undefined)?.kind === "overlayChanged") void refresh();
+}
+
 function onVisibility(): void {
-  if (document.visibilityState === "visible")
-    api.runtime.onMessage.addListener((message: unknown) => {
-      if ((message as { kind?: string } | undefined)?.kind === "overlayChanged") void refresh();
-    });
   void refresh();
 }
 
@@ -257,6 +572,11 @@ function onPageShow(event: PageTransitionEvent): void {
   void refresh();
 }
 
+// Registered once; every later change of tab visibility only refreshes.
+if (!messageListening) {
+  messageListening = true;
+  api.runtime.onMessage.addListener(onMessage);
+}
 document.addEventListener("visibilitychange", onVisibility);
 window.addEventListener("pagehide", onPageHide);
 window.addEventListener("pageshow", onPageShow);
