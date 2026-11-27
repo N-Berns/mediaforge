@@ -4,7 +4,8 @@ import { execFileText } from "@mediaforge/binary-resolver";
 const RUN_KEY = "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run";
 const VALUE_NAME = "MediaForge";
 
-const runningThroughNode = (execPath: string): boolean =>
+/** True when this is node running the script (development), not the packaged exe. */
+export const runningThroughNode = (execPath: string): boolean =>
   basename(execPath.replace(/\\/g, "/"))
     .toLowerCase()
     .replace(/\.exe$/, "") === "node";

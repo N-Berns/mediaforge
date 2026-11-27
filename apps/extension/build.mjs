@@ -1,11 +1,14 @@
 // Bundles the extension into dist/<target>/: background.js, popup.js, overlay.js, popup.html,
-// popup.css and manifest.json. Usage: node build.mjs [--target firefox|chromium]
+// popup.css and manifest.json. Usage: node build.mjs [--target firefox|chromium|chromium-store]
+// chromium is the unpacked build (fixed ID through `key`); chromium-store is the Web Store upload.
 import { copyFile, mkdir, readFile, writeFile } from "node:fs/promises";
 import { build } from "esbuild";
 
+const { buildManifest, TARGETS } = await import("./src/manifest.ts");
+
 const arg = process.argv.indexOf("--target");
 const target = arg >= 0 ? process.argv[arg + 1] : "firefox";
-if (target !== "firefox" && target !== "chromium") throw new Error(`Unknown target: ${target}`);
+if (!TARGETS.includes(target)) throw new Error(`Unknown target: ${target}`);
 
 const out = `dist/${target}`;
 await mkdir(out, { recursive: true });
@@ -33,7 +36,6 @@ for (const size of [16, 32, 48, 128]) {
 }
 
 // The manifest is built from the TypeScript source so tests and the build share one definition.
-const { buildManifest } = await import("./src/manifest.ts");
 const pkg = JSON.parse(await readFile("package.json", "utf8"));
 await writeFile(
   `${out}/manifest.json`,

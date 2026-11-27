@@ -5,10 +5,11 @@ import {
   ToolInstallError,
 } from "@mediaforge/binary-resolver";
 import { describe, expect, it } from "vitest";
+import type { RegisterReport } from "./browser-hosts.ts";
 import { ExitCode } from "./exit-codes.ts";
 import { memorySettingsStore } from "./settings.ts";
 import { makeRuntime } from "./test-runtime.ts";
-import { parseToolList, runSetup, runUpdate } from "./tool-commands.ts";
+import { browserLines, parseToolList, runSetup, runUpdate } from "./tool-commands.ts";
 import type { ToolRuntime } from "./tool-runtime.ts";
 
 function capture() {
@@ -102,6 +103,81 @@ describe("runSetup", () => {
     await expect(runSetup(["extra"], c.io, rt)).rejects.toMatchObject({
       exitCode: ExitCode.Usage,
     });
+  });
+});
+
+const report = (over: Partial<RegisterReport> = {}): RegisterReport => ({
+  registered: [],
+  failed: [],
+  notInstalled: [],
+  noChromiumId: false,
+  offered: false,
+  ...over,
+});
+
+describe("runSetup browser registration", () => {
+  it("registers after the tools and says for which browsers", async () => {
+    const c = capture();
+    const { rt } = makeRuntime({ present: ["yt-dlp", "ffmpeg", "deno"] });
+    const calls: string[] = [];
+    const register = async () => {
+      calls.push("register");
+      return report({ registered: ["Firefox", "Chrome"], offered: true });
+    };
+    expect(await runSetup(["--yes"], c.io, rt, register)).toBe(ExitCode.Ok);
+    expect(calls).toEqual(["register"]);
+    expect(c.out()).toContain("browsers  registered for Firefox, Chrome");
+    expect(c.out()).toContain("Chrome will offer the MediaForge extension");
+  });
+
+  it("registers with --tools too, and not at all with --no-browser", async () => {
+    const { rt } = makeRuntime({ present: ["yt-dlp", "ffmpeg", "deno"] });
+    let count = 0;
+    const register = async () => {
+      count++;
+      return report();
+    };
+    await runSetup(["--tools", "yt-dlp"], capture().io, rt, register);
+    expect(count).toBe(1);
+    const c = capture();
+    await runSetup(["--no-browser"], c.io, rt, register);
+    expect(count).toBe(1);
+    expect(c.out()).not.toContain("browsers");
+  });
+
+  it("warns about a browser it could not register without failing setup", async () => {
+    const c = capture();
+    const { rt } = makeRuntime({ present: ["yt-dlp", "ffmpeg", "deno"] });
+    const register = async () =>
+      report({ registered: ["Firefox"], failed: [{ name: "Edge", error: "Access is denied." }] });
+    expect(await runSetup([], c.io, rt, register)).toBe(ExitCode.Ok);
+    expect(c.err()).toContain(
+      "Warning: could not register MediaForge with Edge: Access is denied.",
+    );
+  });
+});
+
+describe("browserLines", () => {
+  it("says why it skipped", () => {
+    expect(browserLines(report({ skipped: "development" })).out[0]).toContain(
+      "running from source",
+    );
+  });
+
+  it("says when no browser was found", () => {
+    expect(browserLines(report({ notInstalled: ["Firefox"] })).out[0]).toContain(
+      "no supported browser found",
+    );
+  });
+
+  it("says Chromium browsers wait for an extension ID, and gives the Linux store link", () => {
+    const { out } = browserLines(
+      report({ registered: ["Firefox"], noChromiumId: true, storeUrl: "https://store/x" }),
+    );
+    expect(out).toContain(
+      "browsers  Chromium browsers not registered: this build has no extension ID yet",
+    );
+    expect(out).toContain("chrome    Add the MediaForge extension: https://store/x");
   });
 });
 

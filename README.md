@@ -150,10 +150,10 @@ pnpm --filter @mediaforge/desktop start download <url> -p mp4-1080p
 | ---------- | ---------------------------------------------------------------------------------------------- |
 | `download` | Download media from a URL. Options: `-p/--profile`, `-o/--output`, `--filename`, `-q/--quiet`. |
 | `formats`  | List the formats available for a URL.                                                          |
-| `setup`    | Download yt-dlp, ffmpeg and Deno (the JavaScript runtime YouTube needs) when missing. Options: `-y/--yes`, `--tools yt-dlp,ffmpeg,deno`. |
+| `setup`    | Download yt-dlp, ffmpeg and Deno (the JavaScript runtime YouTube needs) when missing, then register MediaForge with your browsers so the extension can reach it. Options: `-y/--yes`, `--tools yt-dlp,ffmpeg,deno`, `--no-browser`. |
 | `update`   | Update yt-dlp from your channel (stable, nightly or master; `--channel` picks and saves it). `--check` lists yt-dlp and ffmpeg versions without installing. Never changes ffmpeg or Deno. |
 | `self-update` | Replace the `mediaforge` program with the newest release, after checking its SHA-256. |
-| `doctor`   | Check that yt-dlp and ffmpeg are found, and whether a JavaScript runtime is available. `--json` for scripts. |
+| `doctor`   | Check that yt-dlp and ffmpeg are found, whether a JavaScript runtime is available, and whether each browser can reach MediaForge. `--json` for scripts. |
 
 - Without a command, a terminal opens the interactive menu. Without a terminal, it prints help.
 - `--manager` opens the downloads manager: every download (from the menu, the CLI or the extension) with pause, resume, cancel, remove, move to trash, search, filter, sort, bandwidth limits (High, Med, Low, Custom) and a detail panel. Press `?` for the keys. The mouse works across the whole interactive app.

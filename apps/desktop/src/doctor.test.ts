@@ -1,7 +1,8 @@
 import { BinaryNotFoundError, type Tool } from "@mediaforge/binary-resolver";
 import { describe, expect, it } from "vitest";
 import { bundledBinDir, requireTool } from "./binaries.ts";
-import { runDoctor } from "./doctor.ts";
+import type { StatusReport } from "./browser-hosts.ts";
+import { browserLines, runDoctor } from "./doctor.ts";
 import { CliError, ExitCode } from "./exit-codes.ts";
 
 const found = async (tool: Tool) => ({
@@ -105,6 +106,43 @@ describe("runDoctor with deno", () => {
     expect(await runDoctor([], capture().io, noFfmpeg, "/bin", noRuntime)).toBe(
       ExitCode.MissingTool,
     );
+  });
+});
+
+describe("runDoctor browser registration", () => {
+  const status = async (): Promise<StatusReport> => ({
+    noChromiumId: false,
+    browsers: [
+      { id: "firefox", name: "Firefox", state: "registered" },
+      { id: "chrome", name: "Chrome", state: "stale", path: "D:\\old\\mediaforge.exe" },
+      { id: "edge", name: "Edge", state: "missing" },
+      { id: "opera", name: "Opera", state: "not-installed" },
+    ],
+  });
+
+  it("lists each installed browser with its fix, and leaves out the rest", async () => {
+    const c = capture();
+    await runDoctor([], c.io, found, "/bin", noRuntime, status);
+    expect(c.out()).toContain("browser     Firefox  registered\n");
+    expect(c.out()).toContain(
+      "browser     Chrome   registered for another program. Run: mediaforge setup (D:\\old\\mediaforge.exe)",
+    );
+    expect(c.out()).toContain("browser     Edge     not registered. Run: mediaforge setup");
+    expect(c.out()).not.toContain("Opera");
+  });
+
+  it("never fails because of a browser, and puts the report in JSON", async () => {
+    const c = capture();
+    expect(await runDoctor(["--json"], c.io, found, "/bin", noRuntime, status)).toBe(ExitCode.Ok);
+    const parsed = JSON.parse(c.out());
+    expect(parsed.ok).toBe(true);
+    expect(parsed.browsers.browsers).toHaveLength(4);
+  });
+
+  it("says it did not check when running from source", () => {
+    expect(browserLines({ skipped: "development", noChromiumId: false, browsers: [] })).toEqual([
+      "browsers    not checked: running from source",
+    ]);
   });
 });
 
