@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // Fail when a download URL in packages/binary-resolver/src/tools.lock.json no longer answers, for
-// example because BtbN deleted a build. Run by the release workflow before anything is built.
+// example because FFmpeg-Builds deleted a build. Run by the release workflow before anything is built.
 //
 //   node tools/release/check-lock-urls.mjs
 import { readFile } from "node:fs/promises";

@@ -40,6 +40,32 @@ describe("buildManifest", () => {
     expect(m.optional_host_permissions).toBeUndefined();
   });
 
+  it("collects nothing by default, and asks before a bug report sends anything", () => {
+    const m = buildManifest("firefox", "0.3.0") as {
+      browser_specific_settings: { gecko: { data_collection_permissions: unknown } };
+    };
+    expect(m.browser_specific_settings.gecko.data_collection_permissions).toEqual({
+      required: ["none"],
+      optional: ["technicalAndInteraction", "browsingActivity"],
+    });
+  });
+
+  it("pins the unpacked Chromium build's ID with the public key, and only that build", () => {
+    const key = "TESTKEY";
+    expect(buildManifest("chromium", "0.3.0", key).key).toBe(key);
+    expect(buildManifest("chromium-store", "0.3.0", key).key).toBeUndefined();
+    expect(buildManifest("firefox", "0.3.0", key).key).toBeUndefined();
+  });
+
+  it("leaves out key while no public key exists", () => {
+    expect(buildManifest("chromium", "0.3.0", "")).not.toHaveProperty("key");
+  });
+
+  it("builds the store copy like the unpacked one, without key", () => {
+    const { key: _key, ...unpacked } = buildManifest("chromium", "0.3.0", "TESTKEY");
+    expect(buildManifest("chromium-store", "0.3.0", "TESTKEY")).toEqual(unpacked);
+  });
+
   it("makes site access optional on Chromium, to be granted from the popup", () => {
     const m = buildManifest("chromium", "0.3.0") as Manifest;
     expect(m.host_permissions).toBeUndefined();

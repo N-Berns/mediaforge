@@ -4,3 +4,5 @@ packages:
   - "tools/*"
 allowBuilds:
   esbuild: false
+  # web-ext's dependency; its script only adds a fallback for very old Node versions.
+  spawn-sync: false

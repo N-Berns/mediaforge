@@ -11,9 +11,12 @@
   },
   "devDependencies": {
     "@types/firefox-webext-browser": "^143.0.1",
-    "esbuild": "^0.28.2"
+    "esbuild": "^0.28.2",
+    "web-ext": "^8.10.0"
   },
   "scripts": {
-    "build": "node --experimental-strip-types build.mjs"
+    "build": "node --experimental-strip-types build.mjs",
+    "lint:firefox": "node --experimental-strip-types build.mjs --target firefox && web-ext lint --source-dir dist/firefox",
+    "pack:firefox": "node --experimental-strip-types build.mjs --target firefox && web-ext lint --source-dir dist/firefox && web-ext build --source-dir dist/firefox --artifacts-dir dist/artifacts --filename mediaforge-firefox-{version}.xpi --overwrite-dest"
   }
 }

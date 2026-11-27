@@ -192,8 +192,14 @@ async function mount(options: MountOptions = {}) {
     }
   };
   const count = (options.jobs ?? []).length;
-  await vi.waitFor(() => expect(frame()).toContain(` ${count} item${count === 1 ? "" : "s"}`));
-  await vi.waitFor(() => expect(frame()).not.toContain("Connecting to MediaForge"));
+  // The first connection can take over a second on a loaded CI runner (Windows); the default
+  // 1 s wait is too short there. The test timeout (vitest.config.ts) still bounds it.
+  const connected = { timeout: 10_000 };
+  await vi.waitFor(
+    () => expect(frame()).toContain(` ${count} item${count === 1 ? "" : "s"}`),
+    connected,
+  );
+  await vi.waitFor(() => expect(frame()).not.toContain("Connecting to MediaForge"), connected);
   /** Row of the screen whose text contains `text`, and the column where it starts. */
   const find = (text: string) => {
     const lines = frame().split("\n");

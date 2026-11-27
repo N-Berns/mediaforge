@@ -2,6 +2,7 @@ import type { ProbedMedia } from "@mediaforge/shared-protocol";
 import { type LimitPreset, parseRate } from "@mediaforge/shared-types";
 import type { DownloadResult, PopupState } from "../background/controller.ts";
 import {
+  allowReport,
   browserFromUserAgent,
   DEVELOPER,
   NOTICES,
@@ -1147,11 +1148,20 @@ function aboutSection(): HTMLDetailsElement {
   const send = iconButton("download", "Send report", "Send the report");
   send.addEventListener("click", () => {
     if (send.disabled) return;
+    const ua = globalThis.navigator?.userAgent ?? "";
+    // Asked before anything else: Firefox shows its consent prompt only during the click.
+    const allowed = allowReport(
+      api.permissions as unknown as Parameters<typeof allowReport>[0],
+      ua,
+    );
     send.disabled = true;
     showStatus("pending", "Sending…");
     void (async () => {
+      if (!(await allowed)) {
+        showStatus("error", "Not sent: Firefox needs your permission to send the report.");
+        return;
+      }
       if (!diagnosticsLoaded) await collectDiagnostics();
-      const ua = globalThis.navigator?.userAgent ?? "";
       const result = await sendReport({
         description: text.value,
         type: reportType,

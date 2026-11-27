@@ -64,10 +64,13 @@ async function latestTag(fetchFn: FetchLike, repoUrl: string): Promise<string> {
   );
 }
 
-export const FFMPEG_REPO = "https://github.com/BtbN/FFmpeg-Builds";
-export const FFMPEG_RELEASES_API = "https://api.github.com/repos/BtbN/FFmpeg-Builds/releases";
+// BtbN/FFmpeg-Builds moved to the FFmpeg-Builds organization (same repository; the old name
+// redirects). Mirrors `FFMPEG_BUILDS_REPO` in tools/release/pin-lib.mjs.
+export const FFMPEG_REPO = "https://github.com/FFmpeg-Builds/FFmpeg-Builds";
+export const FFMPEG_RELEASES_API =
+  "https://api.github.com/repos/FFmpeg-Builds/FFmpeg-Builds/releases";
 
-/** BtbN's static LGPL build per target. Mirrors `BTBN_TARGETS` in tools/release/pin-lib.mjs. */
+/** The static LGPL build per target. Mirrors `BTBN_TARGETS` in tools/release/pin-lib.mjs. */
 export const FFMPEG_TARGETS: Record<
   string,
   { suffix: string; archive: ArchiveKind; member: string; ext: string }
@@ -101,7 +104,7 @@ interface BtbnRelease {
 }
 
 /**
- * The newest dated BtbN build for this target, with the hash its `checksums.sha256` promises. The
+ * The newest dated FFmpeg-Builds build for this target, with the hash its `checksums.sha256` promises. The
  * rolling `latest` tag is skipped: its files are replaced in place, so a pin on them would rot.
  */
 export async function resolveFfmpegSource(target: Target, fetchFn: FetchLike): Promise<ToolSource> {

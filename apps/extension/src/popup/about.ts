@@ -47,6 +47,37 @@ export function osFromUserAgent(ua: string): string {
   return "unknown";
 }
 
+/**
+ * What a bug report sends, in Firefox's data-collection terms: versions and tool status
+ * (technical), and the tab's and detected media's addresses (browsing activity). The Firefox
+ * manifest lists the same categories as optional.
+ */
+export const REPORT_DATA_COLLECTION = ["technicalAndInteraction", "browsingActivity"] as const;
+
+/** Firefox asks users for data-collection consent from this version on. */
+const FIREFOX_CONSENT_VERSION = 140;
+
+interface PermissionsApi {
+  request(permissions: { data_collection: string[] }): Promise<boolean>;
+}
+
+/**
+ * Whether the report may be sent. Firefox 140 and later asks the user once (later calls answer at
+ * once); a refusal or an error means no. Other browsers, and older Firefox, have no such consent.
+ * Call it first thing in the click handler: Firefox only asks during a user action.
+ */
+export function allowReport(permissions: PermissionsApi, userAgent: string): Promise<boolean> {
+  const firefox = /Firefox\/(\d+)/.exec(userAgent);
+  if (!firefox || Number(firefox[1]) < FIREFOX_CONSENT_VERSION) return Promise.resolve(true);
+  try {
+    return Promise.resolve(
+      permissions.request({ data_collection: [...REPORT_DATA_COLLECTION] }),
+    ).catch(() => false);
+  } catch {
+    return Promise.resolve(false);
+  }
+}
+
 /** "Firefox 128.0", "Edge 126", "Chrome 126" and so on, from a user agent. Never throws. */
 export function browserFromUserAgent(ua: string): string {
   const known: Array<[string, RegExp]> = [

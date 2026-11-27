@@ -6,6 +6,13 @@ import {
   YTDLP_CHANNELS,
   type YtDlpChannel,
 } from "@mediaforge/binary-resolver";
+import {
+  type RegisterReport,
+  registerBrowsers,
+  type SkipReason,
+  systemHostContext,
+  systemHostIo,
+} from "./browser-hosts.ts";
 import type { Io } from "./commands.ts";
 import { CliError, ExitCode } from "./exit-codes.ts";
 import { parseCommandArgs } from "./parse.ts";
@@ -20,20 +27,51 @@ import {
   tryResolve,
 } from "./tool-runtime.ts";
 
-const SETUP_USAGE = "Usage: mediaforge setup [--yes] [--tools yt-dlp,ffmpeg,deno]";
+const SETUP_USAGE = "Usage: mediaforge setup [--yes] [--tools yt-dlp,ffmpeg,deno] [--no-browser]";
 
 export function setupUsage(): string {
   return [
     SETUP_USAGE,
     "",
     "Download yt-dlp, ffmpeg and deno (the JavaScript runtime YouTube needs) when they are missing. Tools that are already available are left alone.",
+    "Then register MediaForge with your browsers, so the MediaForge extension can reach it.",
     "",
     "Options:",
     "  -y, --yes            Accepted for scripts. Setup never asks questions.",
     "      --tools <list>   Only these tools, comma separated (default: yt-dlp,ffmpeg,deno)",
+    "      --no-browser     Do not register MediaForge with your browsers",
     "  -h, --help           Show this help",
     "",
   ].join("\n");
+}
+
+const SKIP_TEXT: Record<SkipReason, string> = {
+  development: "skipped: running from source (use tools/dev/register-native-host.mjs)",
+  unsupported: "skipped: browser registration is not supported on this system",
+};
+
+/** What setup says about the browser registration: summary lines and warnings. */
+export function browserLines(report: RegisterReport): { out: string[]; err: string[] } {
+  const label = "browsers";
+  if (report.skipped) return { out: [`${label}  ${SKIP_TEXT[report.skipped]}`], err: [] };
+  const out: string[] = [];
+  if (report.registered.length > 0) {
+    out.push(`${label}  registered for ${report.registered.join(", ")}`);
+  } else if (report.failed.length === 0) {
+    out.push(
+      `${label}  no supported browser found. Run mediaforge setup again after installing one.`,
+    );
+  }
+  if (report.noChromiumId) {
+    out.push(`${label}  Chromium browsers not registered: this build has no extension ID yet`);
+  }
+  if (report.offered)
+    out.push("chrome    Chrome will offer the MediaForge extension on its next start");
+  if (report.storeUrl) out.push(`chrome    Add the MediaForge extension: ${report.storeUrl}`);
+  const err = report.failed.map(
+    (f) => `Warning: could not register MediaForge with ${f.name}: ${f.error}\n`,
+  );
+  return { out, err };
 }
 
 /** Read `--tools`: a comma list of known tool names, or every tool when absent. */
@@ -66,13 +104,18 @@ function summaryLine(outcome: AcquireOutcome): string {
 const SETUP_OPTIONS = {
   yes: { type: "boolean", short: "y" },
   tools: { type: "string" },
+  "no-browser": { type: "boolean" },
   help: { type: "boolean", short: "h" },
 } as const;
+
+const defaultRegister = (): Promise<RegisterReport> =>
+  registerBrowsers(systemHostContext(), systemHostIo());
 
 export async function runSetup(
   args: string[],
   io: Io,
   rt: ToolRuntime = defaultToolRuntime(),
+  register: () => Promise<RegisterReport> = defaultRegister,
 ): Promise<ExitCode> {
   const { values, positionals } = parseCommandArgs(args, SETUP_OPTIONS, SETUP_USAGE);
   if (values.help) {
@@ -89,6 +132,12 @@ export async function runSetup(
   for (const tool of tools) {
     const outcome = await acquireTool(tool, rt, { onProgress });
     lines.push(summaryLine(outcome));
+  }
+  if (!values["no-browser"]) {
+    // A convenience for the extension: a failure warns but does not fail the tool setup.
+    const browsers = browserLines(await register());
+    lines.push(...browsers.out);
+    for (const warning of browsers.err) io.stderr(warning);
   }
   io.stdout(`${lines.join("\n")}\n`);
   return ExitCode.Ok;
