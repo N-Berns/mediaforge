@@ -1,33 +1,7 @@
-import type { DownloadProgress } from "@mediaforge/shared-types";
+import type { DownloadProgress, PlannedStep, Step, StepKind } from "@mediaforge/shared-types";
 import type { PostprocessEvent, StreamInfo } from "./progress.ts";
 
-/**
- * One part of a download:
- * - "download": a single file that already has picture and sound
- * - "video" / "audio": separate streams that are merged afterwards (or a stream on its own)
- * - "merge": ffmpeg joining video and audio
- * - "convert": ffmpeg converting (audio extraction, re-encoding)
- */
-export type StepKind = "download" | "video" | "audio" | "merge" | "convert";
-
-export type StepState = "pending" | "active" | "done";
-
-export interface Step {
-  kind: StepKind;
-  state: StepState;
-  /** 0 to 100; unknown while a size or length is not reported yet. */
-  percent?: number;
-  /** Bytes, speed and ETA, for download steps. */
-  progress?: DownloadProgress;
-  /** Expected size in bytes, from the format list, used to weigh the overall bar. */
-  expectedBytes?: number;
-}
-
-/** A step known before the download starts, from the chosen format. */
-export interface PlannedStep {
-  kind: StepKind;
-  bytes?: number;
-}
+export type { PlannedStep, Step, StepKind, StepState } from "@mediaforge/shared-types";
 
 const POST_KINDS: ReadonlySet<StepKind> = new Set(["merge", "convert"]);
 export const isPostStep = (kind: StepKind) => POST_KINDS.has(kind);
@@ -72,12 +46,21 @@ export function overallPercent(steps: readonly Step[]): number | undefined {
   return downloadPart * (1 - POST_SHARE) + postPart * POST_SHARE;
 }
 
+/**
+ * The steps a job is known to take when the caller sent no plan, so that the conversion is on the
+ * bar from the start. Audio always goes through ffmpeg; for video the stream count is not known.
+ */
+export function defaultPlan(kind: "video" | "audio", subtitle: boolean): PlannedStep[] | undefined {
+  return kind === "audio" && !subtitle ? [{ kind: "audio" }, { kind: "convert" }] : undefined;
+}
+
 /** Follows yt-dlp's output and keeps the list of steps up to date. */
 export class StepTracker {
   readonly steps: Step[];
   #streamId: string | undefined;
   #postDuration: number | undefined;
   #overall = 0;
+  #complete = false;
 
   constructor(planned: readonly PlannedStep[] = []) {
     this.steps = planned.map((p) => ({
@@ -91,9 +74,14 @@ export class StepTracker {
     return this.steps.find((s) => s.state === "active");
   }
 
-  /** Overall percent; never goes backwards, even when a later stream turns out bigger. */
+  /**
+   * Overall percent; never goes backwards, even when a later stream turns out bigger. It stays
+   * below 100 until the file is saved: steps not yet announced (the second stream, the merge)
+   * still have to run.
+   */
   get overall(): number {
-    this.#overall = Math.max(this.#overall, overallPercent(this.steps) ?? 0);
+    const raw = Math.max(this.#overall, overallPercent(this.steps) ?? 0);
+    this.#overall = this.#complete ? 100 : Math.min(raw, 99);
     return this.#overall;
   }
 
@@ -160,6 +148,7 @@ export class StepTracker {
 
   /** The file is saved: everything that ran is done, and steps that never ran disappear. */
   complete(): void {
+    this.#complete = true;
     this.#completeActive();
     for (let i = this.steps.length - 1; i >= 0; i--) {
       if (this.steps[i]?.state === "pending") this.steps.splice(i, 1);

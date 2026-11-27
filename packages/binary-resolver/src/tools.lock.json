@@ -31,31 +31,60 @@
   "ffmpeg": {
     "linux-arm64": {
       "archive": "tar.xz",
-      "buildInfo": "https://github.com/BtbN/FFmpeg-Builds/releases/tag/autobuild-2026-09-30-13-08",
+      "buildInfo": "https://github.com/FFmpeg-Builds/FFmpeg-Builds/releases/tag/autobuild-2026-10-31-12-59",
       "license": "LGPL-3.0-or-later",
       "member": "bin/ffmpeg",
-      "sha256": "b8cc09200780d37801179c803f597c22440b0b06c556addd2e6a07b27475ce37",
-      "url": "https://github.com/BtbN/FFmpeg-Builds/releases/download/autobuild-2026-09-30-13-08/ffmpeg-n9.0.2-17-g2a571b6068-linuxarm64-lgpl-9.0.tar.xz",
+      "sha256": "3d1f66827a73ce5a446312bc4924234dc1515726d3743e2df35c0177e1f82128",
+      "url": "https://github.com/FFmpeg-Builds/FFmpeg-Builds/releases/download/autobuild-2026-10-31-12-59/ffmpeg-n9.0.2-39-g7adfbe40dc-linuxarm64-lgpl-9.0.tar.xz",
       "version": "9.0.2"
     },
     "linux-x64": {
       "archive": "tar.xz",
-      "buildInfo": "https://github.com/BtbN/FFmpeg-Builds/releases/tag/autobuild-2026-09-30-13-08",
+      "buildInfo": "https://github.com/FFmpeg-Builds/FFmpeg-Builds/releases/tag/autobuild-2026-10-31-12-59",
       "license": "LGPL-3.0-or-later",
       "member": "bin/ffmpeg",
-      "sha256": "2d41cbea0ca1a15029b638330740f78d6f5aeb062355bf425433fc938705350a",
-      "url": "https://github.com/BtbN/FFmpeg-Builds/releases/download/autobuild-2026-09-30-13-08/ffmpeg-n9.0.2-17-g2a571b6068-linux64-lgpl-9.0.tar.xz",
+      "sha256": "6046d6731b26f58887e953561551d254a6eec9fbca4100dfeab56e19af8328d5",
+      "url": "https://github.com/FFmpeg-Builds/FFmpeg-Builds/releases/download/autobuild-2026-10-31-12-59/ffmpeg-n9.0.2-39-g7adfbe40dc-linux64-lgpl-9.0.tar.xz",
       "version": "9.0.2"
     },
     "win32-x64": {
       "archive": "zip",
-      "buildInfo": "https://github.com/BtbN/FFmpeg-Builds/releases/tag/autobuild-2026-09-30-13-08",
+      "buildInfo": "https://github.com/FFmpeg-Builds/FFmpeg-Builds/releases/tag/autobuild-2026-10-31-12-59",
       "license": "LGPL-3.0-or-later",
       "member": "bin/ffmpeg.exe",
-      "sha256": "6b264b9e6019103f601d98c292bd332fd87acf1c5e941ddff4fb71760fe63432",
-      "url": "https://github.com/BtbN/FFmpeg-Builds/releases/download/autobuild-2026-09-30-13-08/ffmpeg-n9.0.2-17-g2a571b6068-win64-lgpl-9.0.zip",
+      "sha256": "9d37c564e0d01c18cde184a079fa6ef04d7d2783ada41da81d04165cc8f1a650",
+      "url": "https://github.com/FFmpeg-Builds/FFmpeg-Builds/releases/download/autobuild-2026-10-31-12-59/ffmpeg-n9.0.2-39-g7adfbe40dc-win64-lgpl-9.0.zip",
       "version": "9.0.2"
     }
   },
-  "schema": 1
+  "schema": 1,
+  "yt-dlp": {
+    "linux-arm64": {
+      "archive": "none",
+      "buildInfo": "https://github.com/yt-dlp/yt-dlp/releases/tag/2026.08.19",
+      "license": "Unlicense",
+      "member": "yt-dlp_linux_aarch64",
+      "sha256": "b16e4dab368a816cd05d477d698a605a6ae87ccee1c8ffd38fa21d7254141fcc",
+      "url": "https://github.com/yt-dlp/yt-dlp/releases/download/2026.08.19/yt-dlp_linux_aarch64",
+      "version": "2026.08.19"
+    },
+    "linux-x64": {
+      "archive": "none",
+      "buildInfo": "https://github.com/yt-dlp/yt-dlp/releases/tag/2026.08.19",
+      "license": "Unlicense",
+      "member": "yt-dlp_linux",
+      "sha256": "58162f9bfdc27458ea47bfcb311cf47028f17d8154a8bf7d689861d46399230a",
+      "url": "https://github.com/yt-dlp/yt-dlp/releases/download/2026.08.19/yt-dlp_linux",
+      "version": "2026.08.19"
+    },
+    "win32-x64": {
+      "archive": "none",
+      "buildInfo": "https://github.com/yt-dlp/yt-dlp/releases/tag/2026.08.19",
+      "license": "Unlicense",
+      "member": "yt-dlp.exe",
+      "sha256": "66674953fe251b89f4d08c5f0e35e0728679bd67ab3d7d05c0562af101dd3e7a",
+      "url": "https://github.com/yt-dlp/yt-dlp/releases/download/2026.08.19/yt-dlp.exe",
+      "version": "2026.08.19"
+    }
+  }
 }

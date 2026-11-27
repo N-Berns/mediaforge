@@ -208,7 +208,7 @@ export function countJobs(jobs: readonly (EngineJob | undefined)[]): BatchCounts
     if (!job || job.status === "queued") counts.waiting++;
     else if (job.status === "completed") counts.done++;
     else if (job.status === "failed") counts.failed++;
-    else if (job.status === "cancelled") counts.cancelled++;
+    else if (job.status === "cancelled" || job.status === "paused") counts.cancelled++;
     else counts.running++;
   }
   return counts;
@@ -219,7 +219,12 @@ export function batchPercent(jobs: readonly (EngineJob | undefined)[]): number {
   if (jobs.length === 0) return 0;
   const sum = jobs.reduce((total, job) => {
     if (!job) return total;
-    if (job.status === "completed" || job.status === "failed" || job.status === "cancelled") {
+    if (
+      job.status === "completed" ||
+      job.status === "failed" ||
+      job.status === "cancelled" ||
+      job.status === "paused"
+    ) {
       return total + 100;
     }
     return total + (job.overallPercent ?? job.progress.percent ?? 0);

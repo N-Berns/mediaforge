@@ -1,6 +1,7 @@
 import { createContext, useCallback, useEffect, useMemo, useRef, useState } from "react";
 
-export type NoticeKind = "ok" | "warn" | "error";
+/** `paused` is only for the "Download(s) paused" notices. */
+export type NoticeKind = "ok" | "warn" | "error" | "paused";
 
 export interface Notice {
   id: number;

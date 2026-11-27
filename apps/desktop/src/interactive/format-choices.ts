@@ -1,6 +1,6 @@
+import { formatBytes } from "@mediaforge/shared-types";
 import { codec, type MediaInfo, type RawFormat } from "../formats.ts";
 import type { MediaKind } from "../kind-folder.ts";
-import { formatBytes } from "../progress-view.ts";
 import type { MenuItem } from "./components/Menu.tsx";
 
 type Choice<T> = Pick<MenuItem<T>, "value" | "label" | "hint">;
@@ -126,7 +126,7 @@ function toChoices(all: Entry[]): Choice<FormatPick>[] {
  */
 const streamNote = (f: RawFormat) => (f.protocol?.startsWith("m3u8") ? "HLS stream" : "");
 
-function resolutionName(f: RawFormat): string {
+export function resolutionName(f: RawFormat): string {
   const fps = f.fps && f.fps > 30 ? String(f.fps) : "";
   return f.height ? `${f.height}p${fps}` : "Video";
 }

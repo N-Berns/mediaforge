@@ -1,10 +1,15 @@
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { PassThrough } from "node:stream";
 import {
   type InstallProgress,
+  resolveTarget,
   ToolInstallError,
   UnsupportedTargetError,
+  ytDlpSource,
 } from "@mediaforge/binary-resolver";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { CliError, ExitCode } from "./exit-codes.ts";
 import { makeRuntime } from "./test-runtime.ts";
 import {
@@ -12,6 +17,7 @@ import {
   asciiBar,
   askYesNo,
   createInstallPrinter,
+  defaultToolRuntime,
   ensureTools,
   missingToolError,
   toCliError,
@@ -216,7 +222,7 @@ describe("createInstallPrinter", () => {
     print(progress("downloading", { received: 1048576, total: 2097152 }));
     print(progress("verifying"));
     const text = out.join("");
-    expect(text).toContain("\r  yt-dlp  [############------------]  50%  1.0 MB of 2.0 MB");
+    expect(text).toContain("\r  yt-dlp  [############------------]  50%  1.0 MB of 2.1 MB");
     expect(text.endsWith("\n  yt-dlp  verifying checksum\n")).toBe(true);
     expect(text).not.toContain("\x1b");
   });
@@ -234,5 +240,156 @@ describe("createInstallPrinter", () => {
     expect(asciiBar(0, 4)).toBe("[----]");
     expect(asciiBar(50, 4)).toBe("[##--]");
     expect(asciiBar(150, 4)).toBe("[####]");
+  });
+});
+
+describe("defaultToolRuntime channels", () => {
+  // A stable install creates the cache folder before its first download, so the folder must be
+  // one the test can write: a path like "/x" is the filesystem root on Linux, where that fails.
+  const cacheDirs: string[] = [];
+  afterEach(() => {
+    for (const dir of cacheDirs.splice(0)) rmSync(dir, { recursive: true, force: true });
+  });
+
+  /** A runtime whose network is a recorder that always fails, so only the first lookup matters. */
+  function wired(saved: string | "unreadable" = "nightly") {
+    const urls: string[] = [];
+    const fetch = vi.fn(async (url: string) => {
+      urls.push(url);
+      throw new Error("offline");
+    });
+    const cacheDir = mkdtempSync(join(tmpdir(), "mf-channels-"));
+    cacheDirs.push(cacheDir);
+    const rt = defaultToolRuntime(
+      { MEDIAFORGE_CACHE_DIR: cacheDir },
+      {
+        deps: { fetch: fetch as never },
+        loadChannel: async () => {
+          if (saved === "unreadable") throw new Error("broken settings");
+          return saved as never;
+        },
+      },
+    );
+    return { rt, urls };
+  }
+  const first = (urls: string[]) => urls[0] ?? "";
+
+  it("install passes the saved channel to the yt-dlp resolver", async () => {
+    const { rt, urls } = wired("master");
+    await rt.install("yt-dlp", () => {}).catch(() => {});
+    expect(first(urls)).toContain("yt-dlp-master-builds");
+  });
+
+  it("install falls back to stable when the setting cannot be read", async () => {
+    const { rt, urls } = wired("unreadable");
+    await rt.install("yt-dlp", () => {}).catch(() => {});
+    expect(first(urls)).toContain("github.com/yt-dlp/yt-dlp/releases/download/");
+  });
+
+  it("an explicit channel beats the saved one", async () => {
+    const { rt, urls } = wired("nightly");
+    await rt.install("yt-dlp", () => {}, { channel: "master" }).catch(() => {});
+    expect(first(urls)).toContain("yt-dlp-master-builds");
+  });
+
+  it("install with stable uses the lock", async () => {
+    const { rt, urls } = wired("nightly");
+    await rt.install("yt-dlp", () => {}, { channel: "stable" }).catch(() => {});
+    expect(first(urls)).toContain("github.com/yt-dlp/yt-dlp/releases/download/");
+  });
+
+  it("deno and ffmpeg install from the lock unless live is set", async () => {
+    const lockOnly = wired("master");
+    await lockOnly.rt.install("deno", () => {}).catch(() => {});
+    await lockOnly.rt.install("ffmpeg", () => {}).catch(() => {});
+    expect(lockOnly.urls.some((u) => u.includes("api.github.com"))).toBe(false);
+
+    const live = wired("master");
+    await live.rt.install("ffmpeg", () => {}, { live: true }).catch(() => {});
+    expect(first(live.urls)).toContain("api.github.com");
+  });
+
+  it("check resolves live for both tools and never downloads", async () => {
+    const { rt, urls } = wired("nightly");
+    const checks = await rt.check(["yt-dlp", "ffmpeg"]);
+    expect(checks.map((c) => [c.tool, c.upToDate, Boolean(c.error)])).toEqual([
+      ["yt-dlp", false, true],
+      ["ffmpeg", false, true],
+    ]);
+    expect(urls.some((u) => u.includes("yt-dlp-nightly-builds"))).toBe(true);
+    expect(urls.some((u) => u.includes("repos/FFmpeg-Builds/FFmpeg-Builds"))).toBe(true);
+    expect(urls.every((u) => !/\.(exe|zip|xz)$|yt-dlp_/.test(u))).toBe(true);
+  });
+
+  it("check on stable looks nothing up for yt-dlp", async () => {
+    const { rt, urls } = wired("nightly");
+    await rt.check(["yt-dlp"], { channel: "stable" });
+    expect(urls).toEqual([]);
+  });
+});
+
+describe("test runtime fake", () => {
+  it("records install options and answers check", async () => {
+    const { rt, log } = makeRuntime();
+    await rt.install("yt-dlp", ignore, { channel: "master", live: true });
+    expect(log.installOptions).toEqual([{ channel: "master", live: true }]);
+    expect(await rt.check(["yt-dlp"])).toEqual([
+      { tool: "yt-dlp", latest: "2026.10.08", upToDate: true },
+    ]);
+  });
+});
+
+describe("defaultToolRuntime outdated", () => {
+  const pinned = ytDlpSource(resolveTarget()).version;
+  function withInstalled(version: string, initial: string) {
+    const dir = mkdtempSync(join(tmpdir(), "mf-outdated-"));
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(
+      join(dir, "manifest.json"),
+      JSON.stringify({
+        "yt-dlp": { version, url: "https://x.test/y", sha256: "a", installedAt: "t" },
+      }),
+    );
+    let channel = initial;
+    const rt = defaultToolRuntime(
+      { MEDIAFORGE_CACHE_DIR: dir },
+      { loadChannel: async () => channel as never },
+    );
+    return { rt, set: (c: string) => (channel = c) };
+  }
+
+  it("is true on a live channel when the cache is older than the pin", async () => {
+    const { rt, set } = withInstalled("2000.01.01", "nightly");
+    expect(await rt.outdated?.("yt-dlp")).toBe(true);
+    set("master");
+    expect(await rt.outdated?.("yt-dlp")).toBe(true);
+  });
+
+  it("is false on a live channel when the cache is newer than or equal to the pin", async () => {
+    const { rt, set } = withInstalled("2099.01.01.99", "nightly");
+    expect(await rt.outdated?.("yt-dlp")).toBe(false);
+    set("master");
+    expect(await rt.outdated?.("yt-dlp")).toBe(false);
+    expect(await withInstalled(pinned, "nightly").rt.outdated?.("yt-dlp")).toBe(false);
+  });
+
+  it("is true on stable when the version differs, and false when it matches", async () => {
+    expect(await withInstalled("2099.01.01.99", "stable").rt.outdated?.("yt-dlp")).toBe(true);
+    expect(await withInstalled(pinned, "stable").rt.outdated?.("yt-dlp")).toBe(false);
+  });
+
+  it("becomes true again after switching the saved channel back to stable", async () => {
+    const { rt, set } = withInstalled("2099.01.01.99", "nightly");
+    expect(await rt.outdated?.("yt-dlp")).toBe(false);
+    set("stable");
+    expect(await rt.outdated?.("yt-dlp")).toBe(true);
+  });
+});
+
+describe("acquireTool channel", () => {
+  it("installs on the pinned stable build", async () => {
+    const { rt, log } = makeRuntime();
+    await acquireTool("yt-dlp", rt, { onProgress: ignore });
+    expect(log.installOptions).toEqual([{ channel: "stable" }]);
   });
 });

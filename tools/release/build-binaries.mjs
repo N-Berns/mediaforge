@@ -47,4 +47,12 @@ for (const target of selected) {
     { stdio: "inherit", shell: process.platform === "win32" },
   );
   if (result.status !== 0) process.exit(result.status ?? 1);
+  if (target.key.startsWith("win-")) {
+    const icon = spawnSync(
+      process.execPath,
+      ["tools/release/set-exe-icon.mjs", join(values.out, target.file)],
+      { stdio: "inherit" },
+    );
+    if (icon.status !== 0) process.exit(icon.status ?? 1);
+  }
 }

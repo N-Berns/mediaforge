@@ -4,19 +4,19 @@ import { COLORS } from "../theme.ts";
 export interface CardProps {
   rows: readonly (readonly [label: string, value: string])[];
   tone?: "muted" | "ok" | "error" | "warn";
+  /** False drops the frame and the space under it, for screens short on rows. */
+  bordered?: boolean;
 }
 
 /** A bordered box of label/value rows, e.g. details of the media being downloaded. */
-export function Card({ rows, tone = "muted" }: CardProps) {
+export function Card({ rows, tone = "muted", bordered = true }: CardProps) {
   if (rows.length === 0) return null;
   const labelWidth = Math.max(...rows.map(([label]) => label.length));
   return (
     <Box
-      borderStyle="single"
-      borderColor={COLORS[tone]}
-      paddingX={1}
+      {...(bordered && { borderStyle: "single" as const, borderColor: COLORS[tone], paddingX: 1 })}
       flexDirection="column"
-      marginBottom={1}
+      marginBottom={bordered ? 1 : 0}
     >
       {rows.map(([label, value]) => (
         <Box key={label}>

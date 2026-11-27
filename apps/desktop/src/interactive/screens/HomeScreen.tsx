@@ -4,9 +4,16 @@ import { Frame } from "../components/Frame.tsx";
 import { Menu } from "../components/Menu.tsx";
 import { COLORS, ICONS } from "../theme.ts";
 
-export type HomeChoice = "download" | "settings" | "setup" | "about" | "quit";
+export type HomeChoice = "download" | "downloads" | "settings" | "setup" | "about" | "quit";
 
-export function HomeScreen({ onPick }: { onPick: (choice: HomeChoice) => void }) {
+export function HomeScreen({
+  onPick,
+  initial,
+}: {
+  onPick: (choice: HomeChoice) => void;
+  /** The choice to put the cursor on. Falls back to the first item when it is not a Home item. */
+  initial?: HomeChoice;
+}) {
   const [confirming, setConfirming] = useState(false);
 
   // Esc on Home has nowhere to go back to, so it offers to quit.
@@ -46,7 +53,7 @@ export function HomeScreen({ onPick }: { onPick: (choice: HomeChoice) => void })
       hints={[
         ["↑↓", "Move"],
         ["Enter", "Select"],
-        ["1-5", "Jump"],
+        ["1-6", "Jump"],
       ]}
     >
       <Box marginBottom={1}>
@@ -54,12 +61,19 @@ export function HomeScreen({ onPick }: { onPick: (choice: HomeChoice) => void })
       </Box>
       <Menu<HomeChoice>
         onSelect={onPick}
+        {...(initial && { initial })}
         items={[
           {
             value: "download",
             icon: ICONS.download,
             label: "Download media",
             hint: "video or audio from a link",
+          },
+          {
+            value: "downloads",
+            icon: ICONS.downloads,
+            label: "Downloads",
+            hint: "every download: pause, resume, limit",
           },
           {
             value: "settings",

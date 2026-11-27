@@ -1,5 +1,5 @@
 import { type InstallProgress, ToolInstallError } from "@mediaforge/binary-resolver";
-import { formatBytes } from "../progress-view.ts";
+import { formatBytes } from "@mediaforge/shared-types";
 import { PHASE_LABELS } from "../tool-runtime.ts";
 
 /** Share of the download done, or undefined when the size is unknown or it is another phase. */

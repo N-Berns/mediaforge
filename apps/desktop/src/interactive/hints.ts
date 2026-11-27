@@ -1,7 +1,12 @@
-import type { DownloadProgress } from "@mediaforge/shared-types";
+import {
+  type DownloadProgress,
+  formatBytes,
+  formatRate,
+  type SpeedUnit,
+} from "@mediaforge/shared-types";
 import { ExitCode } from "../exit-codes.ts";
 import type { MediaInfo } from "../formats.ts";
-import { formatBytes, formatDuration } from "../progress-view.ts";
+import { formatDuration } from "../progress-view.ts";
 import { SUPPORTED_SITES_URL } from "../sites.ts";
 
 /** A short "what to try next" for a failed download. */
@@ -42,16 +47,14 @@ export function mediaRows(info: MediaInfo): [string, string][] {
 }
 
 /** "12.3 MB of 40.0 MB · 3.2 MB/s · ETA 12s" from whatever is known. */
-export function describeProgress(p: DownloadProgress): string {
+export function describeProgress(p: DownloadProgress, unit: SpeedUnit = "bytes"): string {
   return [
     p.totalBytes
       ? `${formatBytes(p.bytesDownloaded)} of ${formatBytes(p.totalBytes)}`
       : formatBytes(p.bytesDownloaded),
-    p.speed !== undefined && `${formatBytes(p.speed)}/s`,
+    p.speed !== undefined && formatRate(p.speed, unit),
     p.etaSec !== undefined && `ETA ${formatDuration(p.etaSec)}`,
   ]
     .filter(Boolean)
     .join(" · ");
 }
-
-export { formatBytes };

@@ -6,6 +6,7 @@
     { "path": "packages/media-profiles" },
     { "path": "packages/binary-resolver" },
     { "path": "packages/extension-core" },
-    { "path": "apps/desktop" }
+    { "path": "apps/desktop" },
+    { "path": "apps/extension" }
   ]
 }

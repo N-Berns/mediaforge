@@ -1,3 +1,4 @@
+import { resolve } from "node:path";
 import { DEFAULT_PROFILE_ID, getProfile } from "@mediaforge/media-profiles";
 import { OUTPUT_DIR_ENV } from "../download.ts";
 import type { PlannedStep } from "../engine/index.ts";
@@ -24,6 +25,8 @@ export interface Plan {
   title?: string;
   profileId: string;
   formatSelector?: string;
+  /** What the chosen format saves, so the manager can show it. */
+  kind: MediaKind;
   outputDir: string;
   /** Steps expected for this format, shown as bars before they start. */
   steps?: PlannedStep[];
@@ -72,7 +75,10 @@ export function draftKind(draft: Draft): MediaKind {
 export const draftSubfolder = (draft: Draft, sortByType: boolean): string | undefined =>
   sortByType ? KIND_FOLDERS[draftKind(draft)] : undefined;
 
-/** A complete draft as a plan. Throws if something is still missing. */
+/**
+ * A complete draft as a plan. Throws if something is still missing. The folder becomes a full path:
+ * the core runs elsewhere and refuses relative ones.
+ */
 export function toPlan(draft: Draft, sortByType: boolean): Plan {
   if (draft.profileId === undefined || draft.outputDir === undefined) {
     throw new Error("The download is not fully set up yet.");
@@ -84,7 +90,8 @@ export function toPlan(draft: Draft, sortByType: boolean): Plan {
     ...(draft.info?.title && { title: draft.info.title }),
     profileId: draft.profileId,
     ...(draft.formatSelector && { formatSelector: draft.formatSelector }),
-    outputDir: withKindFolder(draft.outputDir, draftKind(draft), sortByType),
+    kind: draftKind(draft),
+    outputDir: withKindFolder(resolve(draft.outputDir), draftKind(draft), sortByType),
     ...(steps && { steps }),
   };
 }

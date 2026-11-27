@@ -1,7 +1,7 @@
 import { join } from "node:path";
 import { resolveBinary } from "@mediaforge/binary-resolver";
 import { describe, expect, it } from "vitest";
-import { bundledBinDir, distinctBundledDir } from "./binaries.ts";
+import { bundledBinDir, distinctBundledDir, prefersCache } from "./binaries.ts";
 
 describe("distinctBundledDir", () => {
   it("keeps a bundled folder that differs from the cache folder", () => {
@@ -40,5 +40,13 @@ describe("a packaged Windows install", () => {
     });
     expect(found.source).toBe("cache");
     expect(found.path).toBe(join(sharedBin, "yt-dlp.exe"));
+  });
+});
+
+describe("prefersCache", () => {
+  it("is true for yt-dlp only", () => {
+    expect(prefersCache("yt-dlp")).toBe(true);
+    expect(prefersCache("ffmpeg")).toBe(false);
+    expect(prefersCache("deno")).toBe(false);
   });
 });

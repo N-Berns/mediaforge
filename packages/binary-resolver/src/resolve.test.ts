@@ -162,6 +162,81 @@ describe("resolveBinary cache step", () => {
   });
 });
 
+describe("resolveBinary with preferCache", () => {
+  const cache = join("cache", "bin");
+  const prefer = (files: Record<string, string>, env: Record<string, string> = {}) => ({
+    ...setup(files, env),
+    cacheDir: cache,
+    preferCache: true,
+  });
+
+  it("uses the cache copy over PATH and bundled", async () => {
+    const opts = prefer({
+      [join(binDir, "yt-dlp")]: "1",
+      [join(bundled, "yt-dlp")]: "2",
+      [join(cache, "yt-dlp")]: "3",
+    });
+    const found = await resolveBinary("yt-dlp", opts);
+    expect(found.source).toBe("cache");
+    expect(found.version).toBe("3");
+  });
+
+  it("falls through to PATH when the cache copy does not run", async () => {
+    const opts = {
+      ...prefer({ [join(binDir, "yt-dlp")]: "1" }),
+      isExecutable: async (p: string) =>
+        p === join(binDir, "yt-dlp") || p === join(cache, "yt-dlp"),
+    };
+    expect((await resolveBinary("yt-dlp", opts)).source).toBe("path");
+  });
+
+  it("falls through to PATH when there is no cache copy", async () => {
+    const opts = prefer({ [join(binDir, "yt-dlp")]: "1" });
+    expect((await resolveBinary("yt-dlp", opts)).source).toBe("path");
+  });
+
+  it("falls through to bundled when neither cache nor PATH has it", async () => {
+    const opts = prefer({ [join(bundled, "yt-dlp")]: "2" });
+    expect((await resolveBinary("yt-dlp", opts)).source).toBe("bundled");
+  });
+
+  it("lets the env override beat the cache copy", async () => {
+    const opts = prefer(
+      { "/mine/yt-dlp": "9", [join(cache, "yt-dlp")]: "3" },
+      { MEDIAFORGE_YTDLP_PATH: "/mine/yt-dlp" },
+    );
+    expect((await resolveBinary("yt-dlp", opts)).source).toBe("env");
+  });
+
+  it("still throws for a broken env override despite a working cache copy", async () => {
+    const opts = prefer(
+      { [join(cache, "yt-dlp")]: "3" },
+      { MEDIAFORGE_YTDLP_PATH: "/nope/yt-dlp" },
+    );
+    await expect(resolveBinary("yt-dlp", opts)).rejects.toBeInstanceOf(BinaryNotFoundError);
+  });
+
+  it("reports every place tried when nothing works", async () => {
+    await expect(resolveBinary("yt-dlp", prefer({}))).rejects.toThrow(/cache in.*PATH/);
+  });
+
+  it("is off by default: ffmpeg and deno keep PATH first", async () => {
+    const ffmpeg = {
+      ...setup({
+        [join(binDir, "ffmpeg")]: "ffmpeg version 7.0",
+        [join(cache, "ffmpeg")]: "ffmpeg version 7.1",
+      }),
+      cacheDir: cache,
+    };
+    expect((await resolveBinary("ffmpeg", ffmpeg)).source).toBe("path");
+    const deno = {
+      ...setup({ [join(binDir, "deno")]: "deno 2.0", [join(cache, "deno")]: "deno 2.1" }),
+      cacheDir: cache,
+    };
+    expect((await resolveBinary("deno", deno)).source).toBe("path");
+  });
+});
+
 describe("findOnPath", () => {
   it("returns the first executable match on PATH", async () => {
     const path = await findOnPath("node", {

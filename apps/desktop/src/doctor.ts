@@ -1,6 +1,13 @@
 import { parseArgs } from "node:util";
 import { ALL_TOOLS, BinaryNotFoundError, type Tool } from "@mediaforge/binary-resolver";
 import { defaultBinDir, missingToolHint, type ResolveTool, resolveTool } from "./binaries.ts";
+import {
+  browserStatus,
+  type HostState,
+  type StatusReport,
+  systemHostContext,
+  systemHostIo,
+} from "./browser-hosts.ts";
 import type { Io } from "./commands.ts";
 import { CliError, ExitCode } from "./exit-codes.ts";
 import { detectJsRuntime, type JsRuntime } from "./js-runtime.ts";
@@ -50,6 +57,30 @@ const reportRuntime = (runtime: JsRuntime | undefined): JsRuntimeReport =>
       }
     : { found: false };
 
+const STATE_TEXT: Record<Exclude<HostState, "not-installed">, string> = {
+  registered: "registered",
+  missing: "not registered. Run: mediaforge setup",
+  stale: "registered for another program. Run: mediaforge setup",
+};
+
+/** One line per browser; browsers that look not installed are left out. */
+export function browserLines(report: StatusReport): string[] {
+  if (report.skipped === "development") {
+    return ["browsers    not checked: running from source"];
+  }
+  if (report.skipped === "unsupported") return [];
+  const width = Math.max(0, ...report.browsers.map((b) => b.name.length));
+  const lines = report.browsers.flatMap((b) => {
+    if (b.state === "not-installed") return [];
+    const where = b.state === "stale" && b.path ? ` (${b.path})` : "";
+    return [`browser     ${b.name.padEnd(width)}  ${STATE_TEXT[b.state]}${where}`];
+  });
+  if (report.noChromiumId) {
+    lines.push("browser     Chromium browsers not checked: this build has no extension ID yet");
+  }
+  return lines;
+}
+
 function formatReport(reports: ToolReport[], runtime: JsRuntimeReport, binDir: string): string {
   const lines = reports.flatMap((r) => {
     if (r.found) {
@@ -80,6 +111,7 @@ export async function runDoctor(
   resolve: ResolveTool = resolveTool,
   binDir: string = defaultBinDir(),
   detect: () => Promise<JsRuntime | undefined> = () => detectJsRuntime({ resolve }),
+  browsers: () => Promise<StatusReport> = () => browserStatus(systemHostContext(), systemHostIo()),
 ): Promise<ExitCode> {
   let json: boolean;
   try {
@@ -93,13 +125,21 @@ export async function runDoctor(
     );
   }
 
-  const [reports, runtime] = await Promise.all([inspectTools(resolve), detect()]);
+  const [reports, runtime, hosts] = await Promise.all([
+    inspectTools(resolve),
+    detect(),
+    browsers(),
+  ]);
   const jsRuntime = reportRuntime(runtime);
+  // The browser registration is reported but never fails doctor: CLI-only use needs none.
   const ok = reports.every((r) => r.found || !isRequired(r.tool));
-  io.stdout(
-    json
-      ? `${JSON.stringify({ ok, tools: reports, jsRuntime }, null, 2)}\n`
-      : formatReport(reports, jsRuntime, binDir),
-  );
+  if (json) {
+    io.stdout(`${JSON.stringify({ ok, tools: reports, jsRuntime, browsers: hosts }, null, 2)}\n`);
+  } else {
+    const extra = browserLines(hosts);
+    io.stdout(
+      formatReport(reports, jsRuntime, binDir) + (extra.length ? `${extra.join("\n")}\n` : ""),
+    );
+  }
   return ok ? ExitCode.Ok : ExitCode.MissingTool;
 }

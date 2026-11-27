@@ -1,6 +1,12 @@
 // Pure helpers for pin-ffmpeg.mjs, kept apart so they can be tested without the network.
 
-/** The static LGPL ffmpeg builds in BtbN/FFmpeg-Builds, and how to unpack each. */
+/**
+ * Where the ffmpeg builds come from: BtbN's FFmpeg-Builds, moved to the FFmpeg-Builds organization
+ * (same repository; the old BtbN name redirects). Mirrors `FFMPEG_REPO` in binary-resolver.
+ */
+export const FFMPEG_BUILDS_REPO = "FFmpeg-Builds/FFmpeg-Builds";
+
+/** The static LGPL ffmpeg builds in that repository, and how to unpack each. */
 export const BTBN_TARGETS = {
   "win32-x64": { suffix: "win64", archive: "zip", member: "bin/ffmpeg.exe" },
   "linux-x64": { suffix: "linux64", archive: "tar.xz", member: "bin/ffmpeg" },
@@ -42,7 +48,7 @@ export function selectBtbnAsset(names, target) {
 const AUTOBUILD_TAG = /^autobuild-(\d{4}-\d{2})-\d{2}-\d{2}-\d{2}$/;
 
 /**
- * BtbN keeps only the last 14 daily builds, but keeps the last build of each month for two years.
+ * FFmpeg-Builds keeps only the last 14 daily builds, but keeps the last build of each month for two years.
  * Pick the newest finished month's last build that passes `hasAllBuilds`, so a pin outlives the
  * daily builds. The current month is skipped: its last build is not known until the month ends.
  * Tags look like `autobuild-YYYY-MM-DD-HH-MM` (UTC), so they sort by time as plain strings.
@@ -89,3 +95,20 @@ export const DENO_TARGETS = {
   "linux-x64": { asset: "deno-x86_64-unknown-linux-gnu.zip", member: "deno" },
   "linux-arm64": { asset: "deno-aarch64-unknown-linux-gnu.zip", member: "deno" },
 };
+
+/** yt-dlp release assets per target. Windows on ARM runs the x64 build, like the other tools. */
+export const YTDLP_TARGETS = {
+  "win32-x64": { asset: "yt-dlp.exe" },
+  "linux-x64": { asset: "yt-dlp_linux" },
+  "linux-arm64": { asset: "yt-dlp_linux_aarch64" },
+};
+
+/** Read a `SHA2-256SUMS` file: lines of `<hex>  <name>` or `<hex> *<name>`. */
+export function parseSha256Sums(text) {
+  const sums = new Map();
+  for (const line of text.split(/\r?\n/)) {
+    const match = /^([0-9a-fA-F]{64})\s+\*?(.+?)\s*$/.exec(line);
+    if (match) sums.set(match[2], match[1].toLowerCase());
+  }
+  return sums;
+}

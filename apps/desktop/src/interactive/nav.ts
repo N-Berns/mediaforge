@@ -41,9 +41,12 @@ export interface Nav<T> {
   reset: (first: T, ...rest: T[]) => void;
 }
 
-/** A back stack for screens. Entries hold their own state, so going back restores it. */
-export function useNav<T>(root: T): Nav<T> {
-  const [stack, setStack] = useState<NavStack<T>>(() => createStack(root));
+/**
+ * A back stack for screens. Entries hold their own state, so going back restores it. `above`
+ * starts the app further in (the downloads manager over Home).
+ */
+export function useNav<T>(root: T, ...above: T[]): Nav<T> {
+  const [stack, setStack] = useState<NavStack<T>>(() => resetStack(root, ...above));
   const push = useCallback((entry: T) => setStack((s) => pushEntry(s, entry)), []);
   const replace = useCallback((entry: T) => setStack((s) => unwind(s, 1, entry)), []);
   const back = useCallback(() => setStack((s) => popEntry(s)), []);

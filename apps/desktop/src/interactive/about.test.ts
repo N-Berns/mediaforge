@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { aboutRows, DEVELOPER, developerRows, NOTICES, REPO_URL } from "./about.ts";
+import { aboutRows, DEVELOPER, developerRows, NOTICES, REPO_URL, SELECT_TIP } from "./about.ts";
 
 describe("about page data", () => {
   it("describes the app, its build target and its config file", () => {
@@ -28,5 +28,20 @@ describe("about page data", () => {
       expect(notice.license).toBeTruthy();
       expect(notice.url).toMatch(/^https:\/\//);
     }
+  });
+
+  it("explains how to select text", () => {
+    expect(SELECT_TIP).toBe(
+      "Shift+drag selects text in Windows Terminal and most Linux terminals.",
+    );
+  });
+});
+
+describe("notice summary", () => {
+  it("names every tool with a short license on one line", async () => {
+    const { NOTICE_SUMMARY } = await import("./about.ts");
+    for (const notice of NOTICES)
+      expect(NOTICE_SUMMARY).toContain(`${notice.name} (${notice.short})`);
+    expect(NOTICE_SUMMARY).not.toContain("\n");
   });
 });

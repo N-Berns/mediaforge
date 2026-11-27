@@ -1,11 +1,12 @@
 {
   "name": "@mediaforge/desktop",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "private": true,
   "type": "module",
   "dependencies": {
     "@mediaforge/binary-resolver": "workspace:*",
     "@mediaforge/media-profiles": "workspace:*",
+    "@mediaforge/shared-protocol": "workspace:*",
     "@mediaforge/shared-types": "workspace:*",
     "ink": "^8.0.0",
     "react": "^19.3.0"

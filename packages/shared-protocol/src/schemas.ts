@@ -1,8 +1,13 @@
 import type {
+  DownloadJob,
   DownloadProgress,
   DownloadRequest,
+  JobOrigin,
   MediaCandidate,
   MediaVariant,
+  Notice,
+  PlannedStep,
+  Step,
 } from "@mediaforge/shared-types";
 import { z } from "zod";
 
@@ -37,9 +42,17 @@ export const MediaCandidateSchema = z.object({
 export const DownloadRequestSchema = z.object({
   candidate: MediaCandidateSchema,
   variantId: z.string().optional(),
+  videoOnly: z.boolean().optional(),
   profileId: z.string(),
   outputDir: z.string().optional(),
   filename: z.string().optional(),
+  subtitle: z
+    .object({
+      lang: z.string().min(1).max(40),
+      auto: z.boolean(),
+      format: z.enum(["srt", "vtt"]),
+    })
+    .optional(),
 });
 
 export const DownloadProgressSchema = z.object({
@@ -50,6 +63,133 @@ export const DownloadProgressSchema = z.object({
   percent: z.number().min(0).max(100).optional(),
 });
 
+export const DownloadStatusSchema = z.enum([
+  "queued",
+  "downloading",
+  "processing",
+  "paused",
+  "completed",
+  "failed",
+  "cancelled",
+]);
+
+export const JobOriginSchema = z.enum(["extension", "manager", "menu", "cli"]);
+
+export const ContentKindSchema = z.enum(["video-audio", "video", "audio", "subtitles"]);
+
+export const LimitPresetSchema = z.enum(["high", "med", "low", "custom"]);
+export const SpeedUnitSchema = z.enum(["bytes", "bits"]);
+/** Bytes per second per preset; null is unlimited. 1e15 is 1 PB/s. */
+export const LimitsSchema = z.object({
+  high: z.number().int().positive().max(1e15).nullable(),
+  med: z.number().int().positive().max(1e15).nullable(),
+  low: z.number().int().positive().max(1e15).nullable(),
+  custom: z.number().int().positive().max(1e15).nullable(),
+});
+
+const StepKindSchema = z.enum(["download", "video", "audio", "merge", "convert"]);
+
+export const StepSchema = z.object({
+  kind: StepKindSchema,
+  state: z.enum(["pending", "active", "done"]),
+  percent: z.number().min(0).max(100).optional(),
+  progress: DownloadProgressSchema.optional(),
+  expectedBytes: z.number().nonnegative().optional(),
+});
+
+export const PlannedStepSchema = z.object({
+  kind: StepKindSchema,
+  bytes: z.number().nonnegative().optional(),
+});
+
+/** A job has a handful of steps; the cap keeps a hostile frame small. */
+export const MAX_STEPS = 16;
+
+export const DownloadJobSchema = z.object({
+  id: z.string(),
+  request: DownloadRequestSchema,
+  status: DownloadStatusSchema,
+  progress: DownloadProgressSchema,
+  outputPath: z.string().optional(),
+  error: z.string().optional(),
+  createdAt: z.number(),
+  updatedAt: z.number(),
+  origin: JobOriginSchema.optional(),
+  lastTryAt: z.number().optional(),
+  sizeBytes: z.number().nonnegative().optional(),
+  avgSpeed: z.number().nonnegative().optional(),
+  steps: z.array(StepSchema).max(MAX_STEPS).optional(),
+  overallPercent: z.number().min(0).max(100).optional(),
+  errorKind: z.number().int().optional(),
+  limitOverride: LimitPresetSchema.optional(),
+  kind: ContentKindSchema.optional(),
+});
+
+export const NoticeSchema = z.object({
+  reason: z.enum(["unexpected", "restarted"]),
+  pausedCount: z.number().int().nonnegative(),
+  jobIds: z.array(z.string()),
+});
+
+/** What a sniffed stream needs to be fetched the way the browser fetched it. */
+export const RequestContextSchema = z.object({
+  referer: z.string().optional(),
+  userAgent: z.string().optional(),
+  cookies: z.string().optional(),
+  headers: z.record(z.string(), z.string()).optional(),
+});
+
+export const SetupStateSchema = z.enum(["ready", "installing", "failed"]);
+
+/** The settings the extension may read and write. */
+export const ExtensionSettingsSchema = z.object({
+  extensionUi: z.enum(["popup", "overlay"]),
+  keepRunning: z.boolean(),
+  askQuality: z.boolean(),
+  folder: z.string().optional(),
+  quality: z.string().optional(),
+  // Optional so a newer popup still reads settings from a phase 2 core; the core always sends them.
+  speedUnit: SpeedUnitSchema.optional(),
+  limitPreset: LimitPresetSchema.optional(),
+  limits: LimitsSchema.optional(),
+});
+
+export type SetupState = z.infer<typeof SetupStateSchema>;
+export type ExtensionSettings = z.infer<typeof ExtensionSettingsSchema>;
+
+export const ProbedFormatSchema = z.object({
+  id: z.string(),
+  label: z.string(),
+  width: z.number().int().positive().optional(),
+  height: z.number().int().positive().optional(),
+  container: z.string().optional(),
+  hasVideo: z.boolean(),
+  hasAudio: z.boolean(),
+  approxBytes: z.number().nonnegative().optional(),
+});
+
+/** A subtitle track a page offers. `auto` marks machine-generated ones. */
+export const ProbedSubtitleSchema = z.object({
+  lang: z.string(),
+  name: z.string().optional(),
+  auto: z.boolean(),
+});
+
+/** What the core learned about a page URL from yt-dlp. */
+export const ProbedMediaSchema = z.object({
+  url: z.string(),
+  title: z.string().optional(),
+  thumbnail: z.string().optional(),
+  durationSec: z.number().nonnegative().optional(),
+  formats: z.array(ProbedFormatSchema),
+  /** Absent from older hosts, which cannot save subtitles either. */
+  subtitles: z.array(ProbedSubtitleSchema).optional(),
+});
+
+export type ProbedFormat = z.infer<typeof ProbedFormatSchema>;
+export type ProbedSubtitle = z.infer<typeof ProbedSubtitleSchema>;
+export type ProbedMedia = z.infer<typeof ProbedMediaSchema>;
+
 // Compile-time guarantee that the runtime schemas match the shared domain types.
 type Equals<A, B> =
   (<T>() => T extends A ? 1 : 2) extends <T>() => T extends B ? 1 : 2 ? true : false;
@@ -59,4 +199,9 @@ export type _SchemaChecks = [
   Assert<Equals<z.infer<typeof MediaCandidateSchema>, MediaCandidate>>,
   Assert<Equals<z.infer<typeof DownloadRequestSchema>, DownloadRequest>>,
   Assert<Equals<z.infer<typeof DownloadProgressSchema>, DownloadProgress>>,
+  Assert<Equals<z.infer<typeof DownloadJobSchema>, DownloadJob>>,
+  Assert<Equals<z.infer<typeof JobOriginSchema>, JobOrigin>>,
+  Assert<Equals<z.infer<typeof NoticeSchema>, Notice>>,
+  Assert<Equals<z.infer<typeof StepSchema>, Step>>,
+  Assert<Equals<z.infer<typeof PlannedStepSchema>, PlannedStep>>,
 ];

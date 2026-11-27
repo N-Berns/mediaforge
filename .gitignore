@@ -62,3 +62,6 @@ local.properties
 .idea/
 captures/
 .cxx/
+
+apps/extension/dist
+apps/extension/.dev
